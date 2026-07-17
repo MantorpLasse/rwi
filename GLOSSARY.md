@@ -26,7 +26,7 @@ Examples
 
 A physical runway belonging to one airport.
 
-A runway has one or two runway ends.
+A runway has exactly two runway ends.
 
 Examples
 
