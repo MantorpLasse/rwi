@@ -8,11 +8,9 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.config import settings
-from app.database import Base, engine, get_db
+from app.database import get_db
 from app.models import Airport, Incident, Project
 
-
-Base.metadata.create_all(engine)
 
 app = FastAPI(title=settings.app_name)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
