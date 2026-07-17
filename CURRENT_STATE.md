@@ -8,9 +8,9 @@ RWI – Runway Intelligence
 
 0.1.0
 
-## Current Sprint
+## Current Status
 
-Sprint 1 – Core Data
+Sprint 1 – Core Data completed.
 
 ## Completed
 
@@ -25,10 +25,20 @@ Sprint 1 – Core Data
 - Architecture overview documented
 - Initial domain model documented
 - Raw, verified and intelligence data layers defined
+- Domain-oriented SQLAlchemy models
+- RunwayEnd
+- EmasBed
+- Model package
+- SQLAlchemy contract tests
+- Infrastructure tests
+- Alembic configured
+- Baseline migration created and validated
+- Explicit database initialization
+- 24 passing tests
 
 ## Current Focus
 
-Build the first maintainable RWI data model and CRUD workflow.
+Prepare Sprint 2 – Source-first Intelligence.
 
 ## Sprint 1 Scope
 
@@ -41,9 +51,32 @@ Build the first maintainable RWI data model and CRUD workflow.
 - Document
 - FAA EMAS reference import
 
+## Current Architecture
+
+- Airport
+- Runway
+- RunwayEnd
+- EmasBed
+- Project
+- Source
+- Incident
+
+## Next Sprint
+
+Sprint 2 – Source-first Intelligence
+
+### Primary Goals
+
+- Source
+- Document
+- Observation
+- Verification
+- Fact
+- Intelligence
+
 ## Next Task
 
-Refactor the current MVP into domain-based SQLAlchemy models.
+Begin the source-first intelligence domain design and implementation.
 
 ## Known Issues
 
