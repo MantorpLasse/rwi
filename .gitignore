@@ -6,3 +6,5 @@ __pycache__/
 data/*.db
 .idea/
 .vscode/
+data/raw/*
+!data/raw/.gitkeep
