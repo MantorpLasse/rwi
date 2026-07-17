@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Projekt · RW Intelligence{% endblock %}
+{% block content %}
+<h1>Projekt</h1>
+
+<form class="row g-2 mb-4">
+    <div class="col-lg-4">
+        <input class="form-control" name="q" value="{{ q }}" placeholder="Sök projekt eller flygplats...">
+    </div>
+    <div class="col-lg-2">
+        <select class="form-select" name="status">
+            <option value="">Alla statusar</option>
+            {% for item in statuses %}
+            <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-lg-2">
+        <select class="form-select" name="country">
+            <option value="">Alla länder</option>
+            {% for item in countries %}
+            <option value="{{ item }}" {% if country == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-lg-1">
+        <input class="form-control" type="number" name="year" value="{{ year }}" placeholder="År">
+    </div>
+    <div class="col-lg-1">
+        <input class="form-control" type="number" step="0.5" min="0" max="10" name="min_score" value="{{ min_score }}" placeholder="Score">
+    </div>
+    <div class="col-lg-2">
+        <button class="btn btn-primary w-100">Filtrera</button>
+    </div>
+</form>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+            <tr><th>Flygplats</th><th>Projekt</th><th>Typ</th><th>Status</th><th>Confidence</th><th>År</th><th>Score</th></tr>
+            </thead>
+            <tbody>
+            {% for project in projects %}
+            <tr>
+                <td><a href="/airports/{{ project.airport.id }}">{{ project.airport.iata_code }}</a></td>
+                <td><a href="/projects/{{ project.id }}">{{ project.title }}</a></td>
+                <td>{{ project.project_type }}</td>
+                <td><span class="badge text-bg-secondary">{{ project.status }}</span></td>
+                <td>{{ project.confidence_level }}</td>
+                <td>{{ project.planning_year or "–" }}</td>
+                <td><span class="score-pill">{{ "%.1f"|format(project.probability_score) }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="text-center text-secondary py-4">Inga projekt matchade sökningen.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

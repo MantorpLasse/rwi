@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ airport.name }} · RW Intelligence{% endblock %}
+{% block content %}
+<div class="mb-4">
+    <div class="text-secondary">{{ airport.iata_code }} / {{ airport.icao_code }}</div>
+    <h1>{{ airport.name }}</h1>
+    <p>{{ airport.city }}, {{ airport.state_region }} · {{ airport.country }}</p>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header bg-white fw-semibold">Projekt</div>
+            <div class="list-group list-group-flush">
+                {% for project in airport.projects %}
+                <a class="list-group-item list-group-item-action" href="/projects/{{ project.id }}">
+                    <div class="d-flex justify-content-between">
+                        <strong>{{ project.title }}</strong>
+                        <span class="score-pill">{{ "%.1f"|format(project.probability_score) }}</span>
+                    </div>
+                    <div class="small text-secondary">{{ project.status }} · {{ project.confidence_level }} · {{ project.planning_year or "år saknas" }}</div>
+                </a>
+                {% else %}
+                <div class="list-group-item text-secondary">Inga projekt registrerade.</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Incidenter</div>
+            <div class="card-body">
+                {% if airport.incidents %}
+                    {% for incident in airport.incidents %}
+                    <div class="mb-3">
+                        <strong>{{ incident.incident_date }}</strong> · {{ incident.incident_type }}
+                        {% if incident.emas_engaged %}<span class="badge text-bg-success">EMAS användes</span>{% endif %}
+                        <div>{{ incident.summary }}</div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <span class="text-secondary">Inga incidenter registrerade.</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header bg-white fw-semibold">Banor</div>
+            <ul class="list-group list-group-flush">
+                {% for runway in airport.runways %}
+                <li class="list-group-item">
+                    <strong>{{ runway.designation }}</strong><br>
+                    <span class="small text-secondary">{{ runway.length_m or "–" }} × {{ runway.width_m or "–" }} m</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        {% if airport.website_url %}
+        <a class="btn btn-outline-secondary w-100" href="{{ airport.website_url }}" target="_blank" rel="noopener">Flygplatsens webbplats</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

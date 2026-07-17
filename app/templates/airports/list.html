@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Flygplatser · RW Intelligence{% endblock %}
+{% block content %}
+<h1>Flygplatser</h1>
+
+<form class="row g-2 mb-4">
+    <div class="col-md-6">
+        <input class="form-control" name="q" value="{{ q }}" placeholder="Sök namn, IATA, ICAO, stad...">
+    </div>
+    <div class="col-md-3">
+        <select class="form-select" name="country">
+            <option value="">Alla länder</option>
+            {% for item in countries %}
+            <option value="{{ item }}" {% if country == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-3">
+        <button class="btn btn-primary w-100">Sök</button>
+    </div>
+</form>
+
+<div class="row g-3">
+{% for airport in airports %}
+    <div class="col-md-6 col-xl-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="small text-secondary">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }}</div>
+                <h5 class="card-title">{{ airport.name }}</h5>
+                <p class="card-text">{{ airport.city }}, {{ airport.state_region }} · {{ airport.country }}</p>
+                <div class="d-flex justify-content-between align-items-center">
+                    <span class="badge text-bg-light">{{ airport.projects|length }} projekt</span>
+                    <a class="btn btn-sm btn-outline-primary" href="/airports/{{ airport.id }}">Öppna</a>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endfor %}
+</div>
+{% endblock %}

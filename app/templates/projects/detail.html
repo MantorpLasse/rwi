@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}{{ project.title }} · RW Intelligence{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <div class="text-secondary">{{ project.airport.iata_code }} · {{ project.airport.name }}</div>
+        <h1>{{ project.title }}</h1>
+    </div>
+    <span class="score-pill score-large">{{ "%.1f"|format(project.probability_score) }}</span>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5>Beskrivning</h5>
+                <p>{{ project.description or "Ingen beskrivning." }}</p>
+
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Status</dt><dd class="col-sm-8">{{ project.status }}</dd>
+                    <dt class="col-sm-4">Confidence</dt><dd class="col-sm-8">{{ project.confidence_level }}</dd>
+                    <dt class="col-sm-4">Projektår</dt><dd class="col-sm-8">{{ project.planning_year or "–" }}</dd>
+                    <dt class="col-sm-4">Upphandlingsår</dt><dd class="col-sm-8">{{ project.procurement_year or "–" }}</dd>
+                    <dt class="col-sm-4">Bana</dt><dd class="col-sm-8">{{ project.runway.designation if project.runway else "–" }}</dd>
+                    <dt class="col-sm-4">Trolig leverantör</dt><dd class="col-sm-8">{{ project.likely_supplier or "Inte bedömd" }}</dd>
+                    <dt class="col-sm-4">Motivering</dt><dd class="col-sm-8">{{ project.supplier_reason or "–" }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Källor</div>
+            <div class="list-group list-group-flush">
+                {% for source in project.sources %}
+                <a class="list-group-item list-group-item-action" href="{{ source.url }}" target="_blank" rel="noopener">
+                    <strong>{{ source.title }}</strong>
+                    <div class="small text-secondary">{{ source.publisher or "Okänd utgivare" }} · {{ source.source_type }} · {{ source.published_date or "datum saknas" }}</div>
+                </a>
+                {% else %}
+                <div class="list-group-item text-secondary">Inga källor registrerade.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Ekonomi</div>
+            <div class="card-body">
+                <div class="text-secondary">Total projektbudget</div>
+                <div class="fs-4 mb-3">
+                    {% if project.estimated_total_value_usd %}
+                    ${{ "{:,.0f}".format(project.estimated_total_value_usd) }}
+                    {% else %}–{% endif %}
+                </div>
+                <div class="text-secondary">Bedömd EMAS-del</div>
+                <div class="fs-4">
+                    {% if project.estimated_emas_value_usd %}
+                    ${{ "{:,.0f}".format(project.estimated_emas_value_usd) }}
+                    {% else %}–{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
