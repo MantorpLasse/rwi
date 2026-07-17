@@ -43,6 +43,7 @@ class Runway(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
     airport: Mapped["Airport"] = relationship(back_populates="runways")
+    runway_ends: Mapped[list["RunwayEnd"]] = relationship(back_populates="runway")
     projects: Mapped[list["Project"]] = relationship(back_populates="runway")
     installations: Mapped[list["EmasInstallation"]] = relationship(back_populates="runway")
     incidents: Mapped[list["Incident"]] = relationship(back_populates="runway")

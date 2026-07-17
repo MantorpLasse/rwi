@@ -3,7 +3,7 @@ from sqlalchemy.orm import configure_mappers
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Airport, EmasInstallation, Incident, Project, Runway, Source
+from app.models import Airport, EmasBed, EmasInstallation, Incident, Project, Runway, RunwayEnd, Source
 
 
 EXPECTED_COLUMNS = {
@@ -29,6 +29,28 @@ EXPECTED_COLUMNS = {
         "width_m": ("INTEGER", True, None, None),
         "surface": ("VARCHAR(50)", True, None, None),
         "notes": ("TEXT", True, None, None),
+    },
+    "runway_ends": {
+        "id": ("INTEGER", False, None, None),
+        "runway_id": ("INTEGER", False, None, None),
+        "designation": ("VARCHAR(20)", False, None, None),
+        "heading": ("INTEGER", True, None, None),
+        "resa_length_m": ("INTEGER", True, None, None),
+        "notes": ("TEXT", True, None, None),
+    },
+    "emas_beds": {
+        "id": ("INTEGER", False, None, None),
+        "runway_end_id": ("INTEGER", False, None, None),
+        "manufacturer": ("VARCHAR(150)", True, None, None),
+        "product_name": ("VARCHAR(100)", True, None, None),
+        "installation_year": ("INTEGER", True, None, None),
+        "replacement_year": ("INTEGER", True, None, None),
+        "status": ("VARCHAR(30)", False, None, None),
+        "length_m": ("FLOAT", True, None, None),
+        "width_m": ("FLOAT", True, None, None),
+        "faa_accepted": ("BOOLEAN", True, None, None),
+        "notes": ("TEXT", True, None, None),
+        "is_current": ("BOOLEAN", False, ("scalar", True), None),
     },
     "projects": {
         "id": ("INTEGER", False, None, None),
@@ -102,6 +124,8 @@ EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
 EXPECTED_FOREIGN_KEYS = {
     "airports": set(),
     "runways": {("airport_id", "airports.id")},
+    "runway_ends": {("runway_id", "runways.id")},
+    "emas_beds": {("runway_end_id", "runway_ends.id")},
     "projects": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
     "emas_installations": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
     "sources": {("project_id", "projects.id")},
@@ -119,6 +143,15 @@ EXPECTED_INDEXES = {
     "runways": {
         ("ix_runways_airport_id", ("airport_id",), False),
         ("ix_runways_designation", ("designation",), False),
+    },
+    "runway_ends": {
+        ("ix_runway_ends_runway_id", ("runway_id",), False),
+    },
+    "emas_beds": {
+        ("ix_emas_beds_installation_year", ("installation_year",), False),
+        ("ix_emas_beds_runway_end_id", ("runway_end_id",), False),
+        ("ix_emas_beds_status", ("status",), False),
+        ("uq_emas_beds_current_runway_end", ("runway_end_id",), True),
     },
     "projects": {
         ("ix_projects_airport_id", ("airport_id",), False),
@@ -163,10 +196,16 @@ EXPECTED_RELATIONSHIPS = {
     },
     "Runway": {
         "airport": ("Airport", "runways", DEFAULT_CASCADE),
+        "runway_ends": ("RunwayEnd", "runway", DEFAULT_CASCADE),
         "projects": ("Project", "runway", DEFAULT_CASCADE),
         "installations": ("EmasInstallation", "runway", DEFAULT_CASCADE),
         "incidents": ("Incident", "runway", DEFAULT_CASCADE),
     },
+    "RunwayEnd": {
+        "runway": ("Runway", "runway_ends", DEFAULT_CASCADE),
+        "emas_beds": ("EmasBed", "runway_end", DEFAULT_CASCADE),
+    },
+    "EmasBed": {"runway_end": ("RunwayEnd", "emas_beds", DEFAULT_CASCADE)},
     "Project": {
         "airport": ("Airport", "projects", DEFAULT_CASCADE),
         "runway": ("Runway", "projects", DEFAULT_CASCADE),
@@ -197,12 +236,23 @@ def _default_contract(default):
 def test_all_current_models_are_exported_from_app_models():
     assert [
         Airport.__name__,
+        EmasBed.__name__,
         Runway.__name__,
+        RunwayEnd.__name__,
         Project.__name__,
         EmasInstallation.__name__,
         Source.__name__,
         Incident.__name__,
-    ] == ["Airport", "Runway", "Project", "EmasInstallation", "Source", "Incident"]
+    ] == [
+        "Airport",
+        "EmasBed",
+        "Runway",
+        "RunwayEnd",
+        "Project",
+        "EmasInstallation",
+        "Source",
+        "Incident",
+    ]
 
 
 def test_configure_mappers_succeeds():
