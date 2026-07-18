@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.database import Base, SessionLocal, engine
 from app.models import Airport, Project, Runway, Source
+from app.observation_type_vocabulary import seed_observation_types
 
 
 def get_or_create_airport(db, **kwargs):
@@ -37,6 +38,7 @@ def seed():
     db = SessionLocal()
 
     try:
+        seed_observation_types(db)
         airports = {}
 
         airport_rows = [

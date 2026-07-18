@@ -9,6 +9,7 @@ from app.models import (
     EmasBed,
     EmasInstallation,
     Incident,
+    ObservationType,
     Project,
     PublishingSource,
     Runway,
@@ -75,6 +76,15 @@ EXPECTED_COLUMNS = {
     "project_documents": {
         "project_id": ("INTEGER", False, None, None),
         "document_id": ("INTEGER", False, None, None),
+    },
+    "observation_types": {
+        "id": ("INTEGER", False, None, None),
+        "key": ("VARCHAR(150)", False, None, None),
+        "display_label": ("VARCHAR(200)", False, None, None),
+        "description": ("TEXT", False, None, None),
+        "value_type": ("VARCHAR(30)", False, None, None),
+        "active": ("BOOLEAN", False, ("scalar", True), None),
+        "created_at": ("DATETIME", False, ("callable",), None),
     },
     "emas_beds": {
         "id": ("INTEGER", False, None, None),
@@ -170,6 +180,7 @@ EXPECTED_FOREIGN_KEYS = {
         ("project_id", "projects.id"),
         ("document_id", "documents.id"),
     },
+    "observation_types": set(),
     "emas_beds": {("runway_end_id", "runway_ends.id")},
     "projects": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
     "emas_installations": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
@@ -197,6 +208,7 @@ EXPECTED_INDEXES = {
         ("ix_documents_source_id", ("source_id",), False),
     },
     "project_documents": set(),
+    "observation_types": set(),
     "emas_beds": {
         ("ix_emas_beds_installation_year", ("installation_year",), False),
         ("ix_emas_beds_runway_end_id", ("runway_end_id",), False),
@@ -278,6 +290,7 @@ EXPECTED_RELATIONSHIPS = {
         "airport": ("Airport", "incidents", DEFAULT_CASCADE),
         "runway": ("Runway", "incidents", DEFAULT_CASCADE),
     },
+    "ObservationType": {},
 }
 
 
@@ -303,6 +316,7 @@ def test_all_current_models_are_exported_from_app_models():
         EmasInstallation.__name__,
         Source.__name__,
         Incident.__name__,
+        ObservationType.__name__,
     ] == [
         "Airport",
         "Document",
@@ -314,6 +328,7 @@ def test_all_current_models_are_exported_from_app_models():
         "EmasInstallation",
         "Source",
         "Incident",
+        "ObservationType",
     ]
 
 

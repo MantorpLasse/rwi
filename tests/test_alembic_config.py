@@ -19,6 +19,7 @@ EXPECTED_TABLES = {
     "publishing_sources",
     "documents",
     "project_documents",
+    "observation_types",
 }
 
 
