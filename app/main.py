@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.models import Airport, Incident, Project
+from app.models import Airport, Document, Incident, Project
 
 
 app = FastAPI(title=settings.app_name)
@@ -89,7 +89,7 @@ def airport_detail(request: Request, airport_id: int, db: Session = Depends(get_
         .where(Airport.id == airport_id)
         .options(
             selectinload(Airport.runways),
-            selectinload(Airport.projects).selectinload(Project.sources),
+            selectinload(Airport.projects),
             selectinload(Airport.installations),
             selectinload(Airport.incidents),
         )
@@ -163,8 +163,15 @@ def project_detail(request: Request, project_id: int, db: Session = Depends(get_
     project = db.scalar(
         select(Project)
         .where(Project.id == project_id)
-        .options(joinedload(Project.airport), joinedload(Project.runway), selectinload(Project.sources))
+        .options(
+            joinedload(Project.airport),
+            joinedload(Project.runway),
+            selectinload(Project.documents).selectinload(Document.source),
+        )
     )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     return templates.TemplateResponse(
         request=request,
         name="projects/detail.html",

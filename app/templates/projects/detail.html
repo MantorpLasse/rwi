@@ -3,8 +3,11 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-start mb-4">
     <div>
-        <div class="text-secondary">{{ project.airport.iata_code }} · {{ project.airport.name }}</div>
+        <div class="text-secondary">
+            {% if project.airport.iata_code %}{{ project.airport.iata_code }} · {% endif %}{{ project.airport.name }}
+        </div>
         <h1>{{ project.title }}</h1>
+        <span class="badge text-bg-secondary">{{ project.status }}</span>
     </div>
     <span class="score-pill score-large">{{ "%.1f"|format(project.probability_score) }}</span>
 </div>
@@ -13,7 +16,7 @@
     <div class="col-lg-8">
         <div class="card mb-4">
             <div class="card-body">
-                <h5>Beskrivning</h5>
+                <h2 class="h5">Beskrivning</h2>
                 <p>{{ project.description or "Ingen beskrivning." }}</p>
 
                 <dl class="row mb-0">
@@ -29,15 +32,49 @@
         </div>
 
         <div class="card">
-            <div class="card-header bg-white fw-semibold">Källor</div>
+            <div class="card-header bg-white fw-semibold">Dokument</div>
             <div class="list-group list-group-flush">
-                {% for source in project.sources %}
-                <a class="list-group-item list-group-item-action" href="{{ source.url }}" target="_blank" rel="noopener">
-                    <strong>{{ source.title }}</strong>
-                    <div class="small text-secondary">{{ source.publisher or "Okänd utgivare" }} · {{ source.source_type }} · {{ source.published_date or "datum saknas" }}</div>
-                </a>
+                {% for document in project.documents %}
+                <article class="list-group-item py-3">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+                        <div>
+                            <h2 class="h6 mb-1">{{ document.title }}</h2>
+                            <div class="small text-secondary">{{ document.source.name }}</div>
+                        </div>
+                        {% set status_classes = {
+                            "active": "text-bg-success",
+                            "incomplete": "text-bg-warning",
+                            "superseded": "text-bg-secondary",
+                            "withdrawn": "text-bg-danger",
+                            "unavailable": "text-bg-dark"
+                        } %}
+                        <span class="badge {{ status_classes.get(document.status, 'text-bg-light border text-dark') }}">{{ document.status }}</span>
+                    </div>
+
+                    {% if document.status == "incomplete" %}
+                    <div class="alert alert-warning py-2" role="alert">
+                        <strong>Ofullständig dokumentpost.</strong> Länken kan leda till utgivarens startsida i stället för den exakta publikationen. Verifiera metadata innan dokumentet används som underlag.
+                    </div>
+                    {% endif %}
+
+                    {% if document.document_type or document.published_date or document.accessed_date or document.revision or document.document_reference %}
+                    <dl class="row small mb-2">
+                        {% if document.document_type %}<dt class="col-sm-4 col-md-3">Dokumenttyp</dt><dd class="col-sm-8 col-md-9">{{ document.document_type }}</dd>{% endif %}
+                        {% if document.published_date %}<dt class="col-sm-4 col-md-3">Publicerad</dt><dd class="col-sm-8 col-md-9">{{ document.published_date }}</dd>{% endif %}
+                        {% if document.accessed_date %}<dt class="col-sm-4 col-md-3">Hämtad</dt><dd class="col-sm-8 col-md-9">{{ document.accessed_date }}</dd>{% endif %}
+                        {% if document.revision %}<dt class="col-sm-4 col-md-3">Revision</dt><dd class="col-sm-8 col-md-9">{{ document.revision }}</dd>{% endif %}
+                        {% if document.document_reference %}<dt class="col-sm-4 col-md-3">Dokumentreferens</dt><dd class="col-sm-8 col-md-9">{{ document.document_reference }}</dd>{% endif %}
+                    </dl>
+                    {% endif %}
+
+                    {% if document.summary %}<p class="mb-2">{{ document.summary }}</p>{% endif %}
+                    {% if document.url %}<a href="{{ document.url }}" target="_blank" rel="noopener">Öppna dokument</a>{% endif %}
+                </article>
                 {% else %}
-                <div class="list-group-item text-secondary">Inga källor registrerade.</div>
+                <div class="list-group-item py-4">
+                    <p class="fw-semibold mb-1">Inga normaliserade dokument är kopplade till projektet.</p>
+                    <p class="text-secondary mb-0">Det betyder inte nödvändigtvis att stödmaterial saknas. Äldre källposter kan fortfarande vänta på normalisering.</p>
+                </div>
                 {% endfor %}
             </div>
         </div>
