@@ -3,7 +3,18 @@ from sqlalchemy.orm import configure_mappers
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Airport, EmasBed, EmasInstallation, Incident, Project, Runway, RunwayEnd, Source
+from app.models import (
+    Airport,
+    Document,
+    EmasBed,
+    EmasInstallation,
+    Incident,
+    Project,
+    PublishingSource,
+    Runway,
+    RunwayEnd,
+    Source,
+)
 
 
 EXPECTED_COLUMNS = {
@@ -37,6 +48,33 @@ EXPECTED_COLUMNS = {
         "heading": ("INTEGER", True, None, None),
         "resa_length_m": ("INTEGER", True, None, None),
         "notes": ("TEXT", True, None, None),
+    },
+    "publishing_sources": {
+        "id": ("INTEGER", False, None, None),
+        "name": ("VARCHAR(200)", False, None, None),
+        "source_type": ("VARCHAR(50)", True, None, None),
+        "homepage_url": ("VARCHAR(1000)", True, None, None),
+        "country_code": ("VARCHAR(2)", True, None, None),
+        "reliability_level": ("VARCHAR(30)", True, None, None),
+        "notes": ("TEXT", True, None, None),
+    },
+    "documents": {
+        "id": ("INTEGER", False, None, None),
+        "source_id": ("INTEGER", False, None, None),
+        "title": ("VARCHAR(300)", False, None, None),
+        "document_type": ("VARCHAR(50)", True, None, None),
+        "url": ("VARCHAR(1000)", True, None, None),
+        "published_date": ("DATE", True, None, None),
+        "accessed_date": ("DATE", True, None, None),
+        "document_reference": ("VARCHAR(200)", True, None, None),
+        "summary": ("TEXT", True, None, None),
+        "revision": ("VARCHAR(100)", True, None, None),
+        "content_hash": ("VARCHAR(128)", True, None, None),
+        "status": ("VARCHAR(30)", False, ("scalar", "active"), None),
+    },
+    "project_documents": {
+        "project_id": ("INTEGER", False, None, None),
+        "document_id": ("INTEGER", False, None, None),
     },
     "emas_beds": {
         "id": ("INTEGER", False, None, None),
@@ -120,11 +158,18 @@ EXPECTED_COLUMNS = {
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
+EXPECTED_PRIMARY_KEYS["project_documents"] = ("project_id", "document_id")
 
 EXPECTED_FOREIGN_KEYS = {
     "airports": set(),
     "runways": {("airport_id", "airports.id")},
     "runway_ends": {("runway_id", "runways.id")},
+    "publishing_sources": set(),
+    "documents": {("source_id", "publishing_sources.id")},
+    "project_documents": {
+        ("project_id", "projects.id"),
+        ("document_id", "documents.id"),
+    },
     "emas_beds": {("runway_end_id", "runway_ends.id")},
     "projects": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
     "emas_installations": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
@@ -147,6 +192,11 @@ EXPECTED_INDEXES = {
     "runway_ends": {
         ("ix_runway_ends_runway_id", ("runway_id",), False),
     },
+    "publishing_sources": set(),
+    "documents": {
+        ("ix_documents_source_id", ("source_id",), False),
+    },
+    "project_documents": set(),
     "emas_beds": {
         ("ix_emas_beds_installation_year", ("installation_year",), False),
         ("ix_emas_beds_runway_end_id", ("runway_end_id",), False),
@@ -210,6 +260,14 @@ EXPECTED_RELATIONSHIPS = {
         "airport": ("Airport", "projects", DEFAULT_CASCADE),
         "runway": ("Runway", "projects", DEFAULT_CASCADE),
         "sources": ("Source", "project", DELETE_ORPHAN_CASCADE),
+        "documents": ("Document", "projects", DEFAULT_CASCADE),
+    },
+    "PublishingSource": {
+        "documents": ("Document", "source", DEFAULT_CASCADE),
+    },
+    "Document": {
+        "source": ("PublishingSource", "documents", DEFAULT_CASCADE),
+        "projects": ("Project", "documents", DEFAULT_CASCADE),
     },
     "EmasInstallation": {
         "airport": ("Airport", "installations", DEFAULT_CASCADE),
@@ -236,19 +294,23 @@ def _default_contract(default):
 def test_all_current_models_are_exported_from_app_models():
     assert [
         Airport.__name__,
+        Document.__name__,
         EmasBed.__name__,
         Runway.__name__,
         RunwayEnd.__name__,
         Project.__name__,
+        PublishingSource.__name__,
         EmasInstallation.__name__,
         Source.__name__,
         Incident.__name__,
     ] == [
         "Airport",
+        "Document",
         "EmasBed",
         "Runway",
         "RunwayEnd",
         "Project",
+        "PublishingSource",
         "EmasInstallation",
         "Source",
         "Incident",

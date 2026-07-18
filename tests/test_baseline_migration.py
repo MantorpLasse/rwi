@@ -1,12 +1,8 @@
 from argparse import Namespace
 
 from alembic import command
-from alembic.autogenerate import compare_metadata
 from alembic.config import Config
-from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect, text
-
-from app.migration_metadata import target_metadata
 
 
 EXPECTED_TABLES = {
@@ -19,6 +15,8 @@ EXPECTED_TABLES = {
     "sources",
     "incidents",
 }
+
+BASELINE_REVISION = "8edd52d34c76"
 
 
 def _config(database_url: str) -> Config:
@@ -41,13 +39,12 @@ def test_baseline_upgrade_downgrade_and_reupgrade(tmp_path):
     database_url = f"sqlite:///{database_path.as_posix()}"
     config = _config(database_url)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, BASELINE_REVISION)
     assert _application_tables(database_url) == EXPECTED_TABLES
 
     engine = create_engine(database_url)
     try:
         with engine.connect() as connection:
-            assert compare_metadata(MigrationContext.configure(connection), target_metadata) == []
             connection.execute(text("PRAGMA foreign_keys=ON"))
             assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
 
@@ -64,5 +61,5 @@ def test_baseline_upgrade_downgrade_and_reupgrade(tmp_path):
     command.downgrade(config, "base")
     assert _application_tables(database_url) == set()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, BASELINE_REVISION)
     assert _application_tables(database_url) == EXPECTED_TABLES

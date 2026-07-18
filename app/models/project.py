@@ -41,3 +41,7 @@ class Project(Base):
     airport: Mapped["Airport"] = relationship(back_populates="projects")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="projects")
     sources: Mapped[list["Source"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    documents: Mapped[list["Document"]] = relationship(
+        secondary="project_documents",
+        back_populates="projects",
+    )

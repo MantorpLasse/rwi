@@ -16,6 +16,9 @@ EXPECTED_TABLES = {
     "projects",
     "sources",
     "incidents",
+    "publishing_sources",
+    "documents",
+    "project_documents",
 }
 
 
