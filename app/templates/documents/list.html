@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Dokument · RW Intelligence{% endblock %}
+{% block content %}
+{% set status_classes = {
+    "active": "text-bg-success",
+    "incomplete": "text-bg-warning",
+    "superseded": "text-bg-secondary",
+    "withdrawn": "text-bg-danger",
+    "unavailable": "text-bg-dark"
+} %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+    <div>
+        <h1 class="mb-1">Dokument</h1>
+        <div class="text-secondary">{{ documents|length }} dokument</div>
+    </div>
+    {% if filters_active %}<a href="/documents">Rensa filter</a>{% endif %}
+</div>
+
+<form class="row g-2 mb-4" method="get" action="/documents">
+    <div class="col-lg-5">
+        <label class="visually-hidden" for="document-search">Sök dokument</label>
+        <input id="document-search" class="form-control" name="q" value="{{ q }}" placeholder="Sök titel, referens eller utgivare">
+    </div>
+    <div class="col-sm-6 col-lg-2">
+        <label class="visually-hidden" for="document-status">Status</label>
+        <select id="document-status" class="form-select" name="status">
+            <option value="">Alla statusar</option>
+            {% for item in known_statuses %}
+            <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <label class="visually-hidden" for="document-type">Dokumenttyp</label>
+        <select id="document-type" class="form-select" name="document_type">
+            <option value="">Alla dokumenttyper</option>
+            {% for item in document_types %}
+            <option value="{{ item }}" {% if document_type == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-lg-2">
+        <button class="btn btn-primary w-100" type="submit">Sök och filtrera</button>
+    </div>
+</form>
+
+{% if documents %}
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Dokument</th>
+                    <th>Utgivare</th>
+                    <th>Datum</th>
+                    <th>Status</th>
+                    <th class="text-end">Projekt</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for document in documents %}
+                <tr>
+                    <td>
+                        <a class="fw-semibold" href="/documents/{{ document.id }}">{{ document.title }}</a>
+                        {% if document.document_type or document.document_reference %}
+                        <div class="small text-secondary">
+                            {% if document.document_type %}{{ document.document_type }}{% endif %}{% if document.document_type and document.document_reference %} · {% endif %}{% if document.document_reference %}{{ document.document_reference }}{% endif %}
+                        </div>
+                        {% endif %}
+                        {% if document.status == "incomplete" %}<div class="small text-warning-emphasis fw-semibold">Kräver verifiering</div>{% endif %}
+                    </td>
+                    <td>{{ document.source.name }}</td>
+                    <td class="small">
+                        {% if document.published_date %}<div>Publicerad {{ document.published_date }}</div>{% endif %}
+                        {% if document.accessed_date %}<div>Hämtad {{ document.accessed_date }}</div>{% endif %}
+                    </td>
+                    <td><span class="badge {{ status_classes.get(document.status, 'text-bg-light border text-dark') }}">{{ document.status }}</span></td>
+                    <td class="text-end">{{ document.projects|length }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% elif total_document_count == 0 %}
+<div class="card"><div class="card-body text-secondary">Inga normaliserade dokument finns ännu.</div></div>
+{% else %}
+<div class="card">
+    <div class="card-body">
+        <p class="text-secondary">Inga dokument matchade den aktuella sökningen eller filtreringen.</p>
+        <a href="/documents">Rensa filter</a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
