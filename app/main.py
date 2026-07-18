@@ -179,6 +179,27 @@ def project_detail(request: Request, project_id: int, db: Session = Depends(get_
     )
 
 
+@app.get("/documents/{document_id}", response_class=HTMLResponse)
+def document_detail(request: Request, document_id: int, db: Session = Depends(get_db)):
+    document = db.scalar(
+        select(Document)
+        .where(Document.id == document_id)
+        .options(
+            joinedload(Document.source),
+            selectinload(Document.projects).joinedload(Project.airport),
+            selectinload(Document.projects).joinedload(Project.runway),
+        )
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    return templates.TemplateResponse(
+        request=request,
+        name="documents/detail.html",
+        context={"document": document},
+    )
+
+
 @app.get("/api/projects")
 def api_projects(
     q: Optional[str] = None,
