@@ -12,7 +12,11 @@ from app.config import settings
 from app.database import get_db
 from app.models import Airport, Document, Incident, Observation, Project, PublishingSource
 from app.models.document import DOCUMENT_STATUSES
-from app.repositories import ObservationRepository, ObservationTypeRepository
+from app.repositories import (
+    ObservationRepository,
+    ObservationTypeRepository,
+    VerificationRepository,
+)
 
 
 app = FastAPI(title=settings.app_name)
@@ -266,6 +270,9 @@ def observation_detail(
     if observation is None:
         raise HTTPException(status_code=404, detail="Observation not found")
     later_observations = ObservationRepository(db).list_superseding(observation.id)
+    verifications = list(
+        reversed(VerificationRepository(db).list_by_observation(observation.id))
+    )
 
     return templates.TemplateResponse(
         request=request,
@@ -273,7 +280,42 @@ def observation_detail(
         context={
             "observation": observation,
             "later_observations": later_observations,
+            "verifications": verifications,
         },
+    )
+
+
+@app.get(
+    "/observations/{observation_id}/verifications",
+    response_class=HTMLResponse,
+)
+def list_verifications(
+    request: Request, observation_id: int, db: Session = Depends(get_db)
+):
+    observation = ObservationRepository(db).get_by_id(observation_id)
+    if observation is None:
+        raise HTTPException(status_code=404, detail="Observation not found")
+    verifications = list(
+        reversed(VerificationRepository(db).list_by_observation(observation.id))
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="verifications/list.html",
+        context={"observation": observation, "verifications": verifications},
+    )
+
+
+@app.get("/verifications/{verification_id}", response_class=HTMLResponse)
+def verification_detail(
+    request: Request, verification_id: int, db: Session = Depends(get_db)
+):
+    verification = VerificationRepository(db).get_by_id(verification_id)
+    if verification is None:
+        raise HTTPException(status_code=404, detail="Verification not found")
+    return templates.TemplateResponse(
+        request=request,
+        name="verifications/detail.html",
+        context={"verification": verification},
     )
 
 

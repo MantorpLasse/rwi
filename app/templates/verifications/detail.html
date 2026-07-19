@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Verifiering #{{ verification.id }} · RW Intelligence{% endblock %}
+{% block content %}
+<div class="mb-4">
+    <div class="text-secondary">Verifiering</div>
+    <h1>#{{ verification.id }} · {{ verification.status.value }}</h1>
+    <div class="d-flex flex-wrap gap-3">
+        <a href="/observations/{{ verification.observation.id }}/verifications">Till verifieringshistoriken</a>
+        <a href="/observations/{{ verification.observation.id }}">Till observationen</a>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header bg-white fw-semibold">Granskning</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Status</dt><dd class="col-sm-8">{{ verification.status.value }}</dd>
+                    <dt class="col-sm-4">Granskare</dt><dd class="col-sm-8">{{ verification.reviewed_by if verification.reviewed_by else "—" }}</dd>
+                    <dt class="col-sm-4">Granskad</dt><dd class="col-sm-8">{{ verification.reviewed_at }}</dd>
+                    <dt class="col-sm-4">Konfidens</dt><dd class="col-sm-8">{{ verification.confidence if verification.confidence is not none else "—" }}</dd>
+                </dl>
+                <h2 class="h6 mt-3">Kommentar</h2>
+                <div class="text-break" style="white-space: pre-wrap">{{ verification.comment|default('', true) }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Observation</div>
+            <div class="card-body">
+                <a class="fw-semibold" href="/observations/{{ verification.observation.id }}">Observation #{{ verification.observation.id }}</a>
+                <div class="text-secondary text-break mt-2">{{ verification.observation.raw_value|truncate(160, true) }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

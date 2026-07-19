@@ -32,12 +32,34 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card mb-4">
             <div class="card-header bg-white fw-semibold">Korrigeringshistorik</div>
             <div class="list-group list-group-flush">
                 {% if observation.supersedes %}<a class="list-group-item list-group-item-action" href="/observations/{{ observation.supersedes.id }}">Tidigare observation #{{ observation.supersedes.id }}</a>{% endif %}
                 {% for later in later_observations %}<a class="list-group-item list-group-item-action" href="/observations/{{ later.id }}">Senare korrigering #{{ later.id }}</a>{% endfor %}
                 {% if not observation.supersedes and not later_observations %}<div class="list-group-item text-secondary">Ingen korrigeringshistorik.</div>{% endif %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+                <span class="fw-semibold">Verifieringshistorik</span>
+                {% if verifications %}<a href="/observations/{{ observation.id }}/verifications">Visa verifieringshistorik</a>{% endif %}
+            </div>
+            <div class="list-group list-group-flush">
+                {% for verification in verifications %}
+                <a class="list-group-item list-group-item-action" href="/verifications/{{ verification.id }}">
+                    <div class="d-flex flex-wrap justify-content-between gap-2">
+                        <strong>{{ verification.status.value }}</strong>
+                        <span class="small text-secondary">{{ verification.reviewed_at }}</span>
+                    </div>
+                    <div class="small text-secondary">
+                        Granskare: {{ verification.reviewed_by if verification.reviewed_by else "—" }} · Konfidens: {{ verification.confidence if verification.confidence is not none else "—" }}
+                    </div>
+                </a>
+                {% else %}
+                <div class="list-group-item text-secondary">Inga verifieringar har registrerats.</div>
+                {% endfor %}
             </div>
         </div>
     </div>
