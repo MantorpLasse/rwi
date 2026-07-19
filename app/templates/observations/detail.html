@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Observation #{{ observation.id }} · RW Intelligence{% endblock %}
+{% block content %}
+<div class="mb-4">
+    <div class="text-secondary">Observation</div>
+    <h1>#{{ observation.id }} · {{ observation.observation_type.display_label }}</h1>
+    <p class="text-secondary mb-0">Bevarad evidens från ett dokument. Innehållet är inte ett verifierat eller accepterat faktum.</p>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header bg-white fw-semibold">Observerat innehåll</div>
+            <div class="card-body">
+                <h2 class="h6">Rått observerat värde</h2>
+                <div class="text-break" style="white-space: pre-wrap">{{ observation.raw_value }}</div>
+                {% if observation.normalized_value %}
+                <h2 class="h6 mt-4">Normaliserad kandidat</h2>
+                <div class="text-break" style="white-space: pre-wrap">{{ observation.normalized_value }}</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header bg-white fw-semibold">Observationstyp</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Nyckel</dt><dd class="col-sm-8">{{ observation.observation_type.key }}</dd>
+                    <dt class="col-sm-4">Visningsnamn</dt><dd class="col-sm-8">{{ observation.observation_type.display_label }}</dd>
+                    <dt class="col-sm-4">Beskrivning</dt><dd class="col-sm-8">{{ observation.observation_type.description }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Korrigeringshistorik</div>
+            <div class="list-group list-group-flush">
+                {% if observation.supersedes %}<a class="list-group-item list-group-item-action" href="/observations/{{ observation.supersedes.id }}">Tidigare observation #{{ observation.supersedes.id }}</a>{% endif %}
+                {% for later in later_observations %}<a class="list-group-item list-group-item-action" href="/observations/{{ later.id }}">Senare korrigering #{{ later.id }}</a>{% endfor %}
+                {% if not observation.supersedes and not later_observations %}<div class="list-group-item text-secondary">Ingen korrigeringshistorik.</div>{% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header bg-white fw-semibold">Extraktionsuppgifter</div>
+            <div class="card-body"><dl class="mb-0">
+                {% if observation.extraction_confidence is not none %}<dt>Extraktionskonfidens</dt><dd>{{ observation.extraction_confidence }}</dd>{% endif %}
+                {% if observation.extraction_method %}<dt>Extraktionsmetod</dt><dd>{{ observation.extraction_method }}</dd>{% endif %}
+                {% if observation.extractor_version %}<dt>Extraktorversion</dt><dd>{{ observation.extractor_version }}</dd>{% endif %}
+                {% if observation.evidence_locator %}<dt>Evidensplats</dt><dd>{{ observation.evidence_locator }}</dd>{% endif %}
+                <dt>Skapad</dt><dd class="mb-0">{{ observation.created_at }}</dd>
+            </dl></div>
+        </div>
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Källdokument</div>
+            <div class="card-body">
+                <a class="fw-semibold" href="/documents/{{ observation.document.id }}">{{ observation.document.title }}</a>
+                {% if observation.document.source %}<div class="text-secondary mt-1">{{ observation.document.source.name }}</div>{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -11,6 +11,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Airport, Document, Incident, Project, PublishingSource
 from app.models.document import DOCUMENT_STATUSES
+from app.repositories import ObservationRepository
 
 
 app = FastAPI(title=settings.app_name)
@@ -246,6 +247,35 @@ def list_documents(
     )
 
 
+@app.get("/observations", response_class=HTMLResponse)
+def list_observations(request: Request, db: Session = Depends(get_db)):
+    observations = ObservationRepository(db).list_all()
+    return templates.TemplateResponse(
+        request=request,
+        name="observations/list.html",
+        context={"observations": observations},
+    )
+
+
+@app.get("/observations/{observation_id}", response_class=HTMLResponse)
+def observation_detail(
+    request: Request, observation_id: int, db: Session = Depends(get_db)
+):
+    observation = ObservationRepository(db).get_by_id(observation_id)
+    if observation is None:
+        raise HTTPException(status_code=404, detail="Observation not found")
+    later_observations = ObservationRepository(db).list_superseding(observation.id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="observations/detail.html",
+        context={
+            "observation": observation,
+            "later_observations": later_observations,
+        },
+    )
+
+
 @app.get("/documents/{document_id}", response_class=HTMLResponse)
 def document_detail(request: Request, document_id: int, db: Session = Depends(get_db)):
     document = db.scalar(
@@ -259,11 +289,12 @@ def document_detail(request: Request, document_id: int, db: Session = Depends(ge
     )
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    observations = ObservationRepository(db).list_by_document(document.id)
 
     return templates.TemplateResponse(
         request=request,
         name="documents/detail.html",
-        context={"document": document},
+        context={"document": document, "observations": observations},
     )
 
 
