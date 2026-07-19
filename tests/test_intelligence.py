@@ -11,6 +11,7 @@ from app.models import (
     Document,
     Fact,
     FactStatus,
+    FindingType,
     Intelligence,
     IntelligenceStatus,
     Observation,
@@ -69,9 +70,21 @@ def make_fact(session: Session, key: str = "airport.emas.product", *, status=Fac
     return fact
 
 
-def finding(fact: Fact, **values) -> Intelligence:
+def make_finding_type(session: Session, key: str = "CURRENT_EMAS") -> FindingType:
+    item = FindingType(
+        key=key,
+        name=key.replace("_", " ").title(),
+        description="Governed Intelligence classification",
+        category="STATUS",
+    )
+    session.add(item)
+    session.commit()
+    return item
+
+
+def finding(fact: Fact, finding_type: FindingType, **values) -> Intelligence:
     return Intelligence(
-        finding_type=values.pop("finding_type", "airport.emas.coverage"),
+        finding_type=finding_type,
         title=values.pop("title", "EMAS coverage confirmed"),
         summary=values.pop("summary", "Accepted Facts establish EMAS coverage."),
         status=values.pop("status", IntelligenceStatus.ACTIVE),
@@ -85,7 +98,8 @@ def test_model_construction_with_multiple_supporting_facts(engine):
     with Session(engine) as session:
         first = make_fact(session)
         second = make_fact(session, "airport.emas.system_count")
-        item = finding(first)
+        finding_type = make_finding_type(session)
+        item = finding(first, finding_type)
         item.supporting_facts.append(second)
         session.add(item)
         session.commit()
@@ -99,11 +113,12 @@ def test_model_construction_with_multiple_supporting_facts(engine):
 def test_repository_create_get_and_historical_list(engine):
     with Session(engine) as session:
         fact = make_fact(session)
+        finding_type = make_finding_type(session)
         repository = IntelligenceRepository(session)
         instant = datetime(2026, 1, 1, tzinfo=UTC)
-        later = repository.create(finding(fact, title="later", created_at=instant + timedelta(days=1)))
-        first = repository.create(finding(fact, title="first", created_at=instant))
-        second = repository.create(finding(fact, title="second", created_at=instant))
+        later = repository.create(finding(fact, finding_type, title="later", created_at=instant + timedelta(days=1)))
+        first = repository.create(finding(fact, finding_type, title="first", created_at=instant))
+        second = repository.create(finding(fact, finding_type, title="second", created_at=instant))
         session.commit()
 
         loaded = repository.get_by_id(first.id)
@@ -116,17 +131,20 @@ def test_repository_create_get_and_historical_list(engine):
 def test_supersession_is_bidirectional_and_current_is_terminal_active_row(engine):
     with Session(engine) as session:
         fact = make_fact(session)
+        coverage_type = make_finding_type(session)
+        market_type = make_finding_type(session, "NO_VERIFIED_EMAS")
         instant = datetime(2026, 1, 1, tzinfo=UTC)
-        original = finding(fact, title="Original", created_at=instant)
+        original = finding(fact, coverage_type, title="Original", created_at=instant)
         replacement = finding(
             fact,
+            coverage_type,
             title="Replacement",
             supersedes=original,
             created_at=instant + timedelta(days=1),
         )
         independent = finding(
             fact,
-            finding_type="airport.emas.market",
+            market_type,
             title="Independent",
             created_at=instant + timedelta(days=2),
         )
@@ -146,8 +164,9 @@ def test_supersession_is_bidirectional_and_current_is_terminal_active_row(engine
 def test_non_active_terminal_rows_preserve_history_but_are_not_current(engine, status):
     with Session(engine) as session:
         fact = make_fact(session)
-        original = finding(fact)
-        terminal = finding(fact, status=status, supersedes=original)
+        finding_type = make_finding_type(session)
+        original = finding(fact, finding_type)
+        terminal = finding(fact, finding_type, status=status, supersedes=original)
         session.add_all([original, terminal])
         session.commit()
 
@@ -159,7 +178,7 @@ def test_non_active_terminal_rows_preserve_history_but_are_not_current(engine, s
 def test_requires_accepted_fact_support(engine):
     with Session(engine) as session:
         unsupported = Intelligence(
-            finding_type="airport.emas.coverage",
+            finding_type=make_finding_type(session),
             title="Unsupported",
             summary="No facts.",
             status=IntelligenceStatus.ACTIVE,
@@ -182,7 +201,7 @@ def test_requires_accepted_fact_support(engine):
         )
         session.add(retired)
         session.commit()
-        session.add(finding(retired))
+        session.add(finding(retired, unsupported.finding_type))
         with pytest.raises(ValueError, match="accepted Facts"):
             session.commit()
 
@@ -191,7 +210,8 @@ def test_columns_support_relationship_and_delete_are_immutable(engine):
     with Session(engine) as session:
         fact = make_fact(session)
         other = make_fact(session, "airport.emas.other")
-        item = finding(fact)
+        finding_type = make_finding_type(session)
+        item = finding(fact, finding_type)
         session.add(item)
         session.commit()
 
@@ -213,21 +233,22 @@ def test_columns_support_relationship_and_delete_are_immutable(engine):
 def test_invalid_status_lineage_shape_and_branching_are_rejected(engine):
     with Session(engine) as session:
         fact = make_fact(session)
-        session.add(finding(fact, status="current"))
+        finding_type = make_finding_type(session)
+        session.add(finding(fact, finding_type, status="current"))
         with pytest.raises(StatementError):
             session.commit()
         session.rollback()
 
-        session.add(finding(fact, status=IntelligenceStatus.ARCHIVED))
+        session.add(finding(fact, finding_type, status=IntelligenceStatus.ARCHIVED))
         with pytest.raises(IntegrityError):
             session.commit()
         session.rollback()
 
-        original = finding(fact)
+        original = finding(fact, finding_type)
         session.add(original)
         session.commit()
-        first = finding(fact, title="First branch", supersedes=original)
-        second = finding(fact, title="Second branch", supersedes=original)
+        first = finding(fact, finding_type, title="First branch", supersedes=original)
+        second = finding(fact, finding_type, title="Second branch", supersedes=original)
         session.add_all([first, second])
         with pytest.raises(IntegrityError):
             session.commit()

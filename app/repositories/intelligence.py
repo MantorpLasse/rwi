@@ -45,7 +45,7 @@ class IntelligenceRepository:
                 ~has_successor,
             )
             .order_by(
-                Intelligence.finding_type.asc(),
+                Intelligence.finding_type_id.asc(),
                 Intelligence.derived_at.asc(),
                 Intelligence.id.asc(),
             )

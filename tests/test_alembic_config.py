@@ -24,6 +24,7 @@ EXPECTED_TABLES = {
     "verifications",
     "facts",
     "fact_verifications",
+    "finding_types",
     "intelligence",
     "intelligence_facts",
 }

@@ -2,6 +2,7 @@ from app.models.airport import Airport, EmasInstallation, Runway
 from app.models.document import Document, PublishingSource
 from app.models.emas_bed import EmasBed
 from app.models.fact import Fact, FactStatus
+from app.models.finding_type import FindingType
 from app.models.incident import Incident
 from app.models.intelligence import Intelligence, IntelligenceStatus
 from app.models.observation import Observation
@@ -18,6 +19,7 @@ __all__ = [
     "EmasInstallation",
     "Fact",
     "FactStatus",
+    "FindingType",
     "Incident",
     "Intelligence",
     "IntelligenceStatus",

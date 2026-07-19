@@ -62,7 +62,9 @@ class Intelligence(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
-    finding_type: Mapped[str] = mapped_column(String(150), index=True)
+    finding_type_id: Mapped[int] = mapped_column(
+        ForeignKey("finding_types.id", ondelete="RESTRICT"), index=True
+    )
     title: Mapped[str] = mapped_column(String(300))
     summary: Mapped[str] = mapped_column(Text)
     status: Mapped[IntelligenceStatus] = mapped_column(
@@ -94,6 +96,9 @@ class Intelligence(Base):
     supporting_facts: Mapped[list["Fact"]] = relationship(
         secondary=intelligence_facts,
         passive_deletes="all",
+    )
+    finding_type: Mapped["FindingType"] = relationship(
+        back_populates="intelligence_records"
     )
 
 

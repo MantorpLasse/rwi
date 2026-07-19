@@ -9,7 +9,6 @@ from sqlalchemy import create_engine, inspect
 from app.migration_metadata import target_metadata
 
 
-INTELLIGENCE_REVISION = "d9e4b72a1c63"
 PREVIOUS_REVISION = "c8f1a34d6e72"
 
 
@@ -24,14 +23,14 @@ def test_intelligence_migration_matches_metadata_and_downgrades(tmp_path):
     database_url = f"sqlite:///{(tmp_path / 'intelligence.db').as_posix()}"
     alembic_config = config(database_url)
 
-    command.upgrade(alembic_config, INTELLIGENCE_REVISION)
+    command.upgrade(alembic_config, "head")
     engine = create_engine(database_url)
     try:
         inspector = inspect(engine)
         assert {column["name"] for column in inspector.get_columns("intelligence")} == {
             "id",
             "created_at",
-            "finding_type",
+            "finding_type_id",
             "title",
             "summary",
             "status",
@@ -40,7 +39,7 @@ def test_intelligence_migration_matches_metadata_and_downgrades(tmp_path):
         }
         assert {index["name"] for index in inspector.get_indexes("intelligence")} == {
             "ix_intelligence_created_at",
-            "ix_intelligence_finding_type",
+            "ix_intelligence_finding_type_id",
             "ix_intelligence_status",
             "ix_intelligence_supersedes_intelligence_id",
         }
