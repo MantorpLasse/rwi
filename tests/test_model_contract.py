@@ -8,6 +8,7 @@ from app.models import (
     Document,
     EmasBed,
     EmasInstallation,
+    Fact,
     Incident,
     Observation,
     ObservationType,
@@ -111,6 +112,22 @@ EXPECTED_COLUMNS = {
         "confidence": ("FLOAT", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
+    "facts": {
+        "id": ("INTEGER", False, None, None),
+        "fact_type_key": ("VARCHAR(150)", False, None, None),
+        "subject_type": ("VARCHAR(50)", False, None, None),
+        "subject_identifier": ("VARCHAR(200)", False, None, None),
+        "accepted_value": ("TEXT", False, None, None),
+        "valid_from": ("DATE", True, None, None),
+        "valid_to": ("DATE", True, None, None),
+        "status": ("VARCHAR(8)", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_fact_id": ("INTEGER", True, None, None),
+    },
+    "fact_verifications": {
+        "fact_id": ("INTEGER", False, None, None),
+        "verification_id": ("INTEGER", False, None, None),
+    },
     "emas_beds": {
         "id": ("INTEGER", False, None, None),
         "runway_end_id": ("INTEGER", False, None, None),
@@ -194,6 +211,7 @@ EXPECTED_COLUMNS = {
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
 EXPECTED_PRIMARY_KEYS["project_documents"] = ("project_id", "document_id")
+EXPECTED_PRIMARY_KEYS["fact_verifications"] = ("fact_id", "verification_id")
 
 EXPECTED_FOREIGN_KEYS = {
     "airports": set(),
@@ -212,6 +230,11 @@ EXPECTED_FOREIGN_KEYS = {
         ("supersedes_observation_id", "observations.id"),
     },
     "verifications": {("observation_id", "observations.id")},
+    "facts": {("supersedes_fact_id", "facts.id")},
+    "fact_verifications": {
+        ("fact_id", "facts.id"),
+        ("verification_id", "verifications.id"),
+    },
     "emas_beds": {("runway_end_id", "runway_ends.id")},
     "projects": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
     "emas_installations": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
@@ -248,6 +271,12 @@ EXPECTED_INDEXES = {
     "verifications": {
         ("ix_verifications_observation_id", ("observation_id",), False),
     },
+    "facts": {
+        ("ix_facts_fact_type_key", ("fact_type_key",), False),
+        ("ix_facts_subject", ("subject_type", "subject_identifier"), False),
+        ("ix_facts_supersedes_fact_id", ("supersedes_fact_id",), False),
+    },
+    "fact_verifications": set(),
     "emas_beds": {
         ("ix_emas_beds_installation_year", ("installation_year",), False),
         ("ix_emas_beds_runway_end_id", ("runway_end_id",), False),
@@ -343,6 +372,11 @@ EXPECTED_RELATIONSHIPS = {
     "Verification": {
         "observation": ("Observation", "verifications", DEFAULT_CASCADE),
     },
+    "Fact": {
+        "supersedes": ("Fact", "superseded_by", DEFAULT_CASCADE),
+        "superseded_by": ("Fact", "supersedes", DEFAULT_CASCADE),
+        "supporting_verifications": ("Verification", None, DEFAULT_CASCADE),
+    },
 }
 
 
@@ -361,6 +395,7 @@ def test_all_current_models_are_exported_from_app_models():
         Airport.__name__,
         Document.__name__,
         EmasBed.__name__,
+        Fact.__name__,
         Runway.__name__,
         RunwayEnd.__name__,
         Project.__name__,
@@ -375,6 +410,7 @@ def test_all_current_models_are_exported_from_app_models():
         "Airport",
         "Document",
         "EmasBed",
+        "Fact",
         "Runway",
         "RunwayEnd",
         "Project",

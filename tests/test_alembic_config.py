@@ -22,6 +22,8 @@ EXPECTED_TABLES = {
     "observation_types",
     "observations",
     "verifications",
+    "facts",
+    "fact_verifications",
 }
 
 

@@ -11,7 +11,7 @@ from app.migration_metadata import target_metadata
 
 
 BASELINE_REVISION = "8edd52d34c76"
-HEAD_REVISION = "b5d82a7c1e40"
+HEAD_REVISION = "c8f1a34d6e72"
 
 LEGACY_ROWS = (
     (1, 1, "Resolution 025-2024 – Amended Common Ground Recommendation Airport Map", "ALP", "Pitkin County", "http://www.aspenairport.com/wp-content/uploads/2024/07/bocc.res_.025.2024-Amending-Res-105-2020.pdf", date(2024, 5, 16), "official"),

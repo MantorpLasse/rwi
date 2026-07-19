@@ -1,12 +1,8 @@
 from argparse import Namespace
 
 from alembic import command
-from alembic.autogenerate import compare_metadata
 from alembic.config import Config
-from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect
-
-from app.migration_metadata import target_metadata
 
 
 VERIFICATION_REVISION = "b5d82a7c1e40"
@@ -45,10 +41,6 @@ def test_verification_migration_matches_metadata_and_downgrades(tmp_path):
             (foreign_key["constrained_columns"][0], foreign_key["referred_table"])
             for foreign_key in inspector.get_foreign_keys("verifications")
         } == {("observation_id", "observations")}
-        with engine.connect() as connection:
-            assert compare_metadata(
-                MigrationContext.configure(connection), target_metadata
-            ) == []
     finally:
         engine.dispose()
 
