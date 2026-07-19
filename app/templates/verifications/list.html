@@ -5,7 +5,10 @@
     <div class="text-secondary">Verifieringshistorik</div>
     <h1>Observation #{{ observation.id }}</h1>
     <p class="text-secondary mb-2">Granskningar av den bevarade observationen. Observationens evidens ändras inte.</p>
-    <a href="/observations/{{ observation.id }}">Till observationen</a>
+    <div class="d-flex gap-3">
+        <a href="/observations/{{ observation.id }}">Till observationen</a>
+        <a href="/observations/{{ observation.id }}/verifications/new">Ny verifiering</a>
+    </div>
 </div>
 
 {% if verifications %}

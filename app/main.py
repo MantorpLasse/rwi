@@ -10,7 +10,16 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.models import Airport, Document, Incident, Observation, Project, PublishingSource
+from app.models import (
+    Airport,
+    Document,
+    Incident,
+    Observation,
+    Project,
+    PublishingSource,
+    Verification,
+    VerificationStatus,
+)
 from app.models.document import DOCUMENT_STATUSES
 from app.repositories import (
     ObservationRepository,
@@ -302,6 +311,103 @@ def list_verifications(
         request=request,
         name="verifications/list.html",
         context={"observation": observation, "verifications": verifications},
+    )
+
+
+def _parse_verification_confidence(value: str) -> tuple[float | None, str | None]:
+    if not value.strip():
+        return None, None
+    try:
+        confidence = float(value)
+    except ValueError:
+        return None, "Verifieringskonfidens måste vara ett decimaltal."
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return None, "Verifieringskonfidens måste vara mellan 0,0 och 1,0."
+    return confidence, None
+
+
+def _new_verification_context(
+    observation: Observation,
+    values: dict[str, str] | None = None,
+    errors: dict[str, str] | None = None,
+):
+    return {
+        "observation": observation,
+        "statuses": list(VerificationStatus),
+        "values": values or {},
+        "errors": errors or {},
+    }
+
+
+@app.get(
+    "/observations/{observation_id}/verifications/new",
+    response_class=HTMLResponse,
+)
+def new_verification_form(
+    request: Request, observation_id: int, db: Session = Depends(get_db)
+):
+    observation = ObservationRepository(db).get_by_id(observation_id)
+    if observation is None:
+        raise HTTPException(status_code=404, detail="Observation not found")
+    return templates.TemplateResponse(
+        request=request,
+        name="verifications/new.html",
+        context=_new_verification_context(observation),
+    )
+
+
+@app.post("/observations/{observation_id}/verifications/new")
+async def create_verification(
+    request: Request, observation_id: int, db: Session = Depends(get_db)
+):
+    observation = ObservationRepository(db).get_by_id(observation_id)
+    if observation is None:
+        raise HTTPException(status_code=404, detail="Observation not found")
+
+    form = await request.form()
+    values = {
+        name: str(form.get(name, ""))
+        for name in ("status", "reviewed_by", "confidence", "comment")
+    }
+    errors: dict[str, str] = {}
+
+    try:
+        status = VerificationStatus[values["status"]]
+    except KeyError:
+        status = None
+        errors["status"] = "Välj en giltig verifieringsstatus."
+
+    confidence, confidence_error = _parse_verification_confidence(
+        values["confidence"]
+    )
+    if confidence_error:
+        errors["confidence"] = confidence_error
+
+    if errors:
+        return templates.TemplateResponse(
+            request=request,
+            name="verifications/new.html",
+            context=_new_verification_context(observation, values, errors),
+            status_code=422,
+        )
+
+    verification = Verification(
+        observation=observation,
+        status=status,
+        reviewed_by=_optional_form_value(values["reviewed_by"]),
+        confidence=confidence,
+        comment=_optional_form_value(values["comment"]),
+    )
+    try:
+        VerificationRepository(db).create(verification)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return RedirectResponse(
+        url=f"/verifications/{verification.id}",
+        status_code=303,
     )
 
 
