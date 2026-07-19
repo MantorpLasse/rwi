@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{% if show_history %}Complete Fact history{% else %}Current Facts{% endif %} · RW Intelligence{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+    <div>
+        <div class="text-secondary">Accepted knowledge</div>
+        <h1 class="mb-1">{% if show_history %}Complete Fact history{% else %}Current Facts{% endif %}</h1>
+        <p class="text-secondary mb-0">Facts are accepted knowledge derived through reviewed evidence.</p>
+    </div>
+    {% if show_history %}
+    <a href="/facts">View current Facts</a>
+    {% else %}
+    <a href="/facts?history=all">View complete Fact history</a>
+    {% endif %}
+</div>
+
+{% if facts %}
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr><th>Fact</th><th>Subject</th><th>Accepted value</th><th>Status</th><th>Validity</th><th>Created</th></tr></thead>
+            <tbody>
+            {% for fact in facts %}
+                <tr>
+                    <td><a class="fw-semibold" href="/facts/{{ fact.id }}">{{ fact.fact_type_key }}</a></td>
+                    <td><div>{{ fact.subject_type }}</div><div class="small text-secondary">{{ fact.subject_identifier }}</div></td>
+                    <td class="text-break">{{ fact.accepted_value|truncate(140, true) }}</td>
+                    <td>{{ fact.status.value }}</td>
+                    <td class="small">
+                        <div>From: {{ fact.valid_from if fact.valid_from else "—" }}</div>
+                        <div>To: {{ fact.valid_to if fact.valid_to else "—" }}</div>
+                    </td>
+                    <td class="small text-nowrap">{{ fact.created_at }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% elif show_history %}
+<div class="card"><div class="card-body text-secondary">No Facts recorded.</div></div>
+{% else %}
+<div class="card"><div class="card-body text-secondary">No current Facts recorded.</div></div>
+{% endif %}
+{% endblock %}

@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.models.document import DOCUMENT_STATUSES
 from app.repositories import (
+    FactRepository,
     ObservationRepository,
     ObservationTypeRepository,
     VerificationRepository,
@@ -31,6 +32,34 @@ from app.repositories import (
 app = FastAPI(title=settings.app_name)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
+
+
+@app.get("/facts", response_class=HTMLResponse)
+def list_facts(
+    request: Request,
+    history: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    show_history = history == "all"
+    repository = FactRepository(db)
+    facts = repository.list() if show_history else repository.list_current()
+    return templates.TemplateResponse(
+        request=request,
+        name="facts/list.html",
+        context={"facts": facts, "show_history": show_history},
+    )
+
+
+@app.get("/facts/{fact_id}", response_class=HTMLResponse)
+def fact_detail(request: Request, fact_id: int, db: Session = Depends(get_db)):
+    fact = FactRepository(db).get_by_id(fact_id)
+    if fact is None:
+        raise HTTPException(status_code=404, detail="Fact not found")
+    return templates.TemplateResponse(
+        request=request,
+        name="facts/detail.html",
+        context={"fact": fact},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

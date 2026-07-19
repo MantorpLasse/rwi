@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Fact #{{ fact.id }} · RW Intelligence{% endblock %}
+{% block content %}
+<div class="mb-4">
+    <div class="text-secondary">Fact</div>
+    <h1>#{{ fact.id }} · {{ fact.fact_type_key }}</h1>
+    <div class="d-flex flex-wrap gap-3">
+        <a href="/facts">Current Facts</a>
+        <a href="/facts?history=all">Complete Fact history</a>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header bg-white fw-semibold">Accepted statement</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Fact ID</dt><dd class="col-sm-8">{{ fact.id }}</dd>
+                    <dt class="col-sm-4">Fact type</dt><dd class="col-sm-8">{{ fact.fact_type_key }}</dd>
+                    <dt class="col-sm-4">Subject type</dt><dd class="col-sm-8">{{ fact.subject_type }}</dd>
+                    <dt class="col-sm-4">Subject identifier</dt><dd class="col-sm-8">{{ fact.subject_identifier }}</dd>
+                    <dt class="col-sm-4">Status</dt><dd class="col-sm-8">{{ fact.status.value }}</dd>
+                    <dt class="col-sm-4">Valid from</dt><dd class="col-sm-8">{{ fact.valid_from if fact.valid_from else "—" }}</dd>
+                    <dt class="col-sm-4">Valid to</dt><dd class="col-sm-8">{{ fact.valid_to if fact.valid_to else "—" }}</dd>
+                    <dt class="col-sm-4">Created</dt><dd class="col-sm-8">{{ fact.created_at }}</dd>
+                </dl>
+                <h2 class="h6 mt-3">Accepted value</h2>
+                <div class="text-break" style="white-space: pre-wrap">{{ fact.accepted_value }}</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Supporting Verifications</div>
+            <div class="list-group list-group-flush">
+                {% for verification in fact.supporting_verifications %}
+                <a class="list-group-item list-group-item-action" href="/verifications/{{ verification.id }}">
+                    <div class="d-flex flex-wrap justify-content-between gap-2">
+                        <strong>{{ verification.status.value }}</strong>
+                        <span class="small text-secondary">{{ verification.reviewed_at }}</span>
+                    </div>
+                    <div class="small text-secondary">
+                        Reviewer: {{ verification.reviewed_by if verification.reviewed_by else "—" }} · Confidence: {{ verification.confidence if verification.confidence is not none else "—" }}
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Fact lineage</div>
+            <div class="list-group list-group-flush">
+                {% if fact.supersedes %}<a class="list-group-item list-group-item-action" href="/facts/{{ fact.supersedes.id }}">Superseded Fact #{{ fact.supersedes.id }}</a>{% endif %}
+                {% for successor in fact.superseded_by %}<a class="list-group-item list-group-item-action" href="/facts/{{ successor.id }}">Superseding Fact #{{ successor.id }}</a>{% endfor %}
+                {% if not fact.supersedes and not fact.superseded_by %}<div class="list-group-item text-secondary">No lineage recorded.</div>{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
