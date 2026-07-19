@@ -1,7 +1,8 @@
+import math
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, func, or_, select
@@ -9,9 +10,9 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.models import Airport, Document, Incident, Project, PublishingSource
+from app.models import Airport, Document, Incident, Observation, Project, PublishingSource
 from app.models.document import DOCUMENT_STATUSES
-from app.repositories import ObservationRepository
+from app.repositories import ObservationRepository, ObservationTypeRepository
 
 
 app = FastAPI(title=settings.app_name)
@@ -273,6 +274,127 @@ def observation_detail(
             "observation": observation,
             "later_observations": later_observations,
         },
+    )
+
+
+def _optional_form_value(value: str) -> str | None:
+    return value if value.strip() else None
+
+
+def _parse_extraction_confidence(value: str) -> tuple[float | None, str | None]:
+    if not value.strip():
+        return None, None
+    try:
+        confidence = float(value)
+    except ValueError:
+        return None, "Extraktionskonfidens måste vara ett decimaltal."
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return None, "Extraktionskonfidens måste vara mellan 0,0 och 1,0."
+    return confidence, None
+
+
+def _new_observation_context(
+    document: Document,
+    observation_types,
+    values: dict[str, str] | None = None,
+    errors: dict[str, str] | None = None,
+):
+    return {
+        "document": document,
+        "observation_types": observation_types,
+        "values": values or {},
+        "errors": errors or {},
+    }
+
+
+@app.get("/documents/{document_id}/observations/new", response_class=HTMLResponse)
+def new_observation_form(
+    request: Request, document_id: int, db: Session = Depends(get_db)
+):
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    observation_types = ObservationTypeRepository(db).list_active()
+    return templates.TemplateResponse(
+        request=request,
+        name="observations/new.html",
+        context=_new_observation_context(document, observation_types),
+    )
+
+
+@app.post("/documents/{document_id}/observations/new")
+async def create_observation(
+    request: Request, document_id: int, db: Session = Depends(get_db)
+):
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    form = await request.form()
+    field_names = (
+        "observation_type_id",
+        "raw_value",
+        "normalized_value",
+        "extraction_confidence",
+        "evidence_locator",
+        "extraction_method",
+        "extractor_version",
+    )
+    values = {name: str(form.get(name, "")) for name in field_names}
+    errors: dict[str, str] = {}
+
+    observation_type = None
+    try:
+        observation_type_id = int(values["observation_type_id"])
+    except ValueError:
+        observation_type_id = None
+    if observation_type_id is not None:
+        observation_type = ObservationTypeRepository(db).get_active_by_id(
+            observation_type_id
+        )
+    if observation_type is None:
+        errors["observation_type_id"] = "Välj en giltig observationstyp."
+
+    if not values["raw_value"].strip():
+        errors["raw_value"] = "Rått observerat värde krävs."
+
+    confidence, confidence_error = _parse_extraction_confidence(
+        values["extraction_confidence"]
+    )
+    if confidence_error:
+        errors["extraction_confidence"] = confidence_error
+
+    if errors:
+        observation_types = ObservationTypeRepository(db).list_active()
+        return templates.TemplateResponse(
+            request=request,
+            name="observations/new.html",
+            context=_new_observation_context(
+                document, observation_types, values, errors
+            ),
+            status_code=422,
+        )
+
+    observation = Observation(
+        document=document,
+        observation_type=observation_type,
+        raw_value=values["raw_value"],
+        normalized_value=_optional_form_value(values["normalized_value"]),
+        extraction_confidence=confidence,
+        evidence_locator=_optional_form_value(values["evidence_locator"]),
+        extraction_method=_optional_form_value(values["extraction_method"]),
+        extractor_version=_optional_form_value(values["extractor_version"]),
+    )
+    try:
+        ObservationRepository(db).create(observation)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return RedirectResponse(
+        url=f"/observations/{observation.id}",
+        status_code=303,
     )
 
 
