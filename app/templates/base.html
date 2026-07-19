@@ -8,6 +8,7 @@
     <link href="/static/css/app.css" rel="stylesheet">
 </head>
 <body>
+<a class="visually-hidden-focusable position-absolute bg-white p-2" href="#main-content">Hoppa till innehåll</a>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
     <div class="container">
         <a class="navbar-brand fw-bold" href="/">RW Intelligence</a>
@@ -22,7 +23,7 @@
     </div>
 </nav>
 
-<main class="container pb-5">
+<main id="main-content" class="container pb-5" tabindex="-1">
     {% block content %}{% endblock %}
 </main>
 </body>

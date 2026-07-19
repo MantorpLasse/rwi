@@ -197,6 +197,10 @@ def test_fact_detail_displays_all_fields_and_multiple_supports(fact_app):
     assert html.count("—") >= 2
     for verification_id in verification_ids:
         assert f'href="/verifications/{verification_id}"' in html
+    assert "← Previous: Verification" in html
+    assert "↑ Up: Facts" in html
+    assert 'href="#supporting-verifications"' in html
+    assert "badge text-bg-success" in html
     for forbidden in ("Create Fact", "Edit", "Delete", "Promote", "Retire"):
         assert forbidden not in html
 

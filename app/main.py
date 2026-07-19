@@ -35,6 +35,17 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _format_datetime(value: object) -> str:
+    if value is None:
+        return "—"
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M")
+    return str(value)
+
+
+templates.env.filters["datetime"] = _format_datetime
+
+
 @app.get("/facts", response_class=HTMLResponse)
 def list_facts(
     request: Request,

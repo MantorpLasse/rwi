@@ -4,13 +4,15 @@
 <div class="mb-4">
     <h1 class="mb-1">Observationer</h1>
     <p class="text-secondary mb-0">Spårbara uppgifter från bevarade dokument. Observationer är inte verifierade fakta.</p>
+    <p class="small text-secondary mb-0">{{ observations|length }} resultat</p>
 </div>
 
 {% if observations %}
 <div class="card">
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
-            <thead><tr><th>ID och typ</th><th>Rått observerat värde</th><th>Källdokument</th><th>Extraktion</th><th>Skapad</th></tr></thead>
+            <caption class="visually-hidden">Registrerade observationer</caption>
+            <thead><tr><th scope="col">ID och typ</th><th scope="col">Rått observerat värde</th><th scope="col">Källdokument</th><th scope="col">Extraktion</th><th scope="col">Skapad</th></tr></thead>
             <tbody>
             {% for observation in observations %}
                 <tr>
@@ -25,7 +27,7 @@
                         {% if observation.extraction_confidence is not none %}<div>Konfidens: {{ observation.extraction_confidence }}</div>{% endif %}
                         {% if observation.evidence_locator %}<div>Plats: {{ observation.evidence_locator }}</div>{% endif %}
                     </td>
-                    <td class="small text-nowrap">{{ observation.created_at }}</td>
+                    <td class="small text-nowrap">{{ observation.created_at|datetime }}</td>
                 </tr>
             {% endfor %}
             </tbody>

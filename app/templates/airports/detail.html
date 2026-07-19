@@ -7,9 +7,15 @@
     <p>{{ airport.city }}, {{ airport.state_region }} · {{ airport.country }}</p>
 </div>
 
+<nav class="workflow-nav d-flex flex-wrap gap-3 mb-4" aria-label="Arbetsflöde">
+    <a href="/airports">← Föregående: Flygplatslista</a>
+    <a href="/airports">↑ Upp: Flygplatser</a>
+    <a href="#projects">Nästa: Projekt →</a>
+</nav>
+
 <div class="row g-4">
     <div class="col-lg-8">
-        <div class="card mb-4">
+        <div class="card mb-4" id="projects">
             <div class="card-header bg-white fw-semibold">Projekt</div>
             <div class="list-group list-group-flush">
                 {% for project in airport.projects %}

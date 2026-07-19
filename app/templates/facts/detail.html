@@ -4,11 +4,13 @@
 <div class="mb-4">
     <div class="text-secondary">Fact</div>
     <h1>#{{ fact.id }} · {{ fact.fact_type_key }}</h1>
-    <div class="d-flex flex-wrap gap-3">
-        <a href="/facts">Current Facts</a>
-        <a href="/facts?history=all">Complete Fact history</a>
-    </div>
 </div>
+
+<nav class="workflow-nav d-flex flex-wrap gap-3 mb-4" aria-label="Workflow">
+    {% if fact.supporting_verifications %}<a href="/verifications/{{ fact.supporting_verifications[0].id }}">← Previous: Verification</a>{% else %}<span class="text-secondary">← Previous: Verification</span>{% endif %}
+    <a href="/facts{% if fact.status.value != 'accepted' %}?history=all{% endif %}">↑ Up: Facts</a>
+    {% if fact.superseded_by %}<a href="/facts/{{ fact.superseded_by[0].id }}">Next: Superseding Fact →</a>{% else %}<a href="#supporting-verifications">Next: Supporting evidence →</a>{% endif %}
+</nav>
 
 <div class="row g-4">
     <div class="col-lg-8">
@@ -20,24 +22,24 @@
                     <dt class="col-sm-4">Fact type</dt><dd class="col-sm-8">{{ fact.fact_type_key }}</dd>
                     <dt class="col-sm-4">Subject type</dt><dd class="col-sm-8">{{ fact.subject_type }}</dd>
                     <dt class="col-sm-4">Subject identifier</dt><dd class="col-sm-8">{{ fact.subject_identifier }}</dd>
-                    <dt class="col-sm-4">Status</dt><dd class="col-sm-8">{{ fact.status.value }}</dd>
+                    <dt class="col-sm-4">Status</dt><dd class="col-sm-8"><span class="badge text-bg-{% if fact.status.value == 'accepted' %}success{% elif fact.status.value == 'retired' %}secondary{% else %}warning{% endif %}">{{ fact.status.value }}</span></dd>
                     <dt class="col-sm-4">Valid from</dt><dd class="col-sm-8">{{ fact.valid_from if fact.valid_from else "—" }}</dd>
                     <dt class="col-sm-4">Valid to</dt><dd class="col-sm-8">{{ fact.valid_to if fact.valid_to else "—" }}</dd>
-                    <dt class="col-sm-4">Created</dt><dd class="col-sm-8">{{ fact.created_at }}</dd>
+                    <dt class="col-sm-4">Created</dt><dd class="col-sm-8">{{ fact.created_at|datetime }}</dd>
                 </dl>
                 <h2 class="h6 mt-3">Accepted value</h2>
-                <div class="text-break" style="white-space: pre-wrap">{{ fact.accepted_value }}</div>
+                <div class="text-break evidence-value">{{ fact.accepted_value }}</div>
             </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="supporting-verifications">
             <div class="card-header bg-white fw-semibold">Supporting Verifications</div>
             <div class="list-group list-group-flush">
                 {% for verification in fact.supporting_verifications %}
                 <a class="list-group-item list-group-item-action" href="/verifications/{{ verification.id }}">
                     <div class="d-flex flex-wrap justify-content-between gap-2">
-                        <strong>{{ verification.status.value }}</strong>
-                        <span class="small text-secondary">{{ verification.reviewed_at }}</span>
+                        <span class="badge text-bg-success">{{ verification.status.value }}</span>
+                        <span class="small text-secondary">{{ verification.reviewed_at|datetime }}</span>
                     </div>
                     <div class="small text-secondary">
                         Reviewer: {{ verification.reviewed_by if verification.reviewed_by else "—" }} · Confidence: {{ verification.confidence if verification.confidence is not none else "—" }}

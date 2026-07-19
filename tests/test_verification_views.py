@@ -140,6 +140,10 @@ def test_verification_detail_displays_review_and_both_navigation_links(verificat
         assert value in html
     assert f'href="/observations/{observation_id}"' in html
     assert f'href="/observations/{observation_id}/verifications"' in html
+    assert "← Föregående: Observation" in html
+    assert "↑ Upp: Verifieringshistorik" in html
+    assert "2026-07-19 12:30" in html
+    assert "badge text-bg-danger" in html
     for forbidden in ("Redigera", "Radera", "Godkänn", "Avvisa"):
         assert forbidden not in html
 

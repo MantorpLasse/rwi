@@ -22,7 +22,7 @@
                         <span class="w-100">
                             <span class="d-flex flex-wrap justify-content-between gap-2">
                                 <strong>Verification #{{ verification.id }} · {{ verification.status.name }}</strong>
-                                <span class="small text-secondary">{{ verification.reviewed_at }}</span>
+                                <span class="small text-secondary">{{ verification.reviewed_at|datetime }}</span>
                             </span>
                             <span class="d-block small">Observation #{{ verification.observation.id }} · {{ verification.observation.observation_type.key }}</span>
                             <span class="d-block text-break">{{ reviewed_value }}</span>

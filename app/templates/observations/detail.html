@@ -7,16 +7,22 @@
     <p class="text-secondary mb-0">Bevarad evidens från ett dokument. Innehållet är inte ett verifierat eller accepterat faktum.</p>
 </div>
 
+<nav class="workflow-nav d-flex flex-wrap gap-3 mb-4" aria-label="Arbetsflöde">
+    <a href="/documents/{{ observation.document.id }}">← Föregående: Dokument</a>
+    <a href="/observations">↑ Upp: Observationer</a>
+    <a href="#verifications">Nästa: Verifieringar →</a>
+</nav>
+
 <div class="row g-4">
     <div class="col-lg-8">
         <div class="card mb-4">
             <div class="card-header bg-white fw-semibold">Observerat innehåll</div>
             <div class="card-body">
                 <h2 class="h6">Rått observerat värde</h2>
-                <div class="text-break" style="white-space: pre-wrap">{{ observation.raw_value }}</div>
+                <div class="text-break evidence-value">{{ observation.raw_value }}</div>
                 {% if observation.normalized_value %}
                 <h2 class="h6 mt-4">Normaliserad kandidat</h2>
-                <div class="text-break" style="white-space: pre-wrap">{{ observation.normalized_value }}</div>
+                <div class="text-break evidence-value">{{ observation.normalized_value }}</div>
                 {% endif %}
             </div>
         </div>
@@ -41,7 +47,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="verifications">
             <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <span class="fw-semibold">Verifieringshistorik</span>
                 <span class="d-flex gap-3">
@@ -53,8 +59,8 @@
                 {% for verification in verifications %}
                 <a class="list-group-item list-group-item-action" href="/verifications/{{ verification.id }}">
                     <div class="d-flex flex-wrap justify-content-between gap-2">
-                        <strong>{{ verification.status.value }}</strong>
-                        <span class="small text-secondary">{{ verification.reviewed_at }}</span>
+                        <span class="badge text-bg-{% if verification.status.value == 'accepted' %}success{% elif verification.status.value == 'rejected' %}danger{% elif verification.status.value == 'pending' %}warning{% else %}secondary{% endif %}">{{ verification.status.value }}</span>
+                        <span class="small text-secondary">{{ verification.reviewed_at|datetime }}</span>
                     </div>
                     <div class="small text-secondary">
                         Granskare: {{ verification.reviewed_by if verification.reviewed_by else "—" }} · Konfidens: {{ verification.confidence if verification.confidence is not none else "—" }}
@@ -75,7 +81,7 @@
                 {% if observation.extraction_method %}<dt>Extraktionsmetod</dt><dd>{{ observation.extraction_method }}</dd>{% endif %}
                 {% if observation.extractor_version %}<dt>Extraktorversion</dt><dd>{{ observation.extractor_version }}</dd>{% endif %}
                 {% if observation.evidence_locator %}<dt>Evidensplats</dt><dd>{{ observation.evidence_locator }}</dd>{% endif %}
-                <dt>Skapad</dt><dd class="mb-0">{{ observation.created_at }}</dd>
+                <dt>Skapad</dt><dd class="mb-0">{{ observation.created_at|datetime }}</dd>
             </dl></div>
         </div>
         <div class="card">

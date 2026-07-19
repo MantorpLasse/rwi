@@ -92,6 +92,9 @@ def test_document_detail_renders_normalized_metadata_and_safe_external_links(doc
         assert text in response.text
     assert 'href="https://documents.example/report.pdf" target="_blank" rel="noopener"' in response.text
     assert 'href="https://publisher.example/home" target="_blank" rel="noopener"' in response.text
+    assert 'aria-label="Arbetsflöde"' in response.text
+    assert 'href="/documents">↑ Upp: Dokument</a>' in response.text
+    assert 'href="#observations">Nästa: Observationer →</a>' in response.text
 
 
 def test_missing_optional_metadata_has_no_empty_labels(document_app):

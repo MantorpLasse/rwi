@@ -12,6 +12,12 @@
     <span class="score-pill score-large">{{ "%.1f"|format(project.probability_score) }}</span>
 </div>
 
+<nav class="workflow-nav d-flex flex-wrap gap-3 mb-4" aria-label="Arbetsflöde">
+    <a href="/airports/{{ project.airport.id }}">← Föregående: Flygplats</a>
+    <a href="/projects">↑ Upp: Projekt</a>
+    <a href="#documents">Nästa: Dokument →</a>
+</nav>
+
 <div class="row g-4">
     <div class="col-lg-8">
         <div class="card mb-4">
@@ -31,7 +37,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="documents">
             <div class="card-header bg-white fw-semibold">Dokument</div>
             <div class="list-group list-group-flush">
                 {% for document in project.documents %}

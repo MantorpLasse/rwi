@@ -131,6 +131,9 @@ def test_observation_detail_shows_complete_evidence_and_relationships(observatio
     ):
         assert value in html
     assert f'href="/documents/{document_id}"' in html
+    assert 'href="/observations">↑ Upp: Observationer</a>' in html
+    assert 'href="#verifications">Nästa: Verifieringar →</a>' in html
+    assert 'class="text-break evidence-value"' in html
     assert "None" not in html
     assert "Verifierat värde" not in html
     assert "Godkänn" not in html
