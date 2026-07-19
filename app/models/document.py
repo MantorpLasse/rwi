@@ -63,3 +63,6 @@ class Document(Base):
         secondary=project_documents,
         back_populates="documents",
     )
+    observations: Mapped[list["Observation"]] = relationship(
+        back_populates="document", passive_deletes="all"
+    )

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, validates
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.database import Base
 
@@ -31,6 +31,9 @@ class ObservationType(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
     )
+    observations: Mapped[list["Observation"]] = relationship(
+        back_populates="observation_type", passive_deletes="all"
+    )
 
     @validates("key")
     def validate_immutable_key(self, _attribute_name: str, value: str) -> str:
@@ -40,4 +43,3 @@ class ObservationType(Base):
         if self.key is not None and normalized != self.key:
             raise ValueError("ObservationType key is immutable")
         return normalized
-

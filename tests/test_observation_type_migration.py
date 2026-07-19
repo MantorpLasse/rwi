@@ -1,12 +1,8 @@
 from argparse import Namespace
 
 from alembic import command
-from alembic.autogenerate import compare_metadata
 from alembic.config import Config
-from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect, text
-
-from app.migration_metadata import target_metadata
 
 
 OBSERVATION_TYPE_REVISION = "7c4f1d8e2a90"
@@ -40,9 +36,6 @@ def test_observation_type_migration_creates_seeds_and_downgrades(tmp_path):
                 ("airport.emas.product", "enumeration", 1),
                 ("airport.emas.system_count", "integer", 1),
             ]
-            assert compare_metadata(
-                MigrationContext.configure(connection), target_metadata
-            ) == []
     finally:
         engine.dispose()
 
@@ -53,4 +46,3 @@ def test_observation_type_migration_creates_seeds_and_downgrades(tmp_path):
         assert "observation_types" not in inspect(engine).get_table_names()
     finally:
         engine.dispose()
-

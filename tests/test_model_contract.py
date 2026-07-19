@@ -9,6 +9,7 @@ from app.models import (
     EmasBed,
     EmasInstallation,
     Incident,
+    Observation,
     ObservationType,
     Project,
     PublishingSource,
@@ -85,6 +86,19 @@ EXPECTED_COLUMNS = {
         "value_type": ("VARCHAR(30)", False, None, None),
         "active": ("BOOLEAN", False, ("scalar", True), None),
         "created_at": ("DATETIME", False, ("callable",), None),
+    },
+    "observations": {
+        "id": ("INTEGER", False, None, None),
+        "document_id": ("INTEGER", False, None, None),
+        "observation_type_id": ("INTEGER", False, None, None),
+        "raw_value": ("TEXT", False, None, None),
+        "normalized_value": ("TEXT", True, None, None),
+        "extraction_confidence": ("FLOAT", True, None, None),
+        "evidence_locator": ("TEXT", True, None, None),
+        "extraction_method": ("VARCHAR(50)", True, None, None),
+        "extractor_version": ("VARCHAR(100)", True, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_observation_id": ("INTEGER", True, None, None),
     },
     "emas_beds": {
         "id": ("INTEGER", False, None, None),
@@ -181,6 +195,11 @@ EXPECTED_FOREIGN_KEYS = {
         ("document_id", "documents.id"),
     },
     "observation_types": set(),
+    "observations": {
+        ("document_id", "documents.id"),
+        ("observation_type_id", "observation_types.id"),
+        ("supersedes_observation_id", "observations.id"),
+    },
     "emas_beds": {("runway_end_id", "runway_ends.id")},
     "projects": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
     "emas_installations": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
@@ -209,6 +228,11 @@ EXPECTED_INDEXES = {
     },
     "project_documents": set(),
     "observation_types": set(),
+    "observations": {
+        ("ix_observations_document_id", ("document_id",), False),
+        ("ix_observations_observation_type_id", ("observation_type_id",), False),
+        ("ix_observations_supersedes_observation_id", ("supersedes_observation_id",), False),
+    },
     "emas_beds": {
         ("ix_emas_beds_installation_year", ("installation_year",), False),
         ("ix_emas_beds_runway_end_id", ("runway_end_id",), False),
@@ -280,6 +304,7 @@ EXPECTED_RELATIONSHIPS = {
     "Document": {
         "source": ("PublishingSource", "documents", DEFAULT_CASCADE),
         "projects": ("Project", "documents", DEFAULT_CASCADE),
+        "observations": ("Observation", "document", DEFAULT_CASCADE),
     },
     "EmasInstallation": {
         "airport": ("Airport", "installations", DEFAULT_CASCADE),
@@ -290,7 +315,15 @@ EXPECTED_RELATIONSHIPS = {
         "airport": ("Airport", "incidents", DEFAULT_CASCADE),
         "runway": ("Runway", "incidents", DEFAULT_CASCADE),
     },
-    "ObservationType": {},
+    "ObservationType": {
+        "observations": ("Observation", "observation_type", DEFAULT_CASCADE),
+    },
+    "Observation": {
+        "document": ("Document", "observations", DEFAULT_CASCADE),
+        "observation_type": ("ObservationType", "observations", DEFAULT_CASCADE),
+        "supersedes": ("Observation", "superseded_by", DEFAULT_CASCADE),
+        "superseded_by": ("Observation", "supersedes", DEFAULT_CASCADE),
+    },
 }
 
 
@@ -316,6 +349,7 @@ def test_all_current_models_are_exported_from_app_models():
         EmasInstallation.__name__,
         Source.__name__,
         Incident.__name__,
+        Observation.__name__,
         ObservationType.__name__,
     ] == [
         "Airport",
@@ -328,6 +362,7 @@ def test_all_current_models_are_exported_from_app_models():
         "EmasInstallation",
         "Source",
         "Incident",
+        "Observation",
         "ObservationType",
     ]
 

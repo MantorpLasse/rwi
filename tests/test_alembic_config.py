@@ -20,6 +20,7 @@ EXPECTED_TABLES = {
     "documents",
     "project_documents",
     "observation_types",
+    "observations",
 }
 
 

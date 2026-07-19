@@ -1,0 +1,123 @@
+[1mdiff --git a/app/repositories/__init__.py b/app/repositories/__init__.py[m
+[1mnew file mode 100644[m
+[1mindex 0000000..2b98918[m
+[1m--- /dev/null[m
+[1m+++ b/app/repositories/__init__.py[m
+[36m@@ -0,0 +1,4 @@[m
+[32m+[m[32mfrom app.repositories.observation_type import ObservationTypeRepository[m
+[32m+[m
+[32m+[m[32m__all__ = ["ObservationTypeRepository"][m
+[32m+[m
+[1mdiff --git a/app/seed.py b/app/seed.py[m
+[1mindex 13dd390..115f0d4 100644[m
+[1m--- a/app/seed.py[m
+[1m+++ b/app/seed.py[m
+[36m@@ -5,6 +5,7 @@[m [mfrom sqlalchemy import select[m
+ [m
+ from app.database import Base, SessionLocal, engine[m
+ from app.models import Airport, Project, Runway, Source[m
+[32m+[m[32mfrom app.observation_type_vocabulary import seed_observation_types[m
+ [m
+ [m
+ def get_or_create_airport(db, **kwargs):[m
+[36m@@ -37,6 +38,7 @@[m [mdef seed():[m
+     db = SessionLocal()[m
+ [m
+     try:[m
+[32m+[m[32m        seed_observation_types(db)[m
+         airports = {}[m
+ [m
+         airport_rows = [[m
+[1mdiff --git a/tests/test_alembic_config.py b/tests/test_alembic_config.py[m
+[1mindex 8410af8..227cd93 100644[m
+[1m--- a/tests/test_alembic_config.py[m
+[1m+++ b/tests/test_alembic_config.py[m
+[36m@@ -19,6 +19,7 @@[m [mEXPECTED_TABLES = {[m
+     "publishing_sources",[m
+     "documents",[m
+     "project_documents",[m
+[32m+[m[32m    "observation_types",[m
+ }[m
+ [m
+ [m
+[1mdiff --git a/tests/test_model_contract.py b/tests/test_model_contract.py[m
+[1mindex 5d26932..5e1e90d 100644[m
+[1m--- a/tests/test_model_contract.py[m
+[1m+++ b/tests/test_model_contract.py[m
+[36m@@ -9,6 +9,7 @@[m [mfrom app.models import ([m
+     EmasBed,[m
+     EmasInstallation,[m
+     Incident,[m
+[32m+[m[32m    ObservationType,[m
+     Project,[m
+     PublishingSource,[m
+     Runway,[m
+[36m@@ -76,6 +77,15 @@[m [mEXPECTED_COLUMNS = {[m
+         "project_id": ("INTEGER", False, None, None),[m
+         "document_id": ("INTEGER", False, None, None),[m
+     },[m
+[32m+[m[32m    "observation_types": {[m
+[32m+[m[32m        "id": ("INTEGER", False, None, None),[m
+[32m+[m[32m        "key": ("VARCHAR(150)", False, None, None),[m
+[32m+[m[32m        "display_label": ("VARCHAR(200)", False, None, None),[m
+[32m+[m[32m        "description": ("TEXT", False, None, None),[m
+[32m+[m[32m        "value_type": ("VARCHAR(30)", False, None, None),[m
+[32m+[m[32m        "active": ("BOOLEAN", False, ("scalar", True), None),[m
+[32m+[m[32m        "created_at": ("DATETIME", False, ("callable",), None),[m
+[32m+[m[32m    },[m
+     "emas_beds": {[m
+         "id": ("INTEGER", False, None, None),[m
+         "runway_end_id": ("INTEGER", False, None, None),[m
+[36m@@ -170,6 +180,7 @@[m [mEXPECTED_FOREIGN_KEYS = {[m
+         ("project_id", "projects.id"),[m
+         ("document_id", "documents.id"),[m
+     },[m
+[32m+[m[32m    "observation_types": set(),[m
+     "emas_beds": {("runway_end_id", "runway_ends.id")},[m
+     "projects": {("airport_id", "airports.id"), ("runway_id", "runways.id")},[m
+     "emas_installations": {("airport_id", "airports.id"), ("runway_id", "runways.id")},[m
+[36m@@ -197,6 +208,7 @@[m [mEXPECTED_INDEXES = {[m
+         ("ix_documents_source_id", ("source_id",), False),[m
+     },[m
+     "project_documents": set(),[m
+[32m+[m[32m    "observation_types": set(),[m
+     "emas_beds": {[m
+         ("ix_emas_beds_installation_year", ("installation_year",), False),[m
+         ("ix_emas_beds_runway_end_id", ("runway_end_id",), False),[m
+[36m@@ -278,6 +290,7 @@[m [mEXPECTED_RELATIONSHIPS = {[m
+         "airport": ("Airport", "incidents", DEFAULT_CASCADE),[m
+         "runway": ("Runway", "incidents", DEFAULT_CASCADE),[m
+     },[m
+[32m+[m[32m    "ObservationType": {},[m
+ }[m
+ [m
+ [m
+[36m@@ -303,6 +316,7 @@[m [mdef test_all_current_models_are_exported_from_app_models():[m
+         EmasInstallation.__name__,[m
+         Source.__name__,[m
+         Incident.__name__,[m
+[32m+[m[32m        ObservationType.__name__,[m
+     ] == [[m
+         "Airport",[m
+         "Document",[m
+[36m@@ -314,6 +328,7 @@[m [mdef test_all_current_models_are_exported_from_app_models():[m
+         "EmasInstallation",[m
+         "Source",[m
+         "Incident",[m
+[32m+[m[32m        "ObservationType",[m
+     ][m
+ [m
+ [m
+[1mdiff --git a/tests/test_source_document_migration.py b/tests/test_source_document_migration.py[m
+[1mindex 39e8fed..c99bd96 100644[m
+[1m--- a/tests/test_source_document_migration.py[m
+[1m+++ b/tests/test_source_document_migration.py[m
+[36m@@ -11,7 +11,7 @@[m [mfrom app.migration_metadata import target_metadata[m
+ [m
+ [m
+ BASELINE_REVISION = "8edd52d34c76"[m
+[31m-HEAD_REVISION = "3f2a1c9d7e6b"[m
+[32m+[m[32mHEAD_REVISION = "7c4f1d8e2a90"[m
+ [m
+ LEGACY_ROWS = ([m
+     (1, 1, "Resolution 025-2024 – Amended Common Ground Recommendation Airport Map", "ALP", "Pitkin County", "http://www.aspenairport.com/wp-content/uploads/2024/07/bocc.res_.025.2024-Amending-Res-105-2020.pdf", date(2024, 5, 16), "official"),[m
