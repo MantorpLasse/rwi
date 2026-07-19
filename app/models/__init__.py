@@ -3,6 +3,7 @@ from app.models.document import Document, PublishingSource
 from app.models.emas_bed import EmasBed
 from app.models.fact import Fact, FactStatus
 from app.models.incident import Incident
+from app.models.intelligence import Intelligence, IntelligenceStatus
 from app.models.observation import Observation
 from app.models.observation_type import ObservationType
 from app.models.project import Project
@@ -18,6 +19,8 @@ __all__ = [
     "Fact",
     "FactStatus",
     "Incident",
+    "Intelligence",
+    "IntelligenceStatus",
     "Observation",
     "ObservationType",
     "Project",

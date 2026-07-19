@@ -10,6 +10,7 @@ from app.models import (
     EmasInstallation,
     Fact,
     Incident,
+    Intelligence,
     Observation,
     ObservationType,
     Project,
@@ -128,6 +129,20 @@ EXPECTED_COLUMNS = {
         "fact_id": ("INTEGER", False, None, None),
         "verification_id": ("INTEGER", False, None, None),
     },
+    "intelligence": {
+        "id": ("INTEGER", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "finding_type": ("VARCHAR(150)", False, None, None),
+        "title": ("VARCHAR(300)", False, None, None),
+        "summary": ("TEXT", False, None, None),
+        "status": ("VARCHAR(10)", False, None, None),
+        "derived_at": ("DATETIME", False, None, None),
+        "supersedes_intelligence_id": ("INTEGER", True, None, None),
+    },
+    "intelligence_facts": {
+        "intelligence_id": ("INTEGER", False, None, None),
+        "fact_id": ("INTEGER", False, None, None),
+    },
     "emas_beds": {
         "id": ("INTEGER", False, None, None),
         "runway_end_id": ("INTEGER", False, None, None),
@@ -212,6 +227,7 @@ EXPECTED_COLUMNS = {
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
 EXPECTED_PRIMARY_KEYS["project_documents"] = ("project_id", "document_id")
 EXPECTED_PRIMARY_KEYS["fact_verifications"] = ("fact_id", "verification_id")
+EXPECTED_PRIMARY_KEYS["intelligence_facts"] = ("intelligence_id", "fact_id")
 
 EXPECTED_FOREIGN_KEYS = {
     "airports": set(),
@@ -234,6 +250,13 @@ EXPECTED_FOREIGN_KEYS = {
     "fact_verifications": {
         ("fact_id", "facts.id"),
         ("verification_id", "verifications.id"),
+    },
+    "intelligence": {
+        ("supersedes_intelligence_id", "intelligence.id"),
+    },
+    "intelligence_facts": {
+        ("intelligence_id", "intelligence.id"),
+        ("fact_id", "facts.id"),
     },
     "emas_beds": {("runway_end_id", "runway_ends.id")},
     "projects": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
@@ -277,6 +300,13 @@ EXPECTED_INDEXES = {
         ("ix_facts_supersedes_fact_id", ("supersedes_fact_id",), False),
     },
     "fact_verifications": set(),
+    "intelligence": {
+        ("ix_intelligence_created_at", ("created_at",), False),
+        ("ix_intelligence_finding_type", ("finding_type",), False),
+        ("ix_intelligence_status", ("status",), False),
+        ("ix_intelligence_supersedes_intelligence_id", ("supersedes_intelligence_id",), False),
+    },
+    "intelligence_facts": set(),
     "emas_beds": {
         ("ix_emas_beds_installation_year", ("installation_year",), False),
         ("ix_emas_beds_runway_end_id", ("runway_end_id",), False),
@@ -377,6 +407,11 @@ EXPECTED_RELATIONSHIPS = {
         "superseded_by": ("Fact", "supersedes", DEFAULT_CASCADE),
         "supporting_verifications": ("Verification", None, DEFAULT_CASCADE),
     },
+    "Intelligence": {
+        "supersedes": ("Intelligence", "superseded_by", DEFAULT_CASCADE),
+        "superseded_by": ("Intelligence", "supersedes", DEFAULT_CASCADE),
+        "supporting_facts": ("Fact", None, DEFAULT_CASCADE),
+    },
 }
 
 
@@ -396,6 +431,7 @@ def test_all_current_models_are_exported_from_app_models():
         Document.__name__,
         EmasBed.__name__,
         Fact.__name__,
+        Intelligence.__name__,
         Runway.__name__,
         RunwayEnd.__name__,
         Project.__name__,
@@ -411,6 +447,7 @@ def test_all_current_models_are_exported_from_app_models():
         "Document",
         "EmasBed",
         "Fact",
+        "Intelligence",
         "Runway",
         "RunwayEnd",
         "Project",

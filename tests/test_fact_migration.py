@@ -9,7 +9,6 @@ from sqlalchemy import create_engine, inspect
 from app.migration_metadata import target_metadata
 
 
-FACT_REVISION = "c8f1a34d6e72"
 PREVIOUS_REVISION = "b5d82a7c1e40"
 
 
@@ -24,7 +23,7 @@ def test_fact_migration_matches_metadata_and_downgrades(tmp_path):
     database_url = f"sqlite:///{(tmp_path / 'facts.db').as_posix()}"
     alembic_config = config(database_url)
 
-    command.upgrade(alembic_config, FACT_REVISION)
+    command.upgrade(alembic_config, "head")
     engine = create_engine(database_url)
     try:
         inspector = inspect(engine)
