@@ -1,3 +1,4 @@
+from app.services.fact_promotion import FactPromotionError, FactPromotionService
 from app.services.observation_candidates import (
     CandidateBatchResult,
     CandidateError,
@@ -12,6 +13,8 @@ __all__ = [
     "CandidateError",
     "CandidateResult",
     "CandidateStatus",
+    "FactPromotionError",
+    "FactPromotionService",
     "ObservationCandidate",
     "ObservationCandidateService",
 ]
