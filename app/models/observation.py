@@ -43,6 +43,9 @@ class Observation(Base):
     superseded_by: Mapped[list["Observation"]] = relationship(
         back_populates="supersedes", foreign_keys=[supersedes_observation_id], passive_deletes="all"
     )
+    verifications: Mapped[list["Verification"]] = relationship(
+        back_populates="observation", passive_deletes="all"
+    )
 
 
 @event.listens_for(Observation, "before_update")

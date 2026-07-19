@@ -21,6 +21,7 @@ EXPECTED_TABLES = {
     "project_documents",
     "observation_types",
     "observations",
+    "verifications",
 }
 
 

@@ -16,6 +16,7 @@ from app.models import (
     Runway,
     RunwayEnd,
     Source,
+    Verification,
 )
 
 
@@ -99,6 +100,16 @@ EXPECTED_COLUMNS = {
         "extractor_version": ("VARCHAR(100)", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
         "supersedes_observation_id": ("INTEGER", True, None, None),
+    },
+    "verifications": {
+        "id": ("INTEGER", False, None, None),
+        "observation_id": ("INTEGER", False, None, None),
+        "status": ("VARCHAR(9)", False, None, None),
+        "reviewed_at": ("DATETIME", False, ("callable",), None),
+        "reviewed_by": ("VARCHAR(200)", True, None, None),
+        "comment": ("TEXT", True, None, None),
+        "confidence": ("FLOAT", True, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
     },
     "emas_beds": {
         "id": ("INTEGER", False, None, None),
@@ -200,6 +211,7 @@ EXPECTED_FOREIGN_KEYS = {
         ("observation_type_id", "observation_types.id"),
         ("supersedes_observation_id", "observations.id"),
     },
+    "verifications": {("observation_id", "observations.id")},
     "emas_beds": {("runway_end_id", "runway_ends.id")},
     "projects": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
     "emas_installations": {("airport_id", "airports.id"), ("runway_id", "runways.id")},
@@ -232,6 +244,9 @@ EXPECTED_INDEXES = {
         ("ix_observations_document_id", ("document_id",), False),
         ("ix_observations_observation_type_id", ("observation_type_id",), False),
         ("ix_observations_supersedes_observation_id", ("supersedes_observation_id",), False),
+    },
+    "verifications": {
+        ("ix_verifications_observation_id", ("observation_id",), False),
     },
     "emas_beds": {
         ("ix_emas_beds_installation_year", ("installation_year",), False),
@@ -323,6 +338,10 @@ EXPECTED_RELATIONSHIPS = {
         "observation_type": ("ObservationType", "observations", DEFAULT_CASCADE),
         "supersedes": ("Observation", "superseded_by", DEFAULT_CASCADE),
         "superseded_by": ("Observation", "supersedes", DEFAULT_CASCADE),
+        "verifications": ("Verification", "observation", DEFAULT_CASCADE),
+    },
+    "Verification": {
+        "observation": ("Observation", "verifications", DEFAULT_CASCADE),
     },
 }
 
@@ -351,6 +370,7 @@ def test_all_current_models_are_exported_from_app_models():
         Incident.__name__,
         Observation.__name__,
         ObservationType.__name__,
+        Verification.__name__,
     ] == [
         "Airport",
         "Document",
@@ -364,6 +384,7 @@ def test_all_current_models_are_exported_from_app_models():
         "Incident",
         "Observation",
         "ObservationType",
+        "Verification",
     ]
 
 

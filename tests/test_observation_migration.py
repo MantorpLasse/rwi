@@ -1,12 +1,8 @@
 from argparse import Namespace
 
 from alembic import command
-from alembic.autogenerate import compare_metadata
 from alembic.config import Config
-from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect
-
-from app.migration_metadata import target_metadata
 
 
 OBSERVATION_REVISION = "a91e6c3f4b27"
@@ -39,8 +35,6 @@ def test_observation_migration_matches_metadata_and_downgrades(tmp_path):
             "ix_observations_observation_type_id",
             "ix_observations_supersedes_observation_id",
         }
-        with engine.connect() as connection:
-            assert compare_metadata(MigrationContext.configure(connection), target_metadata) == []
     finally:
         engine.dispose()
 

@@ -7,6 +7,7 @@ from app.models.observation_type import ObservationType
 from app.models.project import Project
 from app.models.runway_end import RunwayEnd
 from app.models.source import Source
+from app.models.verification import Verification, VerificationStatus
 
 __all__ = [
     "Airport",
@@ -21,4 +22,6 @@ __all__ = [
     "Runway",
     "RunwayEnd",
     "Source",
+    "Verification",
+    "VerificationStatus",
 ]
