@@ -7,6 +7,7 @@
     <div class="d-flex flex-wrap gap-3">
         <a href="/observations/{{ verification.observation.id }}/verifications">Till verifieringshistoriken</a>
         <a href="/observations/{{ verification.observation.id }}">Till observationen</a>
+        {% if verification.status.value == "accepted" %}<a href="/facts/promote?verification_id={{ verification.id }}">Promote to Fact</a>{% endif %}
     </div>
 </div>
 

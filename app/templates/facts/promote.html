@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Promote to Fact · RW Intelligence{% endblock %}
+{% block content %}
+<div class="mb-4">
+    <div class="text-secondary">Manual promotion</div>
+    <h1>Promote to Fact</h1>
+    <p class="text-secondary mb-0">Create one immutable Fact from one or more accepted Verifications. Fact type and reviewed value are resolved server-side.</p>
+</div>
+
+{% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
+
+<form method="post" action="/facts/promote" class="card">
+    <div class="card-body">
+        <fieldset class="mb-4">
+            <legend class="h5">Supporting Verifications</legend>
+            <div class="list-group">
+                {% for verification in eligible_verifications %}
+                {% set reviewed_value = verification.observation.normalized_value if verification.observation.normalized_value is not none else verification.observation.raw_value %}
+                <label class="list-group-item">
+                    <div class="d-flex gap-3">
+                        <input class="form-check-input flex-shrink-0" type="checkbox" name="verification_ids" value="{{ verification.id }}"{% if verification.id in selected_ids %} checked{% endif %}>
+                        <span class="w-100">
+                            <span class="d-flex flex-wrap justify-content-between gap-2">
+                                <strong>Verification #{{ verification.id }} · {{ verification.status.name }}</strong>
+                                <span class="small text-secondary">{{ verification.reviewed_at }}</span>
+                            </span>
+                            <span class="d-block small">Observation #{{ verification.observation.id }} · {{ verification.observation.observation_type.key }}</span>
+                            <span class="d-block text-break">{{ reviewed_value }}</span>
+                            <span class="d-block small text-secondary">Reviewer: {{ verification.reviewed_by if verification.reviewed_by else "—" }}</span>
+                        </span>
+                    </div>
+                </label>
+                {% else %}
+                <div class="list-group-item text-secondary">No accepted Verifications are eligible for promotion.</div>
+                {% endfor %}
+            </div>
+        </fieldset>
+
+        <div class="row g-3 mb-3">
+            <div class="col-md-6">
+                <label class="form-label" for="subject-type">Subject type <span aria-hidden="true">*</span></label>
+                <input class="form-control" id="subject-type" name="subject_type" required value="{{ values.subject_type|default('', true) }}">
+            </div>
+            <div class="col-md-6">
+                <label class="form-label" for="subject-identifier">Subject identifier <span aria-hidden="true">*</span></label>
+                <input class="form-control" id="subject-identifier" name="subject_identifier" required value="{{ values.subject_identifier|default('', true) }}">
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label" for="accepted-value">Accepted value <span aria-hidden="true">*</span></label>
+            <textarea class="form-control" id="accepted-value" name="accepted_value" rows="4" required>{{ values.accepted_value|default('', true) }}</textarea>
+        </div>
+    </div>
+    <div class="card-footer bg-white d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Promote to Fact</button>
+        <a class="btn btn-outline-secondary" href="/facts">Cancel</a>
+    </div>
+</form>
+{% endblock %}

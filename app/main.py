@@ -27,6 +27,7 @@ from app.repositories import (
     ObservationTypeRepository,
     VerificationRepository,
 )
+from app.services import FactPromotionError, FactPromotionService
 
 
 app = FastAPI(title=settings.app_name)
@@ -47,6 +48,114 @@ def list_facts(
         request=request,
         name="facts/list.html",
         context={"facts": facts, "show_history": show_history},
+    )
+
+
+def _eligible_verifications(db: Session) -> list[Verification]:
+    statement = (
+        select(Verification)
+        .join(Verification.observation)
+        .join(Observation.observation_type)
+        .where(Verification.status == VerificationStatus.ACCEPTED)
+        .options(joinedload(Verification.observation).joinedload(Observation.observation_type))
+        .order_by(Verification.reviewed_at.desc(), Verification.id.desc())
+    )
+    return list(db.scalars(statement))
+
+
+def _promotion_context(
+    eligible_verifications: list[Verification],
+    *,
+    selected_ids: list[int] | None = None,
+    values: dict[str, str] | None = None,
+    error: str | None = None,
+):
+    return {
+        "eligible_verifications": eligible_verifications,
+        "selected_ids": selected_ids or [],
+        "values": values or {},
+        "error": error,
+    }
+
+
+@app.get("/facts/promote", response_class=HTMLResponse)
+def fact_promotion_form(
+    request: Request,
+    verification_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    eligible_verifications = _eligible_verifications(db)
+    selected_ids: list[int] = []
+    values: dict[str, str] = {}
+    if verification_id is not None:
+        selected = next(
+            (
+                verification
+                for verification in eligible_verifications
+                if verification.id == verification_id
+            ),
+            None,
+        )
+        if selected is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Accepted Verification not found",
+            )
+        selected_ids = [selected.id]
+        values["accepted_value"] = (
+            selected.observation.normalized_value
+            if selected.observation.normalized_value is not None
+            else selected.observation.raw_value
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="facts/promote.html",
+        context=_promotion_context(
+            eligible_verifications,
+            selected_ids=selected_ids,
+            values=values,
+        ),
+    )
+
+
+@app.post("/facts/promote")
+async def promote_fact(request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    raw_ids = [str(value) for value in form.getlist("verification_ids")]
+    values = {
+        "subject_type": str(form.get("subject_type", "")).strip(),
+        "subject_identifier": str(form.get("subject_identifier", "")).strip(),
+        "accepted_value": str(form.get("accepted_value", "")),
+    }
+    try:
+        selected_ids = [int(value) for value in raw_ids]
+    except ValueError:
+        selected_ids = []
+        error = "Verification IDs must be valid integers."
+    else:
+        try:
+            fact = FactPromotionService(db).promote(
+                selected_ids,
+                subject_type=values["subject_type"],
+                subject_identifier=values["subject_identifier"],
+                accepted_value=values["accepted_value"],
+            )
+        except FactPromotionError as exc:
+            error = exc.message
+        else:
+            return RedirectResponse(url=f"/facts/{fact.id}", status_code=303)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="facts/promote.html",
+        context=_promotion_context(
+            _eligible_verifications(db),
+            selected_ids=selected_ids,
+            values=values,
+            error=error,
+        ),
+        status_code=422,
     )
 
 

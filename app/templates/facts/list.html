@@ -7,11 +7,14 @@
         <h1 class="mb-1">{% if show_history %}Complete Fact history{% else %}Current Facts{% endif %}</h1>
         <p class="text-secondary mb-0">Facts are accepted knowledge derived through reviewed evidence.</p>
     </div>
-    {% if show_history %}
-    <a href="/facts">View current Facts</a>
-    {% else %}
-    <a href="/facts?history=all">View complete Fact history</a>
-    {% endif %}
+    <div class="d-flex gap-3">
+        {% if show_history %}
+        <a href="/facts">View current Facts</a>
+        {% else %}
+        <a href="/facts?history=all">View complete Fact history</a>
+        {% endif %}
+        <a href="/facts/promote">Promote to Fact</a>
+    </div>
 </div>
 
 {% if facts %}
