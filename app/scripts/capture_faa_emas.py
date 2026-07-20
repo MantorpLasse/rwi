@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from pathlib import Path
 from collections.abc import Callable, Sequence
 
 from sqlalchemy import select
@@ -35,6 +36,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--allow-live-network", action="store_true")
     parser.add_argument("--allow-database-write", action="store_true")
+    parser.add_argument("--capture-diagnostic-html", action="store_true")
     return parser
 
 
@@ -99,9 +101,22 @@ def run_capture(
     with session_factory() as session:
         try:
             source = _resolve_source(session)
-            run = service_factory(session, provider_factory()).acquire(source)
+            if args.capture_diagnostic_html:
+                provider = provider_factory(
+                    diagnostic_directory=Path("data/diagnostics/faa_tableau")
+                )
+            else:
+                provider = provider_factory()
+            run = service_factory(session, provider).acquire(source)
         except TableauAcquisitionError as exc:
             print(f"Acquisition failed [{exc.code}]: {exc}", file=sys.stderr)
+            if exc.diagnostic is not None:
+                diagnostic = exc.diagnostic
+                print(f"Diagnostic file: {diagnostic.path}")
+                print(f"Diagnostic HTTP status: {diagnostic.http_status}")
+                print(f"Diagnostic final URL: {_safe_url(diagnostic.final_url)}")
+                print(f"Diagnostic Content-Type: {diagnostic.content_type or '—'}")
+                print(f"Diagnostic response byte size: {diagnostic.response_byte_size}")
             return 1
         except Exception as exc:
             print(f"Acquisition failed [{type(exc).__name__}]: {exc}", file=sys.stderr)

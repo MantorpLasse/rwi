@@ -10,5 +10,6 @@ data/raw/*
 !data/raw/.gitkeep
 
 data/backups/
+data/diagnostics/
 
 .pytest-temp/

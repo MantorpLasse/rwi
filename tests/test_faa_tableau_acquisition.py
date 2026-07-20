@@ -10,6 +10,8 @@ from app.acquisition.faa_emas_parser import FAAEmasParseError, FAAEmasSnapshotPa
 from app.acquisition.faa_tableau import (
     FAATableauAcquisitionProvider,
     TableauAcquisitionError,
+    discover_prebootstrap_configuration,
+    sanitize_tableau_diagnostic_html,
 )
 from app.database import Base
 from app.models import AcquisitionRun, AcquisitionRunStatus, AcquisitionSource, PublishingSource, Snapshot
@@ -35,6 +37,22 @@ def view_html() -> bytes:
         }
     )
     return f'<html><textarea id="tsConfig">{config}</textarea></html>'.encode()
+
+
+def container_view_html() -> bytes:
+    config = json.dumps(
+        {
+            "sessionid": "transient-123",
+            "sheetId": "Main",
+            "bootstrapSessionUrl": BOOTSTRAP,
+        }
+    )
+    return (
+        '<html><script src="/vizql/version/PreBootstrap.min.js"></script>'
+        f'<textarea id="tsConfigContainer">{config}</textarea>'
+        '<textarea id="staticConfigContainer">{"vizqlPrefix":"vizql"}</textarea>'
+        "</html>"
+    ).encode()
 
 
 def successful_handler(request: httpx.Request) -> httpx.Response:
@@ -222,3 +240,204 @@ def test_bootstrap_snapshot_is_replay_compatible_with_parser_boundary(session):
     with pytest.raises(FAAEmasParseError) as caught:
         FAAEmasSnapshotParser().parse(persisted.payload, persisted.media_type)
     assert caught.value.code == "unsupported_payload"
+
+
+def test_diagnostic_configuration_failure_writes_only_sanitized_html(tmp_path):
+    sensitive = (
+        '<html><script>sessionid="secret-session"; csrfToken="secret-csrf"; '
+        'request_id="secret-request"; url="/sessions/path-session";</script></html>'
+    ).encode()
+
+    def handler(request):
+        if str(request.url) == ARTICLE:
+            return httpx.Response(200, content=article_html(), request=request)
+        return httpx.Response(
+            200,
+            content=sensitive,
+            headers={"Content-Type": "text/html"},
+            request=request,
+        )
+
+    diagnostic_directory = tmp_path / "diagnostics"
+    item = provider(handler)
+    item.diagnostic_directory = diagnostic_directory
+    with pytest.raises(TableauAcquisitionError) as caught:
+        item.retrieve()
+    diagnostic = caught.value.diagnostic
+    assert diagnostic is not None
+    assert diagnostic.path.parent == diagnostic_directory.resolve()
+    assert diagnostic.http_status == 200
+    assert diagnostic.response_byte_size == len(sensitive)
+    saved = diagnostic.path.read_text(encoding="utf-8")
+    assert "secret-session" not in saved
+    assert "secret-csrf" not in saved
+    assert "secret-request" not in saved
+    assert "path-session" not in saved
+    assert saved.count("[redacted]") == 4
+    assert sessionless_html_marker(saved)
+
+
+def sessionless_html_marker(value: str) -> bool:
+    return value.startswith("<html><script>") and value.endswith("</script></html>")
+
+
+def test_diagnostic_sanitizer_preserves_configuration_structure():
+    value = sanitize_tableau_diagnostic_html(
+        b'<script type="application/json">{"sheetId":"Main","sessionid":"abc"}</script>'
+    )
+    assert 'type="application/json"' in value
+    assert '"sheetId":"Main"' in value
+    assert '"sessionid":"[redacted]"' in value
+
+
+def test_diagnostic_sanitizer_removes_ephemeral_telemetry_but_keeps_prebootstrap():
+    payload = (
+        b'<script src="/vizql/version/PreBootstrap.min.js"></script>'
+        b'<script>window.BOOMR={request_id:"secret",client_ip:"192.0.2.1"}</script>'
+        b'<script type="text/javascript" src="/akam/challenge"></script>'
+        b'<noscript><img src="/akam/pixel?request_id=secret"></noscript>'
+        b'<textarea id="tsConfigContainer"></textarea>'
+    )
+    saved = sanitize_tableau_diagnostic_html(payload)
+    assert "PreBootstrap.min.js" in saved
+    assert "tsConfigContainer" in saved
+    assert "BOOMR" not in saved
+    assert "192.0.2.1" not in saved
+    assert "/akam/" not in saved
+
+
+def test_authentic_populated_tsconfig_container_strategy_is_supported():
+    def handler(request):
+        if str(request.url) == ARTICLE:
+            return httpx.Response(200, content=article_html(), request=request)
+        if str(request.url) == VIEW:
+            return httpx.Response(200, content=container_view_html(), request=request)
+        return successful_handler(request)
+
+    assert provider(handler).retrieve().content == BOOTSTRAP_BYTES
+
+
+def test_legacy_strategy_precedes_empty_authentic_container():
+    combined = view_html().replace(
+        b"</html>", b'<textarea id="tsConfigContainer"></textarea></html>'
+    )
+
+    def handler(request):
+        if str(request.url) == ARTICLE:
+            return httpx.Response(200, content=article_html(), request=request)
+        if str(request.url) == VIEW:
+            return httpx.Response(200, content=combined, request=request)
+        return successful_handler(request)
+
+    assert provider(handler).retrieve().content == BOOTSTRAP_BYTES
+
+
+def test_prebootstrap_only_authentic_shape_has_governed_blocker():
+    authentic_shape = (
+        b'<html><script src="/vizql/v_2025/javascripts/PreBootstrap.min.js"></script>'
+        b'<textarea id="tsConfigContainer"></textarea>'
+        b'<textarea id="staticConfigContainer">{"vizqlPrefix":"vizql"}</textarea>'
+        b"</html>"
+    )
+
+    def handler(request):
+        if str(request.url) == ARTICLE:
+            return httpx.Response(200, content=article_html(), request=request)
+        return httpx.Response(200, content=authentic_shape, request=request)
+
+    with pytest.raises(TableauAcquisitionError) as caught:
+        provider(handler).retrieve()
+    assert caught.value.code == "tableau_client_bootstrap_required"
+
+
+def test_authentic_prebootstrap_asset_and_static_config_are_discovered():
+    request = httpx.Request("GET", VIEW)
+    response = httpx.Response(
+        200,
+        content=(
+            b'<script src="/vizql/v_2025/javascripts/PreBootstrap.min.js"></script>'
+            b'<textarea id="staticConfigContainer">'
+            b'{"vizqlPrefix":"vizql","isAuthoring":false}'
+            b'</textarea>'
+        ),
+        request=request,
+    )
+    discovery = discover_prebootstrap_configuration(response)
+    assert discovery.asset_url == (
+        "https://tableau.example/vizql/v_2025/javascripts/PreBootstrap.min.js"
+    )
+    assert discovery.static_config == {
+        "vizqlPrefix": "vizql",
+        "isAuthoring": False,
+    }
+
+
+def test_prebootstrap_discovery_rejects_missing_required_values():
+    response = httpx.Response(
+        200,
+        content=b'<textarea id="staticConfigContainer">{}</textarea>',
+        request=httpx.Request("GET", VIEW),
+    )
+    with pytest.raises(TableauAcquisitionError) as caught:
+        discover_prebootstrap_configuration(response)
+    assert caught.value.code == "tableau_prebootstrap_required_value_missing"
+
+
+def test_prebootstrap_discovery_rejects_ambiguous_assets():
+    response = httpx.Response(
+        200,
+        content=(
+            b'<script src="/vizql/a/PreBootstrap.min.js"></script>'
+            b'<script src="/vizql/b/PreBootstrap.min.js"></script>'
+            b'<textarea id="staticConfigContainer">{}</textarea>'
+        ),
+        request=httpx.Request("GET", VIEW),
+    )
+    with pytest.raises(TableauAcquisitionError) as caught:
+        discover_prebootstrap_configuration(response)
+    assert caught.value.code == "tableau_prebootstrap_request_ambiguous"
+
+
+def test_prebootstrap_discovery_repr_omits_values_and_query_secrets():
+    response = httpx.Response(
+        200,
+        content=(
+            b'<script src="/vizql/PreBootstrap.min.js?requestId=secret"></script>'
+            b'<textarea id="staticConfigContainer">'
+            b'{"csrfToken":"secret-token","vizqlPrefix":"vizql"}'
+            b'</textarea>'
+        ),
+        request=httpx.Request("GET", VIEW),
+    )
+    rendered = repr(discover_prebootstrap_configuration(response))
+    assert "secret" not in rendered
+    assert "csrfToken" in rendered
+    assert "requestId" not in rendered
+
+
+@pytest.mark.parametrize(
+    "second_config, expected_code",
+    [
+        (None, "tableau_ambiguous_configuration"),
+        (
+            '{"sessionid":"other","sheetId":"Main"}',
+            "tableau_conflicting_configuration",
+        ),
+    ],
+)
+def test_multiple_configuration_candidates_fail_closed(second_config, expected_code):
+    legacy = view_html().decode().removesuffix("</html>")
+    first_raw = legacy.split('<textarea id="tsConfig">', 1)[1].split("</textarea>", 1)[0]
+    other = second_config or first_raw
+    payload = (
+        legacy + f'<textarea id="tsConfigContainer">{other}</textarea></html>'
+    ).encode()
+
+    def handler(request):
+        if str(request.url) == ARTICLE:
+            return httpx.Response(200, content=article_html(), request=request)
+        return httpx.Response(200, content=payload, request=request)
+
+    with pytest.raises(TableauAcquisitionError) as caught:
+        provider(handler).retrieve()
+    assert caught.value.code == expected_code

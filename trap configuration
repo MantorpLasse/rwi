@@ -1,0 +1,7 @@
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/acquisition/__init__.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/acquisition/faa_tableau.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/scripts/capture_faa_emas.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/acquisition/faa-emas-import-contract.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_capture_faa_emas_command.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_faa_tableau_acquisition.py', LF will be replaced by CRLF the next time Git touches it

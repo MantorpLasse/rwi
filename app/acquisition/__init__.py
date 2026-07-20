@@ -10,6 +10,10 @@ from app.acquisition.faa_tableau import (
     FAATableauAcquisitionProvider,
     TableauAcquisitionError,
     TableauAcquisitionErrorCode,
+    TableauDiagnostic,
+    TableauPreBootstrapDiscovery,
+    discover_prebootstrap_configuration,
+    sanitize_tableau_diagnostic_html,
 )
 
 __all__ = [
@@ -22,4 +26,8 @@ __all__ = [
     "FAATableauAcquisitionProvider",
     "TableauAcquisitionError",
     "TableauAcquisitionErrorCode",
+    "TableauDiagnostic",
+    "TableauPreBootstrapDiscovery",
+    "discover_prebootstrap_configuration",
+    "sanitize_tableau_diagnostic_html",
 ]

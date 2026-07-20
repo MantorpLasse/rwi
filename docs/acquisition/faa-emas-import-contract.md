@@ -63,6 +63,38 @@ Expected cadence is event-driven and unannounced. The page changed recently (the
 displayed date is 2026-04-24); no source update schedule is published. A monthly
 manual check is a conservative pilot policy, not a claim about FAA cadence.
 
+### Tableau Server 2025.3 PreBootstrap investigation (2026-07-21)
+
+The authentic view HTML identifies Tableau Server build `v_202532603161545` and
+references the relative asset
+`/vizql/v_202532603161545/javascripts/PreBootstrap.min.js`. It contains an empty
+`textarea#tsConfigContainer` and a populated `textarea#staticConfigContainer`.
+The latter contains exactly `isAuthoring`, `isJsDebug`, `isMobile`, `isOffline`,
+`isPublic`, `isSalesforceNative`, `parentFrameOrigin`, `publicGalleryLink`,
+`showPagePathPrefix`, and `vizqlPrefix`; `vizqlPrefix` is `vizql`. It contains no
+server/site root, workbook or sheet identity, static-image/repository/bootstrap
+URL, locale, client dimensions, request token, CSRF token, or session placeholder.
+
+The resolved public asset URL is
+`https://explore.dot.gov/vizql/v_202532603161545/javascripts/PreBootstrap.min.js`.
+The single controlled retrieval permitted for this investigation was rejected by
+the DOT edge with an `Access Denied` response before JavaScript bytes or usable
+HTTP metadata were returned. Consequently no diagnostic JavaScript file was
+created, no static script analysis was possible, and no HTTP-only proof request
+was attempted. The HTML alone does not establish a method, bootstrap endpoint,
+query parameters, request body, required headers, cookie/CSRF dependencies,
+client-generated values, or server-returned session mechanism. Those values must
+not be guessed.
+
+HTTP-only reproduction therefore remains **undetermined**, not disproved. The
+exact blocker is access to the authentic versioned PreBootstrap asset (or an
+equivalent vendor-documented request contract) from the controlled environment.
+The adapter retains support for populated legacy `tsConfig` variants and continues
+to fail closed with `tableau_client_bootstrap_required` for this authentic shape.
+It can now deterministically extract the unique asset URL and parse the static
+configuration without executing JavaScript; these are investigation facts only,
+not a bootstrap request recipe.
+
 ## 2. Acquisition identity
 
 Register one future AcquisitionSource under the existing FAA PublishingSource:

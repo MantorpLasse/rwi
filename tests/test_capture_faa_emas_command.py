@@ -22,6 +22,9 @@ def factory():
 class Provider:
     source_url = "unused"
 
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
 
 class CountingService:
     calls = 0
@@ -123,3 +126,28 @@ def test_governed_failure_returns_nonzero_and_does_not_print_sensitive_data(caps
     captured = capsys.readouterr()
     assert "tableau_bootstrap_retrieval_failed" in captured.err
     assert "cookie" not in (captured.out + captured.err).lower()
+
+
+def test_diagnostic_mode_passes_explicit_local_directory():
+    received = []
+
+    def provider_factory(**kwargs):
+        received.append(kwargs)
+        return Provider(**kwargs)
+
+    CountingService.calls = 0
+    result = run_capture(
+        [
+            "--allow-live-network",
+            "--allow-database-write",
+            "--capture-diagnostic-html",
+        ],
+        session_factory=factory(),
+        provider_factory=provider_factory,
+        service_factory=CountingService,
+    )
+    assert result == 0
+    assert CountingService.calls == 1
+    assert str(received[0]["diagnostic_directory"]).replace("\\", "/") == (
+        "data/diagnostics/faa_tableau"
+    )
