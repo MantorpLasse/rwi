@@ -3,6 +3,11 @@ from app.services.intelligence_derivation import (
     IntelligenceDerivationError,
     IntelligenceDerivationService,
 )
+from app.services.intelligence_rule_evaluation import (
+    IntelligenceRuleEvaluationService,
+    RuleEvaluationError,
+    RuleEvaluationReport,
+)
 from app.services.observation_candidates import (
     CandidateBatchResult,
     CandidateError,
@@ -21,6 +26,9 @@ __all__ = [
     "FactPromotionService",
     "IntelligenceDerivationError",
     "IntelligenceDerivationService",
+    "IntelligenceRuleEvaluationService",
+    "RuleEvaluationError",
+    "RuleEvaluationReport",
     "ObservationCandidate",
     "ObservationCandidateService",
 ]
