@@ -23,6 +23,7 @@ from app.models import (
 from app.models.document import DOCUMENT_STATUSES
 from app.repositories import (
     FactRepository,
+    IntelligenceRepository,
     ObservationRepository,
     ObservationTypeRepository,
     VerificationRepository,
@@ -44,6 +45,43 @@ def _format_datetime(value: object) -> str:
 
 
 templates.env.filters["datetime"] = _format_datetime
+
+
+@app.get("/intelligence", response_class=HTMLResponse)
+def list_intelligence(
+    request: Request,
+    history: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    show_history = history == "all"
+    repository = IntelligenceRepository(db)
+    intelligence_items = (
+        repository.list() if show_history else repository.list_current()
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="intelligence/list.html",
+        context={
+            "intelligence_items": intelligence_items,
+            "show_history": show_history,
+        },
+    )
+
+
+@app.get("/intelligence/{intelligence_id}", response_class=HTMLResponse)
+def intelligence_detail(
+    request: Request,
+    intelligence_id: int,
+    db: Session = Depends(get_db),
+):
+    intelligence = IntelligenceRepository(db).get_by_id(intelligence_id)
+    if intelligence is None:
+        raise HTTPException(status_code=404, detail="Intelligence not found")
+    return templates.TemplateResponse(
+        request=request,
+        name="intelligence/detail.html",
+        context={"intelligence": intelligence},
+    )
 
 
 @app.get("/facts", response_class=HTMLResponse)
