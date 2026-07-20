@@ -34,7 +34,7 @@ def test_finding_type_migration_seeds_matches_metadata_and_downgrades(tmp_path):
     database_url = f"sqlite:///{(tmp_path / 'finding-types.db').as_posix()}"
     alembic_config = config(database_url)
 
-    command.upgrade(alembic_config, FINDING_TYPE_REVISION)
+    command.upgrade(alembic_config, "head")
     engine = create_engine(database_url)
     try:
         inspector = inspect(engine)

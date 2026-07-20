@@ -34,6 +34,9 @@ class PublishingSource(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
     documents: Mapped[list["Document"]] = relationship(back_populates="source")
+    acquisition_sources: Mapped[list["AcquisitionSource"]] = relationship(
+        back_populates="publishing_source"
+    )
 
 
 class Document(Base):
@@ -66,3 +69,6 @@ class Document(Base):
     observations: Mapped[list["Observation"]] = relationship(
         back_populates="document", passive_deletes="all"
     )
+
+
+from app.models.acquisition import AcquisitionSource  # noqa: E402

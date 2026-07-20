@@ -27,6 +27,9 @@ EXPECTED_TABLES = {
     "finding_types",
     "intelligence",
     "intelligence_facts",
+    "acquisition_sources",
+    "acquisition_runs",
+    "snapshots",
 }
 
 

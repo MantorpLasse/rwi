@@ -4,6 +4,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import (
+    AcquisitionRun,
+    AcquisitionSource,
     Airport,
     Document,
     EmasBed,
@@ -19,11 +21,52 @@ from app.models import (
     Runway,
     RunwayEnd,
     Source,
+    Snapshot,
     Verification,
 )
 
 
 EXPECTED_COLUMNS = {
+    "acquisition_sources": {
+        "id": ("INTEGER", False, None, None),
+        "publishing_source_id": ("INTEGER", False, None, None),
+        "key": ("VARCHAR(150)", False, None, None),
+        "display_name": ("VARCHAR(200)", False, None, None),
+        "acquisition_type": ("VARCHAR(50)", False, None, None),
+        "canonical_url": ("VARCHAR(1000)", False, None, None),
+        "expected_media_type": ("VARCHAR(200)", True, None, None),
+        "active": ("BOOLEAN", False, ("scalar", True), None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "updated_at": ("DATETIME", False, ("callable",), None),
+    },
+    "acquisition_runs": {
+        "id": ("INTEGER", False, None, None),
+        "acquisition_source_id": ("INTEGER", False, None, None),
+        "snapshot_id": ("INTEGER", True, None, None),
+        "started_at": ("DATETIME", False, None, None),
+        "completed_at": ("DATETIME", True, None, None),
+        "status": ("VARCHAR(18)", False, None, None),
+        "request_url": ("VARCHAR(1000)", False, None, None),
+        "final_url": ("VARCHAR(1000)", True, None, None),
+        "http_status": ("INTEGER", True, None, None),
+        "content_type": ("VARCHAR(200)", True, None, None),
+        "response_headers": ("TEXT", True, None, None),
+        "provider_version": ("VARCHAR(100)", False, None, None),
+        "duration_seconds": ("FLOAT", False, None, None),
+        "error_category": ("VARCHAR(100)", True, None, None),
+        "error_detail": ("TEXT", True, None, None),
+        "is_new_snapshot": ("BOOLEAN", True, None, None),
+    },
+    "snapshots": {
+        "id": ("INTEGER", False, None, None),
+        "acquisition_source_id": ("INTEGER", False, None, None),
+        "first_acquisition_run_id": ("INTEGER", False, None, None),
+        "payload": ("BLOB", False, None, None),
+        "sha256": ("VARCHAR(64)", False, None, None),
+        "byte_size": ("INTEGER", False, None, None),
+        "media_type": ("VARCHAR(200)", True, None, None),
+        "retrieved_at": ("DATETIME", False, None, None),
+    },
     "airports": {
         "id": ("INTEGER", False, None, None),
         "iata_code": ("VARCHAR(3)", True, None, None),
@@ -240,6 +283,15 @@ EXPECTED_PRIMARY_KEYS["fact_verifications"] = ("fact_id", "verification_id")
 EXPECTED_PRIMARY_KEYS["intelligence_facts"] = ("intelligence_id", "fact_id")
 
 EXPECTED_FOREIGN_KEYS = {
+    "acquisition_sources": {("publishing_source_id", "publishing_sources.id")},
+    "acquisition_runs": {
+        ("acquisition_source_id", "acquisition_sources.id"),
+        ("snapshot_id", "snapshots.id"),
+    },
+    "snapshots": {
+        ("acquisition_source_id", "acquisition_sources.id"),
+        ("first_acquisition_run_id", "acquisition_runs.id"),
+    },
     "airports": set(),
     "runways": {("airport_id", "airports.id")},
     "runway_ends": {("runway_id", "runways.id")},
@@ -278,6 +330,17 @@ EXPECTED_FOREIGN_KEYS = {
 }
 
 EXPECTED_INDEXES = {
+    "acquisition_sources": {
+        ("ix_acquisition_sources_publishing_source_id", ("publishing_source_id",), False),
+    },
+    "acquisition_runs": {
+        ("ix_acquisition_runs_acquisition_source_id", ("acquisition_source_id",), False),
+        ("ix_acquisition_runs_snapshot_id", ("snapshot_id",), False),
+    },
+    "snapshots": {
+        ("ix_snapshots_acquisition_source_id", ("acquisition_source_id",), False),
+        ("ix_snapshots_sha256", ("sha256",), False),
+    },
     "airports": {
         ("ix_airports_country", ("country",), False),
         ("ix_airports_faa_code", ("faa_code",), False),
@@ -361,6 +424,20 @@ DELETE_ORPHAN_CASCADE = frozenset(
 )
 
 EXPECTED_RELATIONSHIPS = {
+    "AcquisitionSource": {
+        "publishing_source": ("PublishingSource", "acquisition_sources", DEFAULT_CASCADE),
+        "runs": ("AcquisitionRun", "source", DEFAULT_CASCADE),
+        "snapshots": ("Snapshot", "source", DEFAULT_CASCADE),
+    },
+    "AcquisitionRun": {
+        "source": ("AcquisitionSource", "runs", DEFAULT_CASCADE),
+        "snapshot": ("Snapshot", "runs", DEFAULT_CASCADE),
+    },
+    "Snapshot": {
+        "source": ("AcquisitionSource", "snapshots", DEFAULT_CASCADE),
+        "first_acquisition_run": ("AcquisitionRun", None, DEFAULT_CASCADE),
+        "runs": ("AcquisitionRun", "snapshot", DEFAULT_CASCADE),
+    },
     "Airport": {
         "runways": ("Runway", "airport", DELETE_ORPHAN_CASCADE),
         "projects": ("Project", "airport", DELETE_ORPHAN_CASCADE),
@@ -387,6 +464,7 @@ EXPECTED_RELATIONSHIPS = {
     },
     "PublishingSource": {
         "documents": ("Document", "source", DEFAULT_CASCADE),
+        "acquisition_sources": ("AcquisitionSource", "publishing_source", DEFAULT_CASCADE),
     },
     "Document": {
         "source": ("PublishingSource", "documents", DEFAULT_CASCADE),
@@ -445,6 +523,8 @@ def _default_contract(default):
 def test_all_current_models_are_exported_from_app_models():
     assert [
         Airport.__name__,
+        AcquisitionRun.__name__,
+        AcquisitionSource.__name__,
         Document.__name__,
         EmasBed.__name__,
         Fact.__name__,
@@ -456,12 +536,15 @@ def test_all_current_models_are_exported_from_app_models():
         PublishingSource.__name__,
         EmasInstallation.__name__,
         Source.__name__,
+        Snapshot.__name__,
         Incident.__name__,
         Observation.__name__,
         ObservationType.__name__,
         Verification.__name__,
     ] == [
         "Airport",
+        "AcquisitionRun",
+        "AcquisitionSource",
         "Document",
         "EmasBed",
         "Fact",
@@ -473,6 +556,7 @@ def test_all_current_models_are_exported_from_app_models():
         "PublishingSource",
         "EmasInstallation",
         "Source",
+        "Snapshot",
         "Incident",
         "Observation",
         "ObservationType",
