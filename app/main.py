@@ -23,12 +23,18 @@ from app.models import (
 from app.models.document import DOCUMENT_STATUSES
 from app.repositories import (
     FactRepository,
+    FindingTypeRepository,
     IntelligenceRepository,
     ObservationRepository,
     ObservationTypeRepository,
     VerificationRepository,
 )
-from app.services import FactPromotionError, FactPromotionService
+from app.services import (
+    FactPromotionError,
+    FactPromotionService,
+    IntelligenceDerivationError,
+    IntelligenceDerivationService,
+)
 
 
 app = FastAPI(title=settings.app_name)
@@ -65,6 +71,97 @@ def list_intelligence(
             "intelligence_items": intelligence_items,
             "show_history": show_history,
         },
+    )
+
+
+def _derivation_context(
+    db: Session,
+    *,
+    selected_ids: list[int] | None = None,
+    values: dict[str, str] | None = None,
+    error: str | None = None,
+):
+    return {
+        "eligible_facts": FactRepository(db).list_current(),
+        "finding_types": FindingTypeRepository(db).list_active(),
+        "selected_ids": selected_ids or [],
+        "values": values or {},
+        "error": error,
+    }
+
+
+@app.get("/intelligence/derive", response_class=HTMLResponse)
+def intelligence_derivation_form(
+    request: Request,
+    fact_id: Optional[int] = None,
+    finding_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    context = _derivation_context(db)
+    selected_ids: list[int] = []
+    values: dict[str, str] = {}
+    if fact_id is not None:
+        eligible_ids = {fact.id for fact in context["eligible_facts"]}
+        if fact_id not in eligible_ids:
+            raise HTTPException(status_code=404, detail="Eligible Fact not found")
+        selected_ids = [fact_id]
+    if finding_type is not None:
+        active_keys = {item.key for item in context["finding_types"]}
+        if finding_type not in active_keys:
+            raise HTTPException(status_code=404, detail="Active FindingType not found")
+        values["finding_type_key"] = finding_type
+    context.update(selected_ids=selected_ids, values=values)
+    return templates.TemplateResponse(
+        request=request,
+        name="intelligence/derive.html",
+        context=context,
+    )
+
+
+@app.post("/intelligence/derive")
+async def derive_intelligence(request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    raw_ids = [str(value) for value in form.getlist("fact_ids")]
+    values = {
+        "finding_type_key": str(form.get("finding_type_key", "")),
+        "title": str(form.get("title", "")).strip(),
+        "summary": str(form.get("summary", "")),
+    }
+    parsed_ids: list[int] = []
+    malformed = False
+    for raw_id in raw_ids:
+        try:
+            parsed_ids.append(int(raw_id))
+        except ValueError:
+            malformed = True
+
+    if malformed:
+        error = "Fact IDs must be valid integers."
+    else:
+        try:
+            intelligence = IntelligenceDerivationService(db).derive(
+                values["finding_type_key"],
+                parsed_ids,
+                title=values["title"],
+                summary=values["summary"],
+            )
+        except IntelligenceDerivationError as exc:
+            error = exc.message
+        else:
+            return RedirectResponse(
+                url=f"/intelligence/{intelligence.id}", status_code=303
+            )
+
+    context = _derivation_context(db, values=values, error=error)
+    eligible_ids = {fact.id for fact in context["eligible_facts"]}
+    context["selected_ids"] = [
+        fact_id for fact_id in parsed_ids if fact_id in eligible_ids
+    ]
+    return templates.TemplateResponse(
+        request=request,
+        name="intelligence/derive.html",
+        context=context,
+        status_code=422,
     )
 
 
@@ -210,13 +307,20 @@ async def promote_fact(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/facts/{fact_id}", response_class=HTMLResponse)
 def fact_detail(request: Request, fact_id: int, db: Session = Depends(get_db)):
-    fact = FactRepository(db).get_by_id(fact_id)
+    repository = FactRepository(db)
+    fact = repository.get_by_id(fact_id)
     if fact is None:
         raise HTTPException(status_code=404, detail="Fact not found")
+    can_derive_intelligence = fact.id in {
+        current.id for current in repository.list_current()
+    }
     return templates.TemplateResponse(
         request=request,
         name="facts/detail.html",
-        context={"fact": fact},
+        context={
+            "fact": fact,
+            "can_derive_intelligence": can_derive_intelligence,
+        },
     )
 
 

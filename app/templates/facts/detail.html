@@ -10,6 +10,7 @@
     {% if fact.supporting_verifications %}<a href="/verifications/{{ fact.supporting_verifications[0].id }}">← Previous: Verification</a>{% else %}<span class="text-secondary">← Previous: Verification</span>{% endif %}
     <a href="/facts{% if fact.status.value != 'accepted' %}?history=all{% endif %}">↑ Up: Facts</a>
     {% if fact.superseded_by %}<a href="/facts/{{ fact.superseded_by[0].id }}">Next: Superseding Fact →</a>{% else %}<a href="#supporting-verifications">Next: Supporting evidence →</a>{% endif %}
+    {% if can_derive_intelligence %}<a href="/intelligence/derive?fact_id={{ fact.id }}">Derive Intelligence →</a>{% endif %}
 </nav>
 
 <div class="row g-4">
