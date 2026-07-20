@@ -12,6 +12,14 @@ PROVIDER_VERSION = "faa-http/1"
 _SENSITIVE_HEADERS = {"authorization", "cookie", "proxy-authorization", "set-cookie"}
 
 
+def sanitized_headers(response: httpx.Response) -> dict[str, str]:
+    return {
+        key.lower(): value
+        for key, value in response.headers.items()
+        if key.lower() not in _SENSITIVE_HEADERS
+    }
+
+
 @dataclass(frozen=True)
 class AcquisitionPayload:
     content: bytes
@@ -49,16 +57,11 @@ class FAAAcquisitionProvider:
         content = response.content
         if not content:
             raise ValueError("FAA acquisition returned an empty payload")
-        headers = {
-            key.lower(): value
-            for key, value in response.headers.items()
-            if key.lower() not in _SENSITIVE_HEADERS
-        }
         return AcquisitionPayload(
             content=content,
             request_url=self.source_url,
             final_url=str(response.url),
-            retrieved_headers=headers,
+            retrieved_headers=sanitized_headers(response),
             http_status=response.status_code,
             content_type=response.headers.get("content-type"),
             duration_seconds=perf_counter() - started,

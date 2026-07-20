@@ -76,6 +76,7 @@ class AcquisitionService:
                 AcquisitionRunStatus.SUCCESS if is_new else AcquisitionRunStatus.NO_CHANGE
             )
             run.completed_at = datetime.now(UTC)
+            run.request_url = result.request_url
             run.final_url = result.final_url
             run.http_status = result.http_status
             run.content_type = result.content_type

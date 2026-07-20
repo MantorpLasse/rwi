@@ -6,6 +6,11 @@ from app.acquisition.faa_emas_parser import (
     FAAEmasParseReport,
     FAAEmasSnapshotParser,
 )
+from app.acquisition.faa_tableau import (
+    FAATableauAcquisitionProvider,
+    TableauAcquisitionError,
+    TableauAcquisitionErrorCode,
+)
 
 __all__ = [
     "FAAAcquisitionProvider",
@@ -14,4 +19,7 @@ __all__ = [
     "FAAEmasParseErrorCode",
     "FAAEmasParseReport",
     "FAAEmasSnapshotParser",
+    "FAATableauAcquisitionProvider",
+    "TableauAcquisitionError",
+    "TableauAcquisitionErrorCode",
 ]
