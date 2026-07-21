@@ -95,6 +95,47 @@ It can now deterministically extract the unique asset URL and parse the static
 configuration without executing JavaScript; these are investigation facts only,
 not a bootstrap request recipe.
 
+### Controlled browser network capture procedure
+
+This is a manual developer investigation only; it is not an acquisition provider.
+Use Microsoft Edge or Chrome as follows:
+
+1. Generate the recommended UTC filename in PowerShell:
+   `$name = "faa-tableau-$((Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')).raw.har"`.
+2. Open a fresh InPrivate or Incognito window and open Developer Tools.
+3. Select **Network**, enable **Preserve log**, and enable **Disable cache** while
+   Developer Tools remains open.
+4. Clear the network log.
+5. Navigate directly to
+   `https://explore.dot.gov/t/FAA/views/EMASIncidentsandInstallations/Main?:embed=yes&:toolbar=no`.
+6. Wait until the visualization renders or reaches a stable failure state. Do not
+   browse or interact with unrelated pages.
+7. In the Network panel choose **Save all as HAR with content** and save it as
+   `data/diagnostics/faa_tableau/raw/$name`.
+8. Do not upload, attach, stage, or commit the raw HAR. Sanitize it locally with:
+   `python -m app.scripts.sanitize_tableau_har data/diagnostics/faa_tableau/raw/<filename>`.
+9. Review the secret-free report on stdout and the reduced analysis written under
+   `data/diagnostics/faa_tableau/sanitized/`. Never use either HAR as a Snapshot.
+
+**Raw HAR safety warning:** a HAR with content may contain cookies, authorization,
+session and CSRF/XSRF tokens, request/browser identifiers, IP-related edge data,
+machine-specific values, and complete request and response bodies. The entire raw
+and sanitized diagnostic tree is Git-ignored. The sanitizer accepts files from the
+expected raw directory by default, performs no network access, preserves ordering
+and safe structural metadata, replaces URL/form values, retains header and field
+names without their values, and emits only structural response markers rather than
+response bodies. Its report includes input/output filenames, hashes, sizes, entry
+count, removal/redaction counts, and category names—never removed values.
+
+No authentic HAR was available during this slice. Therefore no authentic request
+count, initialization sequence, session-creation request, bootstrap request,
+required parameters/body fields/headers, cookie or CSRF dependency, returned
+session value, bootstrap metadata, or installation marks can yet be reported.
+The feasibility classification is **HTTP_ONLY_REQUIRES_MORE_EVIDENCE**. The exact
+remaining blocker is one operator-generated HAR from a fresh browser session,
+followed by local sanitization and review. No automated proof or HTTP contract
+implementation is authorized until that evidence exists.
+
 ## 2. Acquisition identity
 
 Register one future AcquisitionSource under the existing FAA PublishingSource:

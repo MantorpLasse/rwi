@@ -11,5 +11,7 @@ data/raw/*
 
 data/backups/
 data/diagnostics/
+data/diagnostics/faa_tableau/raw/
+data/diagnostics/faa_tableau/sanitized/
 
 .pytest-temp/
