@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -20,6 +20,8 @@ class Airport(Base):
     city: Mapped[Optional[str]] = mapped_column(String(100))
     state_region: Mapped[Optional[str]] = mapped_column(String(100))
     country: Mapped[str] = mapped_column(String(100), index=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float)
+    longitude: Mapped[Optional[float]] = mapped_column(Float)
     website_url: Mapped[Optional[str]] = mapped_column(String(500))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

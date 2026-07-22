@@ -68,6 +68,8 @@ EXPECTED_COLUMNS = {
         "city": ("VARCHAR(100)", True, None, None),
         "state_region": ("VARCHAR(100)", True, None, None),
         "country": ("VARCHAR(100)", False, None, None),
+        "latitude": ("FLOAT", True, None, None),
+        "longitude": ("FLOAT", True, None, None),
         "website_url": ("VARCHAR(500)", True, None, None),
         "notes": ("TEXT", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),

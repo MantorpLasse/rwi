@@ -72,6 +72,8 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
         city=airport.city,
         state_region=airport.state_region,
         country=airport.country,
+        latitude=airport.latitude,
+        longitude=airport.longitude,
         website_url=airport.website_url,
         signal_count=len(airport.signals),
         runways=[
