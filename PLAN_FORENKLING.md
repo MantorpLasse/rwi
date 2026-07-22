@@ -222,19 +222,39 @@ aip_grant`. Bevaka: samma URL-mönster år för år
 (`.../airports/aip/{ÅR}_aip_grants`), fyra nya PDF:er per år att
 parsa/söka igenom med nyckelordsregeln.
 
-### FAA Runway Ends Table (catalog.data.gov, del av NTAD)
-Officiell, öppen (CC0) databas över alla banors fysiska mått i USA,
-inklusive Runway Safety Area (RSA)-mått. Uppdateras var 28:e dag,
-nedladdningsbar som CSV/Excel/GeoJSON. Ger en **tredje regel**, bättre
-än nyckelordssökning eftersom den är strukturerad:
+### FAA Runway Ends Table (catalog.data.gov, del av NTAD) — RSA-regeln, avbruten 2026-07-22
+Planen antog att denna databas innehåller Runway Safety Area (RSA)-mått
+per bana. **Det gör den inte.** Undersökt grundligt innan något byggdes:
 
-> Bana med RSA under FAA:s standardmått (1000 fot) **och** ingen
-> befintlig EMAS-installation i `Installation`-tabellen ⇒ skapa en
-> `Signal` med `category=potential_new_construction`,
-> `confidence=medium` automatiskt.
+- ArcGIS REST-tjänsterna ägda av `USDOT_BTS` (`Runway_Ends_Table`,
+  `Runways_View`, `NTAD_Aviation_Facilities`) genomsöktes fält-för-fält
+  (samtliga ~70+34+91 fält) efter "RSA"/"safety" – inga träffar.
+- Samma sak i den råa källan: FAA:s officiella NASR-abonnemang
+  (`https://www.faa.gov/air_traffic/flight_info/aeronav/aero_data/NASR_Subscription/`,
+  `{cykel}/extra/{datum}_APT_CSV.zip`) innehåller `APT_RWY.csv` och
+  `APT_RWY_END.csv` med exakt samma fält som ArcGIS-tjänsten (ArcGIS-lagret
+  är uttryckligen härlett från NASR). `APT_CSV_DATA_STRUCTURE.csv`
+  (fullständig kolumnlista för hela NASR-paketet) genomsöktes också –
+  inga RSA/safety-fält någonstans.
 
-Lägg till som fjärde regel bredvid de två tidigare (incident→signal,
-nyckelord-i-dokument→signal). Källa för `Source.type = faa_runway_data`.
+RSA-compliance-status verkar bara finnas i FAA:s interna system eller
+nämnas narrativt i Master Plans/ALP:ar/NTSB-rapporter, inte som ett
+queryabart öppet fält. **Regel 4 (RSA under standardmått →
+`potential_new_construction`-signal) är därför inte byggbar med öppen
+data just nu och är avskriven**, snarare än ersatt med en svagare proxy
+(t.ex. deklarerade distanser) som riskerar falskt förtroende i
+confidence-nivåerna. Om en pålitlig RSA-källa dyker upp senare (FOIA,
+ADIP-export, ny NTAD-tabell) kan regeln återupptas.
+
+### Bonusfynd: APT_ARS.csv (Arresting System) i samma NASR-paket
+Samma nedladdning innehåller en tabell som *är* direkt användbar:
+`ARPT_ID, RWY_ID, RWY_END_ID, ARREST_DEVICE_CODE` – vilken bana/ände som
+har vilken bromsutrustning, med `EMAS` som ett eget kodvärde (skilt från
+äldre kabelsystem som BAK-12/MA-1A). Detta är en mer precis och
+auktoritativ källa än att gissa bandsände via koordinatnärhet, och
+används av `scripts/import_faa_runway_ends.py` för att berika
+`Installation.runway_end`/`runway_id` (del 1 av ursprungsplanen för
+regel 4 – berikningen, inte RSA-signalen).
 
 ## En sak till
 
