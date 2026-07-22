@@ -55,7 +55,6 @@
                     <th>Utgivare</th>
                     <th>Datum</th>
                     <th>Status</th>
-                    <th class="text-end">Projekt</th>
                 </tr>
             </thead>
             <tbody>
@@ -76,7 +75,6 @@
                         {% if document.accessed_date %}<div>Hämtad {{ document.accessed_date }}</div>{% endif %}
                     </td>
                     <td><span class="badge {{ status_classes.get(document.status, 'text-bg-light border text-dark') }}">{{ document.status }}</span></td>
-                    <td class="text-end">{{ document.projects|length }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

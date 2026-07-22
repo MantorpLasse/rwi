@@ -4,33 +4,33 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h1 class="mb-1">Runway Safe Intelligence</h1>
-        <p class="text-secondary mb-0">EMAS-projekt, installationer, källor och affärssignaler.</p>
+        <p class="text-secondary mb-0">EMAS-installationer, incidenter, källor och affärssignaler.</p>
     </div>
-    <a class="btn btn-primary" href="/projects">Sök projekt</a>
+    <a class="btn btn-primary" href="/signals">Sök signaler</a>
 </div>
 
 <div class="row g-3 mb-4">
     <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-secondary">Flygplatser</div><div class="display-6">{{ airport_count }}</div></div></div></div>
-    <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-secondary">Projekt</div><div class="display-6">{{ project_count }}</div></div></div></div>
+    <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-secondary">Signaler</div><div class="display-6">{{ signal_count }}</div></div></div></div>
     <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-secondary">Bekräftade</div><div class="display-6">{{ confirmed_count }}</div></div></div></div>
     <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-secondary">Score ≥ 8</div><div class="display-6">{{ high_score_count }}</div></div></div></div>
 </div>
 
 <div class="card">
-    <div class="card-header bg-white fw-semibold">Högst prioriterade projekt</div>
+    <div class="card-header bg-white fw-semibold">Högst prioriterade signaler</div>
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
             <thead>
-            <tr><th>Flygplats</th><th>Projekt</th><th>Status</th><th>År</th><th>Score</th></tr>
+            <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>År</th><th>Score</th></tr>
             </thead>
             <tbody>
-            {% for project in top_projects %}
+            {% for signal in top_signals %}
             <tr>
-                <td><a href="/airports/{{ project.airport.id }}">{{ project.airport.iata_code }} · {{ project.airport.name }}</a></td>
-                <td><a href="/projects/{{ project.id }}">{{ project.title }}</a></td>
-                <td><span class="badge text-bg-secondary">{{ project.status }}</span></td>
-                <td>{{ project.planning_year or "–" }}</td>
-                <td><span class="score-pill">{{ "%.1f"|format(project.probability_score) }}</span></td>
+                <td><a href="/airports/{{ signal.airport.id }}">{{ signal.airport.iata_code }} · {{ signal.airport.name }}</a></td>
+                <td><a href="/signals/{{ signal.id }}">{{ signal.title }}</a></td>
+                <td><span class="badge text-bg-secondary">{{ signal.status or signal.category }}</span></td>
+                <td>{{ signal.planning_year or "–" }}</td>
+                <td>{% if signal.probability_score is not none %}<span class="score-pill">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
             </tr>
             {% endfor %}
             </tbody>

@@ -10,24 +10,24 @@
 <nav class="workflow-nav d-flex flex-wrap gap-3 mb-4" aria-label="Arbetsflöde">
     <a href="/airports">← Föregående: Flygplatslista</a>
     <a href="/airports">↑ Upp: Flygplatser</a>
-    <a href="#projects">Nästa: Projekt →</a>
+    <a href="#signals">Nästa: Signaler →</a>
 </nav>
 
 <div class="row g-4">
     <div class="col-lg-8">
-        <div class="card mb-4" id="projects">
-            <div class="card-header bg-white fw-semibold">Projekt</div>
+        <div class="card mb-4" id="signals">
+            <div class="card-header bg-white fw-semibold">Signaler</div>
             <div class="list-group list-group-flush">
-                {% for project in airport.projects %}
-                <a class="list-group-item list-group-item-action" href="/projects/{{ project.id }}">
+                {% for signal in airport.signals %}
+                <a class="list-group-item list-group-item-action" href="/signals/{{ signal.id }}">
                     <div class="d-flex justify-content-between">
-                        <strong>{{ project.title }}</strong>
-                        <span class="score-pill">{{ "%.1f"|format(project.probability_score) }}</span>
+                        <strong>{{ signal.title }}</strong>
+                        {% if signal.probability_score is not none %}<span class="score-pill">{{ "%.1f"|format(signal.probability_score) }}</span>{% endif %}
                     </div>
-                    <div class="small text-secondary">{{ project.status }} · {{ project.confidence_level }} · {{ project.planning_year or "år saknas" }}</div>
+                    <div class="small text-secondary">{{ signal.status or signal.category }} · {{ signal.confidence }} · {{ signal.planning_year or "år saknas" }}</div>
                 </a>
                 {% else %}
-                <div class="list-group-item text-secondary">Inga projekt registrerade.</div>
+                <div class="list-group-item text-secondary">Inga signaler registrerade.</div>
                 {% endfor %}
             </div>
         </div>

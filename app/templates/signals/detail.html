@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ signal.title }} · RW Intelligence{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <div class="text-secondary">
+            {% if signal.airport.iata_code %}{{ signal.airport.iata_code }} · {% endif %}{{ signal.airport.name }}
+        </div>
+        <h1>{{ signal.title }}</h1>
+        <span class="badge text-bg-secondary">{{ signal.status or signal.category }}</span>
+    </div>
+    {% if signal.probability_score is not none %}
+    <span class="score-pill score-large">{{ "%.1f"|format(signal.probability_score) }}</span>
+    {% endif %}
+</div>
+
+<nav class="workflow-nav d-flex flex-wrap gap-3 mb-4" aria-label="Arbetsflöde">
+    <a href="/airports/{{ signal.airport.id }}">← Föregående: Flygplats</a>
+    <a href="/signals">↑ Upp: Signaler</a>
+</nav>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h2 class="h5">Anteckningar</h2>
+                <p>{{ signal.notes or "Inga anteckningar." }}</p>
+
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Kategori</dt><dd class="col-sm-8">{{ signal.category }}</dd>
+                    <dt class="col-sm-4">Status</dt><dd class="col-sm-8">{{ signal.status or "–" }}</dd>
+                    <dt class="col-sm-4">Confidence</dt><dd class="col-sm-8">{{ signal.confidence }}</dd>
+                    <dt class="col-sm-4">Planeringsår</dt><dd class="col-sm-8">{{ signal.planning_year or "–" }}</dd>
+                    <dt class="col-sm-4">Upphandlingsår</dt><dd class="col-sm-8">{{ signal.procurement_year or "–" }}</dd>
+                    <dt class="col-sm-4">Bana</dt><dd class="col-sm-8">{{ signal.runway.designation if signal.runway else "–" }}</dd>
+                    <dt class="col-sm-4">Trolig leverantör</dt><dd class="col-sm-8">{{ signal.likely_supplier or "Inte bedömd" }}</dd>
+                    <dt class="col-sm-4">Motivering</dt><dd class="col-sm-8">{{ signal.supplier_reason or "–" }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Källa</div>
+            <div class="card-body">
+                {% if signal.source %}
+                <h2 class="h6 mb-1">{{ signal.source.title }}</h2>
+                <div class="small text-secondary mb-2">{{ signal.source.publisher or "" }}{% if signal.source.source_type %} · {{ signal.source.source_type }}{% endif %}</div>
+                <a href="{{ signal.source.url }}" target="_blank" rel="noopener">Öppna källa</a>
+                {% else %}
+                <p class="text-secondary mb-0">Ingen källa kopplad ännu.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header bg-white fw-semibold">Ekonomi</div>
+            <div class="card-body">
+                <div class="text-secondary">Total projektbudget</div>
+                <div class="fs-4 mb-3">
+                    {% if signal.estimated_total_value_usd %}
+                    ${{ "{:,.0f}".format(signal.estimated_total_value_usd) }}
+                    {% else %}–{% endif %}
+                </div>
+                <div class="text-secondary">Bedömd EMAS-del</div>
+                <div class="fs-4">
+                    {% if signal.estimated_emas_value_usd %}
+                    ${{ "{:,.0f}".format(signal.estimated_emas_value_usd) }}
+                    {% else %}–{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

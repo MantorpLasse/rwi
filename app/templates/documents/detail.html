@@ -23,7 +23,6 @@
 <nav class="workflow-nav d-flex flex-wrap gap-3 mb-4" aria-label="Arbetsflöde">
     {% if document.source.homepage_url %}<a href="{{ document.source.homepage_url }}" target="_blank" rel="noopener">← Föregående: Utgivare</a>{% else %}<span class="text-secondary">← Föregående: Utgivare</span>{% endif %}
     <a href="/documents">↑ Upp: Dokument</a>
-    <a href="#observations">Nästa: Observationer →</a>
 </nav>
 
 {% if document.status == "incomplete" %}
@@ -53,41 +52,6 @@
             </div>
         </div>
 
-        <div class="card mb-4">
-            <div class="card-header bg-white fw-semibold">Relaterade projekt</div>
-            <div class="list-group list-group-flush">
-                {% for project in document.projects %}
-                <a class="list-group-item list-group-item-action" href="/projects/{{ project.id }}">
-                    <div class="d-flex flex-wrap justify-content-between gap-2">
-                        <strong>{{ project.title }}</strong>
-                        <span class="badge text-bg-secondary">{{ project.status }}</span>
-                    </div>
-                    <div class="small text-secondary">
-                        {% if project.airport.iata_code %}{{ project.airport.iata_code }} · {% elif project.airport.icao_code %}{{ project.airport.icao_code }} · {% endif %}{{ project.airport.name }}{% if project.runway %} · Bana {{ project.runway.designation }}{% endif %}
-                    </div>
-                </a>
-                {% else %}
-                <div class="list-group-item py-4 text-secondary">Inga projekt är kopplade till dokumentet.</div>
-                {% endfor %}
-            </div>
-        </div>
-
-        <div class="card" id="observations">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
-                <span class="fw-semibold">Relaterade observationer</span>
-                <a class="btn btn-sm btn-primary" href="/documents/{{ document.id }}/observations/new">Lägg till observation</a>
-            </div>
-            <div class="list-group list-group-flush">
-                {% for observation in observations %}
-                <a class="list-group-item list-group-item-action" href="/observations/{{ observation.id }}">
-                    <strong>#{{ observation.id }} · {{ observation.observation_type.display_label }}</strong>
-                    <div class="small text-secondary text-break">{{ observation.raw_value|truncate(120, true) }}</div>
-                </a>
-                {% else %}
-                <div class="list-group-item py-4 text-secondary">Inga observationer är kopplade till dokumentet.</div>
-                {% endfor %}
-            </div>
-        </div>
     </div>
 
     <div class="col-lg-4">

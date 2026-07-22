@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base, get_db
 from app.main import app
-from app.models import Airport, Document, Project, PublishingSource, Source
+from app.models import Document, PublishingSource
 
 
 @pytest.fixture
@@ -39,17 +39,6 @@ def documents_app(tmp_path):
         engine.dispose()
 
 
-def make_project(title):
-    return Project(
-        airport=Airport(name=f"{title} Airport", country="Sweden"),
-        title=title,
-        project_type="safety",
-        status="planned",
-        confidence_level="confirmed",
-        probability_score=6.0,
-    )
-
-
 def add_search_documents(session):
     alpha = Document(
         source=PublishingSource(name="Nordic Aviation Authority"),
@@ -73,11 +62,9 @@ def add_search_documents(session):
     return alpha, bravo
 
 
-def test_documents_list_renders_normalized_rows_links_metadata_and_counts(documents_app):
+def test_documents_list_renders_rows_links_metadata_and_counts(documents_app):
     client, session_factory = documents_app
     with session_factory() as session:
-        first = make_project("First")
-        second = make_project("Second")
         full = Document(
             source=PublishingSource(name="Normalized Publisher"),
             title="Normalized report",
@@ -86,7 +73,6 @@ def test_documents_list_renders_normalized_rows_links_metadata_and_counts(docume
             published_date=date(2026, 2, 3),
             accessed_date=date(2026, 7, 18),
             status="active",
-            projects=[first, second],
         )
         minimal = Document(
             source=PublishingSource(name="Minimal Publisher"),
@@ -114,7 +100,6 @@ def test_documents_list_renders_normalized_rows_links_metadata_and_counts(docume
         assert text in response.text
     assert f'href="/documents/{full_id}"' in response.text
     assert f'href="/documents/{minimal_id}"' in response.text
-    assert ">2</td>" in response.text
     assert "Sammanfattning" not in response.text
 
 
@@ -193,7 +178,7 @@ def test_empty_parameters_are_ignored_and_unknown_filters_are_conservative(docum
     assert "Inga dokument matchade den aktuella sökningen eller filtreringen." in unknown.text
 
 
-def test_document_type_options_come_from_non_empty_normalized_data(documents_app):
+def test_document_type_options_come_from_non_empty_data(documents_app):
     client, session_factory = documents_app
     with session_factory() as session:
         add_search_documents(session)
@@ -208,7 +193,7 @@ def test_document_type_options_come_from_non_empty_normalized_data(documents_app
     assert '<option value="None"' not in html
 
 
-def test_no_normalized_documents_state_and_navigation_link(documents_app):
+def test_no_documents_state_and_navigation_link(documents_app):
     client, _session_factory = documents_app
     html = client.get("/documents").text
     assert "Inga normaliserade dokument finns ännu." in html
@@ -225,38 +210,9 @@ def test_filtered_no_match_state_has_reset_link(documents_app):
     assert 'href="/documents">Rensa filter</a>' in html
 
 
-def test_legacy_source_content_is_not_rendered_and_existing_routes_work(documents_app):
-    client, session_factory = documents_app
-    with session_factory() as session:
-        project = make_project("Legacy holder")
-        project.sources.append(
-            Source(
-                title="LEGACY LIST CONTENT MUST STAY HIDDEN",
-                source_type="web",
-                publisher="Legacy Publisher",
-                url="https://legacy.example",
-            )
-        )
-        normalized = Document(
-            source=PublishingSource(name="Normalized List Publisher"),
-            title="Normalized list document",
-            status="active",
-            projects=[project],
-        )
-        session.add(normalized)
-        session.commit()
-        document_id = normalized.id
-        project_id = project.id
-        airport_id = project.airport.id
-
-    html = client.get("/documents").text
-    assert "Normalized list document" in html
-    assert "LEGACY LIST CONTENT MUST STAY HIDDEN" not in html
-    assert "Legacy Publisher" not in html
-    assert client.get(f"/documents/{document_id}").status_code == 200
-    assert client.get(f"/projects/{project_id}").status_code == 200
-    assert client.get(f"/airports/{airport_id}").status_code == 200
-    assert client.get("/projects").status_code == 200
-    assert client.get("/airports").status_code == 200
+def test_existing_routes_still_work_alongside_documents(documents_app):
+    client, _session_factory = documents_app
     assert client.get("/health").status_code == 200
-    assert client.get("/api/projects").status_code == 200
+    assert client.get("/airports").status_code == 200
+    assert client.get("/signals").status_code == 200
+    assert client.get("/api/signals").status_code == 200

@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Projekt · RW Intelligence{% endblock %}
+{% block title %}Signaler · RW Intelligence{% endblock %}
 {% block content %}
-<h1>Projekt</h1>
+<h1>Signaler</h1>
 
 <form class="row g-2 mb-4">
     <div class="col-lg-4">
-        <input class="form-control" name="q" value="{{ q }}" placeholder="Sök projekt eller flygplats...">
+        <input class="form-control" name="q" value="{{ q }}" placeholder="Sök signal eller flygplats...">
     </div>
     <div class="col-lg-2">
         <select class="form-select" name="status">
@@ -38,21 +38,21 @@
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
             <thead>
-            <tr><th>Flygplats</th><th>Projekt</th><th>Typ</th><th>Status</th><th>Confidence</th><th>År</th><th>Score</th></tr>
+            <tr><th>Flygplats</th><th>Signal</th><th>Kategori</th><th>Status</th><th>Confidence</th><th>År</th><th>Score</th></tr>
             </thead>
             <tbody>
-            {% for project in projects %}
+            {% for signal in signals %}
             <tr>
-                <td><a href="/airports/{{ project.airport.id }}">{{ project.airport.iata_code }}</a></td>
-                <td><a href="/projects/{{ project.id }}">{{ project.title }}</a></td>
-                <td>{{ project.project_type }}</td>
-                <td><span class="badge text-bg-secondary">{{ project.status }}</span></td>
-                <td>{{ project.confidence_level }}</td>
-                <td>{{ project.planning_year or "–" }}</td>
-                <td><span class="score-pill">{{ "%.1f"|format(project.probability_score) }}</span></td>
+                <td><a href="/airports/{{ signal.airport.id }}">{{ signal.airport.iata_code }}</a></td>
+                <td><a href="/signals/{{ signal.id }}">{{ signal.title }}</a></td>
+                <td>{{ signal.category }}</td>
+                <td><span class="badge text-bg-secondary">{{ signal.status or "–" }}</span></td>
+                <td>{{ signal.confidence }}</td>
+                <td>{{ signal.planning_year or "–" }}</td>
+                <td>{% if signal.probability_score is not none %}<span class="score-pill">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
             </tr>
             {% else %}
-            <tr><td colspan="7" class="text-center text-secondary py-4">Inga projekt matchade sökningen.</td></tr>
+            <tr><td colspan="7" class="text-center text-secondary py-4">Inga signaler matchade sökningen.</td></tr>
             {% endfor %}
             </tbody>
         </table>

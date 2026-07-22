@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Column, Date, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import CheckConstraint, Date, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -11,14 +11,6 @@ from app.database import Base
 
 DOCUMENT_STATUSES = frozenset(
     {"active", "superseded", "withdrawn", "unavailable", "incomplete"}
-)
-
-
-project_documents = Table(
-    "project_documents",
-    Base.metadata,
-    Column("project_id", ForeignKey("projects.id"), primary_key=True),
-    Column("document_id", ForeignKey("documents.id"), primary_key=True),
 )
 
 
@@ -62,13 +54,6 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(30), default="active")
 
     source: Mapped["PublishingSource"] = relationship(back_populates="documents")
-    projects: Mapped[list["Project"]] = relationship(
-        secondary=project_documents,
-        back_populates="documents",
-    )
-    observations: Mapped[list["Observation"]] = relationship(
-        back_populates="document", passive_deletes="all"
-    )
 
 
 from app.models.acquisition import AcquisitionSource  # noqa: E402
