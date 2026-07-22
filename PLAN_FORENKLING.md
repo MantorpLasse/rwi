@@ -256,7 +256,7 @@ används av `scripts/import_faa_runway_ends.py` för att berika
 `Installation.runway_end`/`runway_id` (del 1 av ursprungsplanen för
 regel 4 – berikningen, inte RSA-signalen).
 
-### USAspending.gov (utforskat 2026-07-22) – positivt fynd, väntar på beslut
+### USAspending.gov (utforskat 2026-07-22, byggt 2026-07-22)
 
 Testat live via `scripts/explore_usaspending.py` (skriver ingenting till
 databasen, bara utforskning) innan något byggs på riktigt. Officiellt,
@@ -304,10 +304,85 @@ individuellt användbar data per flygplats/bana/ände:
 belopp + fas, i klartext) för att vara värd en riktig integration – i
 praktiken ett alternativ eller komplement till att parsa AIP-grant-PDF:er,
 med längre historik och strukturerad JSON istället för PDF-tabeller.
-**Ingen permanent regel eller databaskoppling byggd än** – väntar på
-bekräftelse om riktning (ersätta AIP-grant-PDF-parsern, komplettera den,
-eller båda parallellt) innan en riktig `app/acquisition/usaspending.py`
-+ importscript skrivs.
+
+**Byggt 2026-07-22:** `app/acquisition/usaspending_grants.py` (hämtning,
+paginerad, `EARLIEST_SUPPORTED_DATE = "2007-10-01"`) +
+`scripts/import_usaspending_grants.py` (matchning mot `Airport` via
+FAA/ICAO/IATA-kod i beskrivningens Loc ID-parentes eller via
+"INTENDED BENEFICIARY"-meningens ort/delstat, `Signal(confidence="high")`
+per träff). Dedup mellan USAspending och den äldre AIP-grant-PDF-parsern
+löst via en ny unik kolumn `Source.external_id`
+(`uq_sources_external_id`-index) – varje importväg kollar mot den innan
+en ny `Source`-rad skapas, istället för en skör belopp/år-heuristik som
+konstaterades ge falska positiva mot verklig data (se
+`scripts/import_faa_aip_grants.py`, som gjordes vilande/fallback snarare
+än borttagen – dess modul-docstring förklarar varför).
+
+Körning mot skarp data gav 6 nya flygplatser (Roanoke, Greenville,
+Allegheny County, Philadelphia, Morristown, Michigan DOT) plus nya
+high-confidence-signaler för dem, utan en enda dubblett mot BGM/MHT/BOS/
+HYA som redan fanns (i praktiken hade `import_faa_aip_grants.py` aldrig
+körts mot produktionsdatabasen tidigare, så det fanns inga verkliga
+dubbletter att reconcilea – bara en risk att skydda mot framåt).
+
+### FAA Airport Construction Impact Report (utforskat och byggt 2026-07-22)
+
+Kvartalsvis PDF-rapport från FAA:s ATO System Operations-avdelning,
+listar pågående/planerade banarbeten per flygplats med exakta
+start/slut-datum. Tredje källan (efter AIP-grant-PDF och USAspending)
+som bekräftar samma verklighet, men den enda som ger **exakta
+byggnadsdatum** snarare än bidragsbelopp/planeringsår.
+
+**Vad som INTE stämde med uppgiftens antagande:** URL-mönstret
+`Q{kvartal}_{år}_508_Airport_Construction_Impact_Report.pdf` är **inte
+stabilt** – verifierat live mot indexsidan. Underkatalogen varierar
+(`sys_cap_eval/`, `sys_cap_eval/media/`,
+`slot_administration/data/doc/`), "508" saknas ibland, och minst en fil
+har stavfelet "Constuction". En hopkodad URL-mall hade alltså missat
+flera verkliga rapporter. Löst genom att `discover_latest_report()`
+hämtar indexsidans HTML och letar upp de faktiska `href`-länkarna med
+en regex på `Q(\d)_(\d{4})`, sorterar på (år, kvartal) och väljer högst
+– ingen mall, ingen gissning.
+
+**PDF-parsning:** `extract_text()` (rå textextraktion) ger jumblade,
+sammanflätade rader för den här typen av flerkolumns Gantt-liknande
+tabell (verifierat konkret på JFK-sektionen: datum som
+"04/13/2026 to 2026 TBD" i fel ordning). `pdfplumber.extract_tables()`
+återskapar däremot det riktiga rutnätet (Project ID, Project Name,
+Description of Work, Estimated Dates, Status, Impact, Notes) pålitligt.
+All parsning bygger på `extract_tables()`, med tabellen identifierad via
+sin rubrikrad ("Description of Work"), inte via tabellindex.
+
+**Flera kandidat-signaler per flygplats – BOS som konkret exempel:**
+Innan kod skrevs visade en kontroll av produktionsdatabasen att BOS
+redan hade **fyra** EMAS-omnämnande signaler (ursprunglig seed-signal +
+tre separata USAspending-bidrag för samma runway 9/27-EMAS i olika
+faser). Ett naivt "uppdatera första träffen"-antagande hade uppdaterat
+fel signal icke-deterministiskt. Löst med en explicit poängheuristik i
+`_candidate_score()`: +2 om `planning_year` matchar rapportens
+startårtal, +1 om samma banummer nämns, +1 om samma "PHASE {n}"-text
+finns i båda. Vid oavgjort resultat (ingen entydig vinnare) skapas en ny
+signal istället för att gissa. Verifierad mot verklig BOS-data innan
+den skrevs in i modulen: seed-signalen fick poäng 4, närmaste
+USAspending-konkurrenten fick 3 – en tydlig, förklarbar vinnare.
+
+**Bekräftat mot skarp data:** BOS "RWY 27 RSA (Phase 2)",
+2026-08-31 → 2026-11-15, "second part of the RWY 9 EMAS installation"
+matchade och uppdaterade den redan existerande BOS-signalen (id=3,
+seed-signalen) – status satt till `"under construction"`,
+`construction_start`/`completion_date` satta till de exakta datumen,
+en bekräftelsenot bifogad till befintliga anteckningar (skriver inte
+över). De tre andra BOS-signalerna lämnades helt orörda. SFO-sektionens
+"RWY 1R/19L Rehabilitation and TWY W" (EMAS seam replacement,
+2026-03-30 → 2026-10-03) hade redan en egen signal från tidigare
+körningar och uppdaterades likadant istället för att skapa en dubblett.
+Andra körningen mot samma rapport gav `already_imported: 2,
+signals_updated: 0, signals_created: 0` – bekräftat idempotent via
+samma `Source.external_id`-mönster
+(`faa_construction_report:Q{kvartal}_{år}:{flygplatskod}:{project_id}`).
+
+**Bedömning:** Byggd och klar. `app/acquisition/faa_construction_report.py`
++ `scripts/import_faa_construction_report.py`, körd mot skarp data.
 
 ## En sak till
 
