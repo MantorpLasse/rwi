@@ -256,6 +256,59 @@ används av `scripts/import_faa_runway_ends.py` för att berika
 `Installation.runway_end`/`runway_id` (del 1 av ursprungsplanen för
 regel 4 – berikningen, inte RSA-signalen).
 
+### USAspending.gov (utforskat 2026-07-22) – positivt fynd, väntar på beslut
+
+Testat live via `scripts/explore_usaspending.py` (skriver ingenting till
+databasen, bara utforskning) innan något byggs på riktigt. Officiellt,
+publikt API på `api.usaspending.gov`, **ingen API-nyckel krävs**.
+
+**Vad som fungerar:** Sökning på exakt frasen "Engineered Material
+Arresting System" mot **GRANTS-typerna** (`award_type_codes:
+["02","03","04","05"]`) – inte CONTRACTS – ger extremt specifik,
+individuellt användbar data per flygplats/bana/ände:
+
+- Broome County (Binghamton/BGM) – flera bidrag 2021–2026 för
+  Runway 16/34 EMAS, fas för fas (design, block-upphandling,
+  konstruktion) – **matchar exakt** vår redan importerade AIP-grant-data
+  för BGM.
+- Manchester, City of (MHT) – $7 937 100, Runway 6/24 EMAS-rekonstruktion,
+  2026-06-15 – **matchar vår befintliga MHT-signal.**
+- Massachusetts Port Authority (Boston/BOS, flera bidrag 2024–2025),
+  Barnstable Municipal (Hyannis/HYA) – båda redan i vår databas.
+- Nya, ännu ej bevakade träffar: Roanoke Regional Airport Commission,
+  Greenville Airport Commission, Allegheny County Airport Authority
+  (Pittsburgh), City of Philadelphia, Town of Morristown, Michigan DOT –
+  konkreta belopp, datum, bana och ände i klartext, ingen tolkning
+  behövs.
+- Data går tillbaka till 2007-10-01 (mycket längre historik än
+  AIP-grant-PDF:erna som bara täcker innevarande år).
+
+**Vad som INTE fungerar:**
+
+- CONTRACTS-sökning (samma fras, `award_type_codes: ["A","B","C","D"]`)
+  ger **noll träffar** – EMAS-upphandlingar går inte via federala
+  kontrakt, bara via bidrag till flygplatsägaren.
+- `"Runway Safe"` som mottagarnamn: **noll träffar** i
+  `/api/v2/autocomplete/recipient/`. Leverantören själv syns aldrig i
+  USAspending – bidraget går till flygplatsens ägare (county/city/
+  airport commission/port authority), som sedan privat upphandlar EMAS
+  av Runway Safe. Går alltså inte att spåra leverantör den här vägen.
+- Bara nyckelordet `"EMAS"` (utan kontext): för brett/tvetydigt, matchar
+  bl.a. "EMAIL" i beskrivningar (t.ex. "MFE EMAIL SECURITY"). Måste
+  använda hela frasen eller "arresting system".
+- `"arresting system"` utan att filtrera på GRANTS specifikt blandar in
+  mycket militärt brus (Air National Guard-baser som bygger om
+  kabelbaserade arresting-system – annan teknik, annan kund).
+
+**Bedömning:** Datan är tillräckligt specifik (flygplats + bana + ände +
+belopp + fas, i klartext) för att vara värd en riktig integration – i
+praktiken ett alternativ eller komplement till att parsa AIP-grant-PDF:er,
+med längre historik och strukturerad JSON istället för PDF-tabeller.
+**Ingen permanent regel eller databaskoppling byggd än** – väntar på
+bekräftelse om riktning (ersätta AIP-grant-PDF-parsern, komplettera den,
+eller båda parallellt) innan en riktig `app/acquisition/usaspending.py`
++ importscript skrivs.
+
 ## En sak till
 
 Du har redan (via den här konversationen) en fungerande metod för att
