@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models import Airport, Runway, Signal, Source
+from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE
 
 
 KEYWORDS = ("EMAS", "RSA", "runway safety area", "arresting system")
@@ -32,13 +33,16 @@ def add_source_and_flag_keywords(
     if not matched:
         return None
 
+    confidence = "low"
     signal = Signal(
         airport=airport,
         runway=runway,
         source=source,
         title=f"Possible EMAS/RSA signal: {source.title}",
         category="unknown",
-        confidence="low",
+        confidence=confidence,
+        status="identified",
+        probability_score=DEFAULT_SCORE_BY_CONFIDENCE[confidence],
         notes=(
             f"Auto-flagged from source text (matched: {', '.join(matched)}). "
             "Read the source and raise confidence to medium/high once verified."

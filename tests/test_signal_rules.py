@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import Base
 from app.models import Airport, Incident, Signal, Source
+from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE
 from app.services import add_source_and_flag_keywords
 
 
@@ -48,6 +49,12 @@ def test_incident_insert_creates_replacement_signal(session):
     assert signal.notes == incident.summary
     assert signal.airport_id == airport.id
     assert signal.runway_id is None
+    # A real status (not None) so /signals doesn't render an empty status
+    # badge next to "high" confidence, which reads as if status == "high".
+    assert signal.status == "identified"
+    # So the signal can surface in score-sorted views instead of always
+    # sorting last behind every manually-scored signal.
+    assert signal.probability_score == DEFAULT_SCORE_BY_CONFIDENCE["high"]
 
 
 def test_incident_can_opt_out_of_the_automatic_signal(session):
@@ -91,6 +98,8 @@ def test_source_with_keyword_creates_low_confidence_signal(session):
     assert "runway safety area" in signal.notes.lower()
     assert signal.source_id == source.id
     assert signal.airport_id == airport.id
+    assert signal.status == "identified"
+    assert signal.probability_score == DEFAULT_SCORE_BY_CONFIDENCE["low"]
 
     persisted = session.scalars(select(Signal)).all()
     assert len(persisted) == 1

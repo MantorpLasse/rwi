@@ -10,6 +10,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
+# Default probability_score for a Signal an automatic rule creates, keyed by
+# the confidence it assigns. Lets rule-generated signals still surface in
+# score-sorted views (e.g. the dashboard) instead of always sorting last.
+DEFAULT_SCORE_BY_CONFIDENCE = {"high": 8.0, "medium": 6.0, "low": 3.0}
+
+
 class Signal(Base):
     """Something that could become a future EMAS order.
 

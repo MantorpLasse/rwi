@@ -43,11 +43,12 @@ class Incident(Base):
 
 @event.listens_for(Incident, "after_insert")
 def _create_replacement_signal(_mapper, connection, target: "Incident") -> None:
-    from app.models.signal import Signal
+    from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE, Signal
 
     if not target.implies_replacement:
         return
 
+    confidence = "high"
     connection.execute(
         insert(Signal.__table__).values(
             airport_id=target.airport_id,
@@ -55,7 +56,9 @@ def _create_replacement_signal(_mapper, connection, target: "Incident") -> None:
             source_id=target.source_id,
             title=f"Replacement expected after incident on {target.incident_date}",
             category="replacement_after_incident",
-            confidence="high",
+            confidence=confidence,
+            status="identified",
+            probability_score=DEFAULT_SCORE_BY_CONFIDENCE[confidence],
             target_year=None,
             notes=target.summary,
         )
