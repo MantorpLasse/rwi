@@ -28,6 +28,7 @@ _IDENTIFIER_PATH = re.compile(
     r"(?i)(/(?:sessionid|requestid|browserid|csrf|xsrf|token)/)[^/?#]+"
 )
 _TELEMETRY = re.compile(r"(?i)(akam|go-mpulse|boomr|beacon|telemetry)")
+_TILECACHE_PATH = re.compile(r"(?i)^(/vizql/tilecache/).+$")
 _TABLEAU_MARKERS = (
     "prebootstrap",
     "bootstrapsession",
@@ -78,6 +79,9 @@ def _sanitize_url(value: str, counters: dict[str, int]) -> str:
         return urlunsplit((parts.scheme, parts.netloc, "/[telemetry-redacted]", "", ""))
     path = _SESSION_PATH.sub(r"\1[redacted]", parts.path)
     path = _IDENTIFIER_PATH.sub(r"\1[redacted]", path)
+    if _TILECACHE_PATH.match(path):
+        path = "/vizql/tilecache/[opaque-path-redacted]"
+        counters["redacted_values"] += 1
     query = []
     for name, item in parse_qsl(parts.query, keep_blank_values=True):
         query.append((name, _REDACTED))
@@ -105,7 +109,11 @@ def _header_names(headers: Any, counters: dict[str, int]) -> list[str]:
 def _body_fields(post_data: Any, counters: dict[str, int]) -> tuple[str | None, list[str]]:
     if not isinstance(post_data, dict):
         return None, []
-    media_type = post_data.get("mimeType") if isinstance(post_data.get("mimeType"), str) else None
+    media_type = (
+        post_data["mimeType"].partition(";")[0].strip()
+        if isinstance(post_data.get("mimeType"), str)
+        else None
+    )
     names: list[str] = []
     params = post_data.get("params")
     if isinstance(params, list):
@@ -120,6 +128,11 @@ def _body_fields(post_data: Any, counters: dict[str, int]) -> tuple[str | None, 
 def _response_markers(content: Any) -> list[str]:
     if not isinstance(content, dict) or not isinstance(content.get("text"), str):
         return []
+    media_type = content.get("mimeType")
+    if isinstance(media_type, str) and media_type.lower().startswith(
+        ("text/css", "application/javascript", "text/javascript", "image/")
+    ):
+        return []
     lowered = content["text"].lower()
     return [marker for marker in _TABLEAU_MARKERS if marker in lowered]
 
@@ -128,10 +141,10 @@ def _request_category(url: str, resource_type: Any) -> str:
     lowered = url.lower()
     if _TELEMETRY.search(lowered):
         return "telemetry"
-    if "bootstrapsession" in lowered or "/sessions/" in lowered:
-        return "session_or_bootstrap"
     if "commands" in lowered or "getsession" in lowered:
         return "worksheet_command"
+    if "bootstrapsession" in lowered or "/sessions/" in lowered:
+        return "session_or_bootstrap"
     if "prebootstrap" in lowered or lowered.endswith((".js", ".css")):
         return "static_asset"
     if resource_type == "document":

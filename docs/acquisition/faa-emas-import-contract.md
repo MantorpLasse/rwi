@@ -127,14 +127,81 @@ names without their values, and emits only structural response markers rather th
 response bodies. Its report includes input/output filenames, hashes, sizes, entry
 count, removal/redaction counts, and category names—never removed values.
 
-No authentic HAR was available during this slice. Therefore no authentic request
-count, initialization sequence, session-creation request, bootstrap request,
-required parameters/body fields/headers, cookie or CSRF dependency, returned
-session value, bootstrap metadata, or installation marks can yet be reported.
-The feasibility classification is **HTTP_ONLY_REQUIRES_MORE_EVIDENCE**. The exact
-remaining blocker is one operator-generated HAR from a fresh browser session,
-followed by local sanitization and review. No automated proof or HTTP contract
-implementation is authorized until that evidence exists.
+#### Authentic sanitized capture analysis (2026-07-21)
+
+The sanitized analysis `faa-tableau-20260721T143000Z.raw.sanitized.json`
+contains 40 ordered entries from `10:13:04.448Z` through `10:19:46.647Z`.
+It is not an initialization capture: its first two entries are cached CSS requests,
+and its first VizQL POST, 39.584 seconds later, already contains a redacted session
+identifier in `/sessions/{id}/commands/...`. There is no document navigation,
+redirect, PreBootstrap JavaScript request, `bootstrapSession` request, bare session
+creation request, or bootstrap response in the capture.
+
+The complete classification is:
+
+| Entries | Evidence-based classification |
+|---|---|
+| 1–2 | cached Tableau CSS assets (`GET`, `304`, `text/css`, initiator `other`) |
+| 3–8, 14–17, 19, 22–25, 29–31, 33–34, 38–40 | established-session `render-tooltip-server` worksheet commands |
+| 11, 18, 28, 37 | established-session `tabdoc/select` worksheet commands |
+| 12–13 | established-session client-render/animation notification commands |
+| 9–10, 20–21, 26–27, 35–36 | script-initiated `VizInTooltip` PNG tile-cache requests |
+| 32 | unrelated `go-mpulse` telemetry (`GET`, `200`, `application/json`) |
+
+All 31 VizQL commands are script-initiated `POST` requests to
+`/vizql/t/FAA/w/EMASIncidentsandInstallations/v/Main/sessions/[redacted]/commands/...`,
+have no query parameters, use `multipart/form-data`, return HTTP 200
+`application/octet-stream`, and range from 427 to 24,871 response bytes. The
+observed common request-header names are HTTP/2 pseudo-headers plus `accept`,
+`accept-encoding`, `accept-language`, `content-length`, `content-type`, `origin`,
+`priority`, `referer`, `sec-ch-ua*`, `sec-fetch-*`, `user-agent`, `x-b3-sampled`,
+`x-b3-spanid`, `x-b3-traceid`, `x-requested-with`, `x-tableau-version`, and
+`x-tsi-active-tab`; most later commands also contain `cache-control` and `pragma`.
+Presence does not prove that every header is required.
+
+The command-specific request-body field names are:
+
+- `render-tooltip-server`: `worksheet`, `dashboard`, optional `tupleIds`,
+  `vizRegionRect`, `allowHoverActions`, `allowPromptText`, `allowWork`,
+  `useInlineImages`, and `telemetryCommandId`;
+- `tabdoc/select`: `worksheet`, `dashboard`, `selection`, `selectOptions`,
+  `zoneId`, `zoneSelectionType`, and `telemetryCommandId`;
+- notification commands: `telemetryCommandId` only.
+
+The capture proves that workbook `EMASIncidentsandInstallations`, view `Main`, a
+session-path value, and worksheet/dashboard command values exist. Workbook/view
+are static in the configured URL and endpoint path. The multipart boundary is
+client-generated transport syntax. Values for worksheet, dashboard, selections,
+tuple IDs, telemetry command IDs, tracing headers, and the session path were
+removed and their origin cannot be established from this capture. No relevant
+request exposes a `Cookie`, CSRF/XSRF header, CSRF/XSRF body field, `sheetId`,
+`clientDimension`, `browserId`, or `requestId`; this shows no dependency in the
+captured command subset, but cannot establish initialization requirements.
+
+Selection responses at entries 11, 18, 28, and 37 contain a coarse `mark`
+structural indicator, and entry 11 also contains `commands`. Tooltip commands and
+`VizInTooltip` images establish interactive worksheet/mark activity. They do not
+establish that installation records, bootstrap metadata, or a complete mark
+dataset are present. No `metadata`, `getSessionInfo`, or `getSessionSheet` marker
+is present.
+
+The feasibility classification remains **HTTP_ONLY_REQUIRES_MORE_EVIDENCE**.
+The exact blocker is an initialization-only sanitized capture beginning before
+navigation and preserving the document/redirect, PreBootstrap asset request,
+session-creation/bootstrap endpoint paths, query and body field names, safe fixed
+configuration values, response media types/sizes, structural response markers,
+and the linkage role (not value) of a returned session identifier. It must also
+preserve whether cookies and CSRF/XSRF fields are present, without their values.
+No token, cookie, session identifier, personal value, or raw body is needed.
+
+Sanitizer review found three minimization/classification defects for future output:
+session command paths were categorized as `session_or_bootstrap` instead of
+`worksheet_command`, CSS substrings produced false response markers, and transient
+multipart boundaries plus opaque tile-cache paths were retained. The sanitizer now
+classifies commands before sessions, suppresses protocol markers for static media,
+records only the base body media type, and reduces tile-cache paths. The authentic
+analysis file was not regenerated because use of the raw HAR is prohibited.
+No HTTP adapter may be implemented from this incomplete sequence.
 
 ## 2. Acquisition identity
 

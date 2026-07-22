@@ -98,6 +98,7 @@ def test_secrets_are_removed_but_safe_names_and_metadata_remain(tmp_path):
     for secret in ("fake-session", "fake-request", "fake-cookie", "fake-auth", "fake-csrf", "fake-browser", "machine-secret"):
         assert secret not in text
     entry = json.loads(text)["entries"][0]
+    assert entry["category"] == "session_or_bootstrap"
     assert entry["request"]["header_names"] == ["Cookie", "Authorization", "X-CSRF-Token", "Accept"]
     assert entry["request"]["body_field_names"] == ["sheetId", "sessionid", "browserId"]
     assert entry["response"]["status"] == 200
@@ -163,3 +164,54 @@ def test_edge_telemetry_url_is_reduced_without_changing_sequence(tmp_path):
     assert entries[1]["request"]["url"] == (
         "https://example.test/[telemetry-redacted]"
     )
+
+
+def test_static_asset_text_does_not_create_protocol_markers(tmp_path):
+    value = synthetic_har()
+    entry = value["log"]["entries"][1]
+    entry["request"]["url"] = "https://example.test/tableau.css"
+    entry["response"]["content"] = {
+        "mimeType": "text/css",
+        "size": 10,
+        "text": ".mark-command { display: block; }",
+    }
+    root, path = write_raw(tmp_path, value)
+    report = sanitize_tableau_har(path, diagnostics_root=root)
+    entries = json.loads(
+        (root / "sanitized" / report.output_file).read_text(encoding="utf-8")
+    )["entries"]
+    assert entries[1]["category"] == "static_asset"
+    assert entries[1]["response"]["tableau_structure_markers"] == []
+
+
+def test_multipart_boundary_and_opaque_tile_cache_path_are_removed(tmp_path):
+    value = synthetic_har()
+    value["log"]["entries"][0]["request"]["postData"]["mimeType"] = (
+        "multipart/form-data; boundary=fake-transient-boundary"
+    )
+    value["log"]["entries"][1]["request"]["url"] = (
+        "https://example.test/vizql/tilecache/fake-opaque-cache-key/image.png"
+    )
+    root, path = write_raw(tmp_path, value)
+    report = sanitize_tableau_har(path, diagnostics_root=root)
+    entries = json.loads(
+        (root / "sanitized" / report.output_file).read_text(encoding="utf-8")
+    )["entries"]
+    assert entries[0]["request"]["body_media_type"] == "multipart/form-data"
+    assert entries[1]["request"]["url"] == (
+        "https://example.test/vizql/tilecache/[opaque-path-redacted]"
+    )
+
+
+def test_established_session_command_is_not_misclassified_as_bootstrap(tmp_path):
+    value = synthetic_har()
+    value["log"]["entries"][0]["request"]["url"] = (
+        "https://example.test/vizql/t/Site/w/Book/v/View/"
+        "sessions/fake-session/commands/tabdoc/select"
+    )
+    root, path = write_raw(tmp_path, value)
+    report = sanitize_tableau_har(path, diagnostics_root=root)
+    entries = json.loads(
+        (root / "sanitized" / report.output_file).read_text(encoding="utf-8")
+    )["entries"]
+    assert entries[0]["category"] == "worksheet_command"
