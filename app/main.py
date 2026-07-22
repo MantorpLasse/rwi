@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -27,6 +27,32 @@ def _format_datetime(value: object) -> str:
 
 
 templates.env.filters["datetime"] = _format_datetime
+
+
+def _parse_optional_int(value: Optional[str], *, minimum: int, maximum: int) -> Optional[int]:
+    """Parse a query-string int, treating blank/invalid/out-of-range input as "no filter"."""
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if not (minimum <= parsed <= maximum):
+        return None
+    return parsed
+
+
+def _parse_optional_float(value: Optional[str], *, minimum: float, maximum: float) -> Optional[float]:
+    """Parse a query-string float, treating blank/invalid/out-of-range input as "no filter"."""
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    if not (minimum <= parsed <= maximum):
+        return None
+    return parsed
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -122,10 +148,13 @@ def list_signals(
     q: Optional[str] = None,
     status: Optional[str] = None,
     country: Optional[str] = None,
-    year: Optional[int] = Query(default=None, ge=2000, le=2100),
-    min_score: Optional[float] = Query(default=None, ge=0, le=10),
+    year: Optional[str] = None,
+    min_score: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    year = _parse_optional_int(year, minimum=2000, maximum=2100)
+    min_score = _parse_optional_float(min_score, minimum=0, maximum=10)
+
     stmt = (
         select(Signal)
         .join(Signal.airport)
@@ -279,9 +308,11 @@ def document_detail(request: Request, document_id: int, db: Session = Depends(ge
 def api_signals(
     q: Optional[str] = None,
     status: Optional[str] = None,
-    min_score: Optional[float] = Query(default=None, ge=0, le=10),
+    min_score: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    min_score = _parse_optional_float(min_score, minimum=0, maximum=10)
+
     stmt = select(Signal).join(Signal.airport).options(joinedload(Signal.airport))
 
     if q:
