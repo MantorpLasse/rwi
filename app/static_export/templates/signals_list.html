@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Signaler · Runway Safe Intelligence{% endblock %}
+{% block content %}
+<h1>Signaler</h1>
+<p class="subtitle">{{ signals|length }} signaler.</p>
+
+<div class="filters">
+  <input id="q" type="search" placeholder="Sök signal eller flygplats...">
+  <select id="status-filter">
+    <option value="">Alla statusar</option>
+    {% for item in statuses %}<option value="{{ item }}">{{ item }}</option>{% endfor %}
+  </select>
+  <select id="country-filter">
+    <option value="">Alla länder</option>
+    {% for item in countries %}<option value="{{ item }}">{{ item }}</option>{% endfor %}
+  </select>
+</div>
+
+<div class="card">
+  <table id="signals-table">
+    <thead>
+      <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>Confidence</th><th>År</th><th>Score</th></tr>
+    </thead>
+    <tbody>
+      {% for signal in signals %}
+      <tr
+        data-search="{{ (signal.title ~ ' ' ~ signal.airport_name ~ ' ' ~ signal.airport_code)|lower }}"
+        data-status="{{ signal.status or '' }}"
+        data-country="{{ signal.country }}"
+      >
+        <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ signal.airport_code }}</a></td>
+        <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
+        <td data-label="Status"><span class="pill status">{{ signal.status or signal.category }}</span></td>
+        <td data-label="Confidence"><span class="pill confidence-{{ signal.confidence_class }}">{{ signal.confidence }}</span></td>
+        <td data-label="År">{{ signal.planning_year or "–" }}</td>
+        <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty-state">Inga signaler registrerade.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div id="no-match" class="empty-state" hidden>Inga signaler matchade sökningen.</div>
+</div>
+
+<script>
+(function () {
+  var q = document.getElementById("q");
+  var statusFilter = document.getElementById("status-filter");
+  var countryFilter = document.getElementById("country-filter");
+  var rows = Array.prototype.slice.call(document.querySelectorAll("#signals-table tbody tr[data-search]"));
+  var noMatch = document.getElementById("no-match");
+
+  function apply() {
+    var term = q.value.trim().toLowerCase();
+    var status = statusFilter.value;
+    var country = countryFilter.value;
+    var visible = 0;
+    rows.forEach(function (row) {
+      var matches =
+        (!term || row.getAttribute("data-search").indexOf(term) !== -1) &&
+        (!status || row.getAttribute("data-status") === status) &&
+        (!country || row.getAttribute("data-country") === country);
+      row.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    noMatch.hidden = visible !== 0 || rows.length === 0;
+  }
+
+  [q, statusFilter, countryFilter].forEach(function (el) {
+    el.addEventListener("input", apply);
+    el.addEventListener("change", apply);
+  });
+})();
+</script>
+{% endblock %}

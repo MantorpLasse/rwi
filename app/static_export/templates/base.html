@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Runway Safe Intelligence{% endblock %}</title>
+<link rel="stylesheet" href="{{ root }}/style.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <div class="brand"><a href="{{ root }}/index.html">Runway Safe Intelligence</a></div>
+    <nav class="site">
+      <a href="{{ root }}/index.html">Översikt</a>
+      <a href="{{ root }}/signals/index.html">Signaler</a>
+      <a href="{{ root }}/airports/index.html">Flygplatser</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap">
+{% block content %}{% endblock %}
+<footer class="site">Genererad {{ generated_at }} · statisk export, ingen server behövs för att läsa den.</footer>
+</div>
+</body>
+</html>

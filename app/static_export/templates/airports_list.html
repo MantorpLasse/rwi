@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Flygplatser · Runway Safe Intelligence{% endblock %}
+{% block content %}
+<h1>Flygplatser</h1>
+<p class="subtitle">{{ airports|length }} flygplatser bevakas.</p>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>Kod</th><th>Namn</th><th>Land</th><th>Signaler</th></tr>
+    </thead>
+    <tbody>
+      {% for airport in airports %}
+      <tr>
+        <td data-label="Kod">{{ airport.iata_code or airport.icao_code or "–" }}</td>
+        <td class="title" data-label="Namn"><a href="{{ root }}/airports/{{ airport.id }}.html">{{ airport.name }}</a></td>
+        <td data-label="Land">{{ airport.country }}</td>
+        <td data-label="Signaler">{{ airport.signal_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

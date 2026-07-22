@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Runway Safe Intelligence{% endblock %}
+{% block content %}
+<h1>Runway Safe Intelligence</h1>
+<p class="subtitle">EMAS-installationer, incidenter, källor och affärssignaler.</p>
+
+<div class="stat-grid">
+  <div class="stat"><div class="label">Flygplatser</div><div class="value">{{ airport_count }}</div></div>
+  <div class="stat"><div class="label">Signaler</div><div class="value">{{ signal_count }}</div></div>
+  <div class="stat"><div class="label">Bekräftade</div><div class="value">{{ confirmed_count }}</div></div>
+  <div class="stat"><div class="label">Score ≥ 8</div><div class="value">{{ high_score_count }}</div></div>
+</div>
+
+<div class="card">
+  <div class="card-header">Högst prioriterade signaler</div>
+  <table>
+    <thead>
+      <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>År</th><th>Score</th></tr>
+    </thead>
+    <tbody>
+      {% for signal in top_signals %}
+      <tr>
+        <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ signal.airport_code }} · {{ signal.airport_name }}</a></td>
+        <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
+        <td data-label="Status"><span class="pill status">{{ signal.status or signal.category }}</span></td>
+        <td data-label="År">{{ signal.planning_year or "–" }}</td>
+        <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
