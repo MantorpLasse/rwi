@@ -184,4 +184,4 @@ def _protect_completed_run(_mapper, _connection, target: AcquisitionRun) -> None
         raise ValueError("Completed AcquisitionRun is immutable")
 
 
-from app.models.document import PublishingSource  # noqa: E402
+from app.models.publishing_source import PublishingSource  # noqa: E402

@@ -7,7 +7,6 @@ from app.models import (
     AcquisitionRun,
     AcquisitionSource,
     Airport,
-    Document,
     Incident,
     Installation,
     PublishingSource,
@@ -92,20 +91,6 @@ EXPECTED_COLUMNS = {
         "country_code": ("VARCHAR(2)", True, None, None),
         "reliability_level": ("VARCHAR(30)", True, None, None),
         "notes": ("TEXT", True, None, None),
-    },
-    "documents": {
-        "id": ("INTEGER", False, None, None),
-        "source_id": ("INTEGER", False, None, None),
-        "title": ("VARCHAR(300)", False, None, None),
-        "document_type": ("VARCHAR(50)", True, None, None),
-        "url": ("VARCHAR(1000)", True, None, None),
-        "published_date": ("DATE", True, None, None),
-        "accessed_date": ("DATE", True, None, None),
-        "document_reference": ("VARCHAR(200)", True, None, None),
-        "summary": ("TEXT", True, None, None),
-        "revision": ("VARCHAR(100)", True, None, None),
-        "content_hash": ("VARCHAR(128)", True, None, None),
-        "status": ("VARCHAR(30)", False, ("scalar", "active"), None),
     },
     "sources": {
         "id": ("INTEGER", False, None, None),
@@ -194,7 +179,6 @@ EXPECTED_FOREIGN_KEYS = {
     "airports": set(),
     "runways": {("airport_id", "airports.id")},
     "publishing_sources": set(),
-    "documents": {("source_id", "publishing_sources.id")},
     "sources": set(),
     "installations": {
         ("airport_id", "airports.id"),
@@ -237,9 +221,6 @@ EXPECTED_INDEXES = {
         ("ix_runways_designation", ("designation",), False),
     },
     "publishing_sources": set(),
-    "documents": {
-        ("ix_documents_source_id", ("source_id",), False),
-    },
     "sources": {
         ("ix_sources_source_type", ("source_type",), False),
     },
@@ -310,11 +291,7 @@ EXPECTED_RELATIONSHIPS = {
         "source": ("Source", None, DEFAULT_CASCADE),
     },
     "PublishingSource": {
-        "documents": ("Document", "source", DEFAULT_CASCADE),
         "acquisition_sources": ("AcquisitionSource", "publishing_source", DEFAULT_CASCADE),
-    },
-    "Document": {
-        "source": ("PublishingSource", "documents", DEFAULT_CASCADE),
     },
     "Installation": {
         "airport": ("Airport", "installations", DEFAULT_CASCADE),
@@ -345,7 +322,6 @@ def test_all_current_models_are_exported_from_app_models():
         Airport.__name__,
         AcquisitionRun.__name__,
         AcquisitionSource.__name__,
-        Document.__name__,
         Incident.__name__,
         Installation.__name__,
         PublishingSource.__name__,
@@ -357,7 +333,6 @@ def test_all_current_models_are_exported_from_app_models():
         "Airport",
         "AcquisitionRun",
         "AcquisitionSource",
-        "Document",
         "Incident",
         "Installation",
         "PublishingSource",

@@ -4,13 +4,12 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.models import Airport, Document, PublishingSource, Signal
-from app.models.document import DOCUMENT_STATUSES
+from app.models import Airport, Signal
 
 
 app = FastAPI(title=settings.app_name)
@@ -234,86 +233,6 @@ def signal_detail(request: Request, signal_id: int, db: Session = Depends(get_db
         request=request,
         name="signals/detail.html",
         context={"signal": signal},
-    )
-
-
-@app.get("/documents", response_class=HTMLResponse)
-def list_documents(
-    request: Request,
-    q: Optional[str] = None,
-    status: Optional[str] = None,
-    document_type: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    q = (q or "").strip()
-    status = (status or "").strip()
-    document_type = (document_type or "").strip()
-
-    stmt = select(Document).join(Document.source).options(joinedload(Document.source))
-
-    if q:
-        pattern = f"%{q}%"
-        stmt = stmt.where(
-            or_(
-                Document.title.ilike(pattern),
-                Document.document_reference.ilike(pattern),
-                PublishingSource.name.ilike(pattern),
-            )
-        )
-    if status:
-        stmt = stmt.where(Document.status == status)
-    if document_type:
-        stmt = stmt.where(Document.document_type == document_type)
-
-    stmt = stmt.order_by(
-        case((Document.status == "incomplete", 0), else_=1),
-        case((Document.published_date.is_(None), 1), else_=0),
-        Document.published_date.desc(),
-        case((Document.accessed_date.is_(None), 1), else_=0),
-        Document.accessed_date.desc(),
-        Document.title.asc(),
-        Document.id.asc(),
-    )
-
-    documents = db.scalars(stmt).unique().all()
-    document_types = db.scalars(
-        select(Document.document_type)
-        .where(Document.document_type.is_not(None), Document.document_type != "")
-        .distinct()
-        .order_by(Document.document_type)
-    ).all()
-    total_document_count = db.scalar(select(func.count(Document.id))) or 0
-
-    return templates.TemplateResponse(
-        request=request,
-        name="documents/list.html",
-        context={
-            "documents": documents,
-            "document_types": document_types,
-            "known_statuses": sorted(DOCUMENT_STATUSES),
-            "total_document_count": total_document_count,
-            "q": q,
-            "status": status,
-            "document_type": document_type,
-            "filters_active": bool(q or status or document_type),
-        },
-    )
-
-
-@app.get("/documents/{document_id}", response_class=HTMLResponse)
-def document_detail(request: Request, document_id: int, db: Session = Depends(get_db)):
-    document = db.scalar(
-        select(Document)
-        .where(Document.id == document_id)
-        .options(joinedload(Document.source))
-    )
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    return templates.TemplateResponse(
-        request=request,
-        name="documents/detail.html",
-        context={"document": document},
     )
 
 
