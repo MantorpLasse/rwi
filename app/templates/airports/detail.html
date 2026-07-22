@@ -2,7 +2,7 @@
 {% block title %}{{ airport.name }} · RW Intelligence{% endblock %}
 {% block content %}
 <div class="mb-4">
-    <div class="text-secondary">{{ airport.iata_code }} / {{ airport.icao_code }}</div>
+    <div class="text-secondary">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }}</div>
     <h1>{{ airport.name }}</h1>
     <p>{{ airport.city }}, {{ airport.state_region }} · {{ airport.country }}</p>
 </div>

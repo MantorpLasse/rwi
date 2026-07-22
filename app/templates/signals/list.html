@@ -43,7 +43,7 @@
             <tbody>
             {% for signal in signals %}
             <tr>
-                <td><a href="/airports/{{ signal.airport.id }}">{{ signal.airport.iata_code }}</a></td>
+                <td><a href="/airports/{{ signal.airport.id }}">{{ signal.airport|airport_code }}</a></td>
                 <td><a href="/signals/{{ signal.id }}">{{ signal.title }}</a></td>
                 <td>{{ signal.category }}</td>
                 <td><span class="badge text-bg-secondary">{{ signal.status or "–" }}</span></td>

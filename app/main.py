@@ -29,6 +29,19 @@ def _format_datetime(value: object) -> str:
 templates.env.filters["datetime"] = _format_datetime
 
 
+def _airport_code(airport: Airport) -> str:
+    """The best identifying code we have for an airport.
+
+    Airports imported from the FAA EMAS CSVs only ever get faa_code filled in
+    (see scripts/import_faa_csv.py) - falling back to it here avoids literally
+    printing "None" for any airport without an IATA/ICAO code.
+    """
+    return airport.iata_code or airport.icao_code or airport.faa_code or "–"
+
+
+templates.env.filters["airport_code"] = _airport_code
+
+
 def _parse_optional_int(value: Optional[str], *, minimum: int, maximum: int) -> Optional[int]:
     """Parse a query-string int, treating blank/invalid/out-of-range input as "no filter"."""
     if value is None or not value.strip():
