@@ -1,15 +1,17 @@
 {% extends "base.html" %}
+{% from "_components.html" import sign, gauge, cat %}
 {% block title %}{{ signal.title }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <div class="breadcrumbs"><a href="{{ root }}/signals/index.html">← Signaler</a></div>
 <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap">
   <div>
     <p class="subtitle" style="margin-bottom:4px">
-      <a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ signal.airport_code }} · {{ signal.airport_name }}</a>
+      <a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }} {{ signal.airport_name }}</a>
     </p>
     <h1>{{ signal.title }}</h1>
-    <span class="pill status">{{ signal.status or signal.category }}</span>
-    <span class="pill confidence-{{ signal.confidence_class }}">{{ signal.confidence }}</span>
+    <span class="pill status">{{ signal.status or signal.category_label }}</span>
+    {{ cat(signal.category_label, signal.category_class) }}
+    {{ gauge(signal.confidence_level, signal.confidence_label) }}
   </div>
   {% if signal.probability_score is not none %}
   <span class="score" style="font-size:1.5rem">{{ "%.1f"|format(signal.probability_score) }}</span>
@@ -23,12 +25,12 @@
       <div class="card-body">
         <p>{{ signal.notes or "Inga anteckningar." }}</p>
         <dl class="meta">
-          <dt>Kategori</dt><dd>{{ signal.category }}</dd>
+          <dt>Kategori</dt><dd>{{ cat(signal.category_label, signal.category_class) }}</dd>
           <dt>Status</dt><dd>{{ signal.status or "–" }}</dd>
-          <dt>Confidence</dt><dd>{{ signal.confidence }}</dd>
-          <dt>Planeringsår</dt><dd>{{ signal.planning_year or "–" }}</dd>
-          <dt>Upphandlingsår</dt><dd>{{ signal.procurement_year or "–" }}</dd>
-          <dt>Bana</dt><dd>{{ signal.runway_designation or "–" }}</dd>
+          <dt>Confidence</dt><dd>{{ gauge(signal.confidence_level, signal.confidence_label) }}</dd>
+          <dt>Planeringsår</dt><dd class="mono">{{ signal.planning_year or "–" }}</dd>
+          <dt>Upphandlingsår</dt><dd class="mono">{{ signal.procurement_year or "–" }}</dd>
+          <dt>Bana</dt><dd class="mono">{{ signal.runway_designation or "–" }}</dd>
           <dt>Trolig leverantör</dt><dd>{{ signal.likely_supplier or "Inte bedömd" }}</dd>
           <dt>Motivering</dt><dd>{{ signal.supplier_reason or "–" }}</dd>
         </dl>
@@ -40,10 +42,10 @@
       <div class="card-body">
         {% if signal.source_title %}
         <h2>{{ signal.source_title }}</h2>
-        <p style="color:var(--text-muted); margin-top:-6px">{{ signal.source_publisher or "" }}{% if signal.source_publisher and signal.source_type %} · {% endif %}{{ signal.source_type or "" }}</p>
+        <p style="color:var(--text-dim); margin-top:-6px">{{ signal.source_publisher or "" }}{% if signal.source_publisher and signal.source_type %} · {% endif %}{{ signal.source_type or "" }}</p>
         <a href="{{ signal.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
         {% else %}
-        <span style="color:var(--text-muted)">Ingen källa kopplad ännu.</span>
+        <span style="color:var(--text-dim)">Ingen källa kopplad ännu.</span>
         {% endif %}
       </div>
     </div>
@@ -53,11 +55,11 @@
     <div class="card">
       <div class="card-header">Ekonomi</div>
       <div class="card-body">
-        <div style="color:var(--text-muted); font-size:0.85rem">Total projektbudget</div>
+        <div style="color:var(--text-dim); font-size:0.85rem">Total projektbudget</div>
         <div class="money" style="font-size:1.3rem; margin-bottom:14px">
           {% if signal.estimated_total_value_usd %}${{ "{:,.0f}".format(signal.estimated_total_value_usd) }}{% else %}–{% endif %}
         </div>
-        <div style="color:var(--text-muted); font-size:0.85rem">Bedömd EMAS-del</div>
+        <div style="color:var(--text-dim); font-size:0.85rem">Bedömd EMAS-del</div>
         <div class="money" style="font-size:1.3rem">
           {% if signal.estimated_emas_value_usd %}${{ "{:,.0f}".format(signal.estimated_emas_value_usd) }}{% else %}–{% endif %}
         </div>

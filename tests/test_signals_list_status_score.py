@@ -61,7 +61,7 @@ def test_incident_triggered_signal_shows_a_real_status_badge_and_a_score(client_
 
     assert response.status_code == 200
     html = response.text
-    assert "Replacement expected after incident" in html
+    assert "EMAS-ersättning väntas efter incident" in html
 
     # The status badge must contain real text, not be empty next to "high".
     assert '<span class="badge text-bg-secondary">identified</span>' in html

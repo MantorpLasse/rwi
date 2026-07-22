@@ -60,7 +60,8 @@ def test_incident_triggered_signal_shows_faa_code_not_none_in_signals_list(clien
         response = client.get("/signals")
 
     assert response.status_code == 200
-    assert "Replacement expected after incident" in response.text
+    assert "Bob Hope" in response.text
+    assert "EMAS-ersättning väntas efter incident" in response.text
     assert "BUR" in response.text
     assert ">None<" not in response.text
 

@@ -1,0 +1,18 @@
+{# Återanvändbara byggstenar för hela sajten – se DESIGN_BRIEF.md.
+   Importeras med `{% from "_components.html" import sign, gauge, cat %}`. #}
+
+{% macro sign(code, name) -%}
+{%- if code and code != "–" -%}
+<span class="sign" title="{{ name }}">{{ code }}</span>
+{%- else -%}
+<span style="color:var(--text-faint)">–</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro gauge(level, label) -%}
+<div class="gauge {{ level }}"><span></span><span></span><span></span><span class="gauge-label">{{ label }}</span></div>
+{%- endmacro %}
+
+{% macro cat(label, css_class) -%}
+<span class="cat {{ css_class }}">{{ label }}</span>
+{%- endmacro %}

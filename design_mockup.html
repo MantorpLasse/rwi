@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<title>RWI — design mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B1220; --panel:#131B2C; --panel2:#0F1729; --border:#263349;
+    --text:#EDE6D6; --text-dim:#8B96AC; --text-faint:#5A6580;
+    --accent:#F2B705; --accent-ink:#3B2B00;
+    --high:#D4507A; --high-bg:#3A1A28; --high-ink:#F6C3D4;
+    --med:#E8871E; --med-bg:#3A2812; --med-ink:#F7CE9C;
+    --low:#4A5A78; --low-bg:#1B2436; --low-ink:#AEB9CE;
+    --verified:#3FA34D;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;padding:32px;}
+  .display{font-family:'Space Grotesk',sans-serif;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+
+  .topbar{display:flex;align-items:center;gap:0;background:var(--panel);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:20px;}
+  .stat{flex:1;padding:14px 20px;border-right:1px solid var(--border);}
+  .stat:last-child{border-right:none;}
+  .stat .n{font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:500;color:var(--accent);}
+  .stat .l{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);margin-top:2px;}
+
+  .layout{display:grid;grid-template-columns:220px 1fr;gap:20px;}
+
+  .rail{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:16px;align-self:start;}
+  .rail h4{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);margin:0 0 10px;font-weight:500;}
+  .search{width:100%;background:var(--panel2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:8px 10px;font-size:13px;margin-bottom:16px;}
+  .chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;}
+  .filter-chip{font-size:11px;padding:4px 9px;border-radius:3px;border:1px solid var(--border);color:var(--text-dim);cursor:pointer;}
+  .filter-chip.on{border-color:var(--accent);color:var(--accent);background:rgba(242,183,5,.08);}
+
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+  thead th{text-align:left;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);font-weight:500;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel2);}
+  tbody td{padding:11px 14px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:rgba(255,255,255,.02);}
+
+  .sign{display:inline-block;background:var(--accent);color:var(--accent-ink);font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12px;padding:3px 8px;border-radius:4px;cursor:default;letter-spacing:.02em;}
+
+  .cat{font-size:11px;padding:3px 8px;border-radius:3px;display:inline-block;}
+  .cat.new{background:#0F3A30;color:#6FD9B8;}
+  .cat.replace{background:var(--med-bg);color:var(--med-ink);}
+  .cat.incident{background:var(--high-bg);color:var(--high-ink);}
+  .cat.study{background:var(--low-bg);color:var(--low-ink);}
+
+  .gauge{display:flex;gap:2px;align-items:center;}
+  .gauge span{width:5px;height:12px;border-radius:1px;background:var(--border);}
+  .gauge.high span:nth-child(-n+3){background:var(--high);}
+  .gauge.med span:nth-child(-n+2){background:var(--med);}
+  .gauge.low span:nth-child(-n+1){background:var(--low-ink);}
+  .gauge-label{font-size:10px;color:var(--text-faint);margin-left:6px;text-transform:uppercase;letter-spacing:.04em;}
+
+  .src{font-size:10px;color:var(--text-faint);}
+  .score{font-family:'IBM Plex Mono',monospace;font-weight:500;color:var(--text);}
+</style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="stat"><div class="n">73</div><div class="l">Flygplatser</div></div>
+    <div class="stat"><div class="n">70</div><div class="l">Installationer</div></div>
+    <div class="stat"><div class="n">51</div><div class="l">Aktiva signaler</div></div>
+    <div class="stat"><div class="n" style="color:var(--high)">12</div><div class="l">Hög confidence</div></div>
+  </div>
+
+  <div class="layout">
+    <div class="rail">
+      <h4>Sök</h4>
+      <input class="search" placeholder="Flygplats, kod, delstat…">
+      <h4>Kategori</h4>
+      <div class="chip-row">
+        <div class="filter-chip on">Alla</div>
+        <div class="filter-chip">Ny installation</div>
+        <div class="filter-chip">Ersättning</div>
+        <div class="filter-chip">Studie</div>
+      </div>
+      <h4>Confidence</h4>
+      <div class="chip-row">
+        <div class="filter-chip">Hög</div>
+        <div class="filter-chip">Medel</div>
+        <div class="filter-chip">Låg</div>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Flygplats</th><th>Signal</th><th>Kategori</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="sign" title="Manchester–Boston Regional Airport">MHT</span></td>
+          <td>Runway 6/24 EMAS-ersättning, avgångsände</td>
+          <td><span class="cat replace">Ersättning</span></td>
+          <td><div class="gauge high"><span></span><span></span><span></span><span class="gauge-label">Hög</span></div></td>
+          <td class="mono">2026</td>
+          <td class="src">AIP-bidrag</td>
+          <td class="score">10.0</td>
+        </tr>
+        <tr>
+          <td><span class="sign" title="Aspen–Pitkin County Airport">ASE</span></td>
+          <td>Framtida EMAS vid båda banändar</td>
+          <td><span class="cat new">Ny installation</span></td>
+          <td><div class="gauge med"><span></span><span></span><span class="gauge-label">Medel</span></div></td>
+          <td class="mono">2027</td>
+          <td class="src">ALP</td>
+          <td class="score">8.5</td>
+        </tr>
+        <tr>
+          <td><span class="sign" title="Chicago Executive Airport">PWK</span></td>
+          <td>Ersättning väntad efter incident, 2025-09-01</td>
+          <td><span class="cat incident">Efter incident</span></td>
+          <td><div class="gauge high"><span></span><span></span><span></span><span class="gauge-label">Hög</span></div></td>
+          <td class="mono">–</td>
+          <td class="src">FAA-karta</td>
+          <td class="score">8.0</td>
+        </tr>
+        <tr>
+          <td><span class="sign" title="Kansas City Downtown Airport">MKC</span></td>
+          <td>Livscykel- och ersättningsstudie pågår</td>
+          <td><span class="cat study">Studie</span></td>
+          <td><div class="gauge low"><span></span><span class="gauge-label">Låg</span></div></td>
+          <td class="mono">2026</td>
+          <td class="src">Master plan</td>
+          <td class="score">6.5</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</body>
+</html>

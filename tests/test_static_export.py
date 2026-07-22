@@ -51,7 +51,8 @@ def test_build_site_writes_expected_pages_and_data(tmp_path):
     signal_html = (output / "signals" / "1.html").read_text(encoding="utf-8")
     assert "ASE" in signal_html
     assert "Master Plan" in signal_html
-    assert "confidence-high" in signal_html
+    assert "gauge high" in signal_html
+    assert "Ny installation" in signal_html  # category label, not the raw "new_installation"
 
     data = json.loads((output / "data.json").read_text(encoding="utf-8"))
     assert len(data["airports"]) == 1

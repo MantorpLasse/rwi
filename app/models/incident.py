@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, String, Text, event, insert
+from sqlalchemy import Boolean, Date, ForeignKey, String, Text, event, insert, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -41,6 +41,30 @@ class Incident(Base):
     source: Mapped[Optional["Source"]] = relationship()
 
 
+def _replacement_signal_title(connection, target: "Incident") -> str:
+    """Names the airport (and runway, if known) instead of the bare, repeated
+    "Replacement expected after incident on {date}" every incident used to get -
+    that read identically across dozens of unrelated airports in the signals list."""
+    from app.models.airport import Airport, Runway
+
+    airport_name = connection.execute(
+        select(Airport.name).where(Airport.id == target.airport_id)
+    ).scalar_one()
+
+    runway_designation = None
+    if target.runway_id is not None:
+        runway_designation = connection.execute(
+            select(Runway.designation).where(Runway.id == target.runway_id)
+        ).scalar_one_or_none()
+
+    if runway_designation:
+        return (
+            f"{airport_name} — Runway {runway_designation} EMAS-ersättning väntas "
+            f"efter incident ({target.incident_date})"
+        )
+    return f"{airport_name} — EMAS-ersättning väntas efter incident ({target.incident_date})"
+
+
 @event.listens_for(Incident, "after_insert")
 def _create_replacement_signal(_mapper, connection, target: "Incident") -> None:
     from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE, Signal
@@ -54,7 +78,7 @@ def _create_replacement_signal(_mapper, connection, target: "Incident") -> None:
             airport_id=target.airport_id,
             runway_id=target.runway_id,
             source_id=target.source_id,
-            title=f"Replacement expected after incident on {target.incident_date}",
+            title=_replacement_signal_title(connection, target),
             category="replacement_after_incident",
             confidence=confidence,
             status="identified",

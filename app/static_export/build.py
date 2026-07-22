@@ -18,30 +18,62 @@ from app.models import Airport, Signal
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
-_CONFIDENCE_CLASS = {
+# Confidence, as recorded in the database, has finer shades ("confirmed" vs
+# "high", "programmed" vs "medium") than the 3-bar gauge component can show -
+# see DESIGN_BRIEF.md's "Confidence som gauge, inte badge-text". Every value
+# buckets into exactly one of the gauge's three visual levels.
+_CONFIDENCE_LEVEL = {
     "high": "high",
     "confirmed": "high",
-    "medium": "medium",
-    "programmed": "medium",
+    "medium": "med",
+    "programmed": "med",
     "low": "low",
     "planned": "low",
     "speculative": "low",
     "unknown": "low",
 }
 
+_CONFIDENCE_LABEL = {"high": "Hög", "med": "Medel", "low": "Låg"}
 
-def _confidence_class(value: str | None) -> str:
-    return _CONFIDENCE_CLASS.get((value or "").lower(), "low")
+# Category text mapping — the single place the rest of the site imports from,
+# per DESIGN_BRIEF.md's "Bygg denna mappning på ett ställe". Never show a raw
+# database category value in a template. new_installation/replacement/
+# replacement_after_incident/study/potential_new_construction are the values
+# the brief lists explicitly; maintenance/replacement_watch/unknown are real
+# values already present in production data that also need a label.
+_CATEGORY = {
+    "new_installation": ("Ny installation", "new"),
+    "replacement": ("Ersättning", "replace"),
+    "replacement_after_incident": ("Efter incident", "incident"),
+    "study": ("Studie", "study"),
+    "potential_new_construction": ("Möjlig ny installation", "new"),
+    "maintenance": ("Underhåll", "study"),
+    "replacement_watch": ("Ersättning – bevakas", "replace"),
+    "unknown": ("Ej klassificerad", "study"),
+}
+
+
+def _confidence_level(value: str | None) -> str:
+    return _CONFIDENCE_LEVEL.get((value or "").lower(), "low")
+
+
+def _category_view(value: str | None) -> tuple[str, str]:
+    return _CATEGORY.get(value or "", (value or "Okänd", "study"))
 
 
 def _signal_view(signal: Signal) -> SimpleNamespace:
     source = signal.source
+    category_label, category_class = _category_view(signal.category)
+    confidence_level = _confidence_level(signal.confidence)
     return SimpleNamespace(
         id=signal.id,
         title=signal.title,
         category=signal.category,
+        category_label=category_label,
+        category_class=category_class,
         confidence=signal.confidence,
-        confidence_class=_confidence_class(signal.confidence),
+        confidence_level=confidence_level,
+        confidence_label=_CONFIDENCE_LABEL[confidence_level],
         status=signal.status,
         planning_year=signal.planning_year,
         procurement_year=signal.procurement_year,
@@ -172,9 +204,9 @@ def _build(output_dir: Path, session: Session) -> None:
         output_dir / "index.html",
         root=".",
         airport_count=len(airport_views),
+        installation_count=sum(len(a.installations) for a in airport_views),
         signal_count=len(signal_views),
-        confirmed_count=sum(1 for s in signal_views if s.confidence == "confirmed"),
-        high_score_count=sum(1 for s in signal_views if (s.probability_score or 0) >= 8),
+        high_confidence_count=sum(1 for s in signal_views if s.confidence_level == "high"),
         top_signals=signal_views[:8],
     )
 

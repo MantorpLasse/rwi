@@ -1,38 +1,39 @@
 :root {
-  --bg: #f7f8fa;
-  --surface: #ffffff;
-  --border: #e4e7ec;
-  --text: #14181f;
-  --text-muted: #5b6472;
-  --accent: #2660d6;
-  --accent-soft: #eaf0fd;
-  --high: #1c7c4d;
-  --high-soft: #e5f5ec;
-  --medium: #9a6b0a;
-  --medium-soft: #fbf1dc;
-  --low: #5b6472;
-  --low-soft: #eef0f3;
-  --radius: 10px;
-  --shadow: 0 1px 2px rgba(20, 24, 31, 0.04), 0 8px 24px rgba(20, 24, 31, 0.05);
-}
+  /* Base palette — flygplatsens egen visuella värld (skyltar, ATC-instrument,
+     sektionskartor), inte generisk mörk fintech-terminal. Fast mörkt tema,
+     inget ljust läge — se DESIGN_BRIEF.md. */
+  --bg: #0b1220;
+  --panel: #131b2c;
+  --panel2: #0f1729;
+  --border: #263349;
+  --text: #ede6d6;
+  --text-dim: #8b96ac;
+  --text-faint: #5a6580;
+  --accent: #f2b705;
+  --accent-ink: #3b2b00;
+  --high: #d4507a;
+  --high-bg: #3a1a28;
+  --high-ink: #f6c3d4;
+  --med: #e8871e;
+  --med-bg: #3a2812;
+  --med-ink: #f7ce9c;
+  --low: #4a5a78;
+  --low-bg: #1b2436;
+  --low-ink: #aeb9ce;
+  --verified: #3fa34d;
+  /* Extension: "new installation" category needs its own token too — the
+     brief's own mockup hardcodes a teal for .cat.new, which would violate
+     "never hardcode hex in components" if copied as-is. */
+  --new: #6fd9b8;
+  --new-bg: #0f3a30;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --surface: #171a21;
-    --border: #262b35;
-    --text: #e7e9ee;
-    --text-muted: #9199a8;
-    --accent: #7ba3ff;
-    --accent-soft: #1b2a4d;
-    --high: #4fd18b;
-    --high-soft: #103622;
-    --medium: #e0b356;
-    --medium-soft: #3a2d10;
-    --low: #9199a8;
-    --low-soft: #22262f;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
-  }
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  --radius: 6px;
+  --radius-sm: 4px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 * {
@@ -40,14 +41,14 @@
 }
 
 html {
-  color-scheme: light dark;
+  color-scheme: dark;
 }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-body);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -69,7 +70,7 @@ a:hover {
 
 header.site {
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--panel);
   margin-bottom: 32px;
 }
 
@@ -84,7 +85,8 @@ header.site .wrap {
 }
 
 .brand {
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-weight: 600;
   font-size: 1.05rem;
   letter-spacing: -0.01em;
 }
@@ -94,7 +96,7 @@ header.site .wrap {
 }
 
 nav.site a {
-  color: var(--text-muted);
+  color: var(--text-dim);
   margin-left: 18px;
   font-size: 0.92rem;
   font-weight: 500;
@@ -110,52 +112,73 @@ nav.site a:hover {
 }
 
 h1 {
+  font-family: var(--font-display);
   font-size: 1.6rem;
+  font-weight: 600;
   letter-spacing: -0.015em;
   margin: 0 0 6px;
 }
 
 h2 {
+  font-family: var(--font-display);
   font-size: 1.1rem;
+  font-weight: 600;
   letter-spacing: -0.01em;
   margin: 0 0 12px;
 }
 
 .subtitle {
-  color: var(--text-muted);
+  color: var(--text-dim);
   margin: 0 0 28px;
   font-size: 0.98rem;
 }
 
+/* Statusremsa (toppbar) — kompakt, max 4-5 tal, de viktigaste. */
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 14px;
+  gap: 0;
   margin-bottom: 32px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 
 .stat {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px 18px;
+  padding: 14px 20px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.stat:nth-last-child(-n + 1) {
+  border-right: none;
+}
+
+@media (min-width: 561px) {
+  .stat {
+    border-bottom: none;
+  }
 }
 
 .stat .label {
-  color: var(--text-muted);
-  font-size: 0.82rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
   font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .stat .value {
-  font-size: 1.9rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 1.7rem;
+  font-weight: 500;
+  color: var(--accent);
+  margin-top: 2px;
 }
 
 .card {
-  background: var(--surface);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -166,6 +189,7 @@ h2 {
 .card .card-header {
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
+  background: var(--panel2);
   font-weight: 600;
   font-size: 0.95rem;
 }
@@ -182,17 +206,18 @@ table {
 
 th, td {
   text-align: left;
-  padding: 11px 18px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
 th {
-  color: var(--text-muted);
-  font-weight: 600;
-  font-size: 0.78rem;
+  color: var(--text-faint);
+  font-weight: 500;
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  background: var(--panel2);
 }
 
 tbody tr:last-child td {
@@ -200,7 +225,7 @@ tbody tr:last-child td {
 }
 
 tbody tr:hover {
-  background: var(--accent-soft);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 td.title {
@@ -208,27 +233,87 @@ td.title {
   min-width: 220px;
 }
 
-.pill {
+/* Flygplats-skylt — signaturkomponenten. Överallt en flygplatskod visas. */
+.sign {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.02em;
+  cursor: default;
+}
+
+/* Kategori-badge — text kommer alltid från den centrala mappningen, aldrig
+   ett råt databasvärde. */
+.cat {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.cat.new { background: var(--new-bg); color: var(--new); }
+.cat.replace { background: var(--med-bg); color: var(--med-ink); }
+.cat.incident { background: var(--high-bg); color: var(--high-ink); }
+.cat.study { background: var(--low-bg); color: var(--low-ink); }
+
+/* Confidence som gauge, inte badge-text. */
+.gauge {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.gauge span:not(.gauge-label) {
+  width: 5px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--border);
+}
+
+.gauge.high span:nth-child(-n + 3) { background: var(--high); }
+.gauge.med span:nth-child(-n + 2) { background: var(--med); }
+.gauge.low span:nth-child(-n + 1) { background: var(--low-ink); }
+
+.gauge-label {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-left: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.pill.status {
   display: inline-block;
   padding: 3px 10px;
   border-radius: 999px;
   font-size: 0.78rem;
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
 }
 
-.pill.confidence-high { background: var(--high-soft); color: var(--high); }
-.pill.confidence-medium { background: var(--medium-soft); color: var(--medium); }
-.pill.confidence-low, .pill.confidence-confirmed.unknown { background: var(--low-soft); color: var(--low); }
-.pill.confidence-confirmed { background: var(--high-soft); color: var(--high); }
-.pill.confidence-programmed { background: var(--medium-soft); color: var(--medium); }
-.pill.confidence-planned { background: var(--low-soft); color: var(--low); }
-.pill.confidence-speculative { background: var(--low-soft); color: var(--low); }
-.pill.status { background: var(--low-soft); color: var(--text-muted); }
-
 .score {
-  font-weight: 700;
-  color: var(--accent);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.src {
+  font-size: 0.78rem;
+  color: var(--text-faint);
 }
 
 .filters {
@@ -241,8 +326,8 @@ td.title {
 .filters input, .filters select {
   padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background: var(--panel2);
   color: var(--text);
   font-size: 0.9rem;
   font-family: inherit;
@@ -255,7 +340,7 @@ td.title {
 .empty-state {
   padding: 40px 18px;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--text-dim);
 }
 
 dl.meta {
@@ -266,7 +351,7 @@ dl.meta {
 }
 
 dl.meta dt {
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-size: 0.85rem;
 }
 
@@ -275,7 +360,7 @@ dl.meta dd {
 }
 
 .breadcrumbs {
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-size: 0.88rem;
   margin-bottom: 8px;
 }
@@ -299,7 +384,7 @@ dl.meta dd {
   }
   tbody tr {
     border-bottom: 1px solid var(--border);
-    padding: 10px 18px;
+    padding: 10px 14px;
   }
   td {
     border-bottom: none;
@@ -312,17 +397,27 @@ dl.meta dd {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--text-muted);
+    color: var(--text-faint);
     margin-bottom: 2px;
+  }
+}
+
+@media (max-width: 560px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .stat:nth-child(2n) {
+    border-right: none;
   }
 }
 
 .money {
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 
 footer.site {
-  color: var(--text-muted);
+  color: var(--text-faint);
   font-size: 0.85rem;
   margin-top: 40px;
 }

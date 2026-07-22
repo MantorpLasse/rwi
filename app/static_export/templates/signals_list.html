@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_components.html" import sign, gauge, cat %}
 {% block title %}Signaler · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <h1>Signaler</h1>
@@ -19,7 +20,7 @@
 <div class="card">
   <table id="signals-table">
     <thead>
-      <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>Confidence</th><th>År</th><th>Score</th></tr>
+      <tr><th>Flygplats</th><th>Signal</th><th>Kategori</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
     </thead>
     <tbody>
       {% for signal in signals %}
@@ -28,15 +29,16 @@
         data-status="{{ signal.status or '' }}"
         data-country="{{ signal.country }}"
       >
-        <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ signal.airport_code }}</a></td>
+        <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }}</a></td>
         <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-        <td data-label="Status"><span class="pill status">{{ signal.status or signal.category }}</span></td>
-        <td data-label="Confidence"><span class="pill confidence-{{ signal.confidence_class }}">{{ signal.confidence }}</span></td>
-        <td data-label="År">{{ signal.planning_year or "–" }}</td>
+        <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
+        <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label) }}</td>
+        <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
+        <td data-label="Källa" class="src">{{ signal.source_type or "–" }}</td>
         <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty-state">Inga signaler registrerade.</td></tr>
+      <tr><td colspan="7" class="empty-state">Inga signaler registrerade.</td></tr>
       {% endfor %}
     </tbody>
   </table>

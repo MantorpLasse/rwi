@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% from "_components.html" import sign, gauge, cat %}
 {% block title %}{{ airport.name }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a></div>
-<h1>{{ airport.name }}</h1>
+<h1><span style="margin-right:10px; display:inline-block">{{ sign(airport.iata_code or airport.icao_code or airport.faa_code or "–", airport.name) }}</span>{{ airport.name }}</h1>
 <p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
 
 <div class="grid-2">
@@ -11,14 +12,15 @@
       <div class="card-header">Signaler</div>
       {% if airport.signals %}
       <table>
-        <thead><tr><th>Signal</th><th>Status</th><th>Confidence</th><th>År</th><th>Score</th></tr></thead>
+        <thead><tr><th>Signal</th><th>Kategori</th><th>Status</th><th>Confidence</th><th>År</th><th>Score</th></tr></thead>
         <tbody>
           {% for signal in airport.signals %}
           <tr>
             <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-            <td data-label="Status"><span class="pill status">{{ signal.status or signal.category }}</span></td>
-            <td data-label="Confidence"><span class="pill confidence-{{ signal.confidence_class }}">{{ signal.confidence }}</span></td>
-            <td data-label="År">{{ signal.planning_year or "–" }}</td>
+            <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
+            <td data-label="Status"><span class="pill status">{{ signal.status or signal.category_label }}</span></td>
+            <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label) }}</td>
+            <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
             <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
           </tr>
           {% endfor %}
@@ -39,7 +41,7 @@
           <tr>
             <td data-label="Typ">{{ installation.type or "–" }}</td>
             <td data-label="Bana/ände">{{ installation.runway_end or "–" }}</td>
-            <td data-label="Installerad">{{ installation.install_year or "–" }}</td>
+            <td data-label="Installerad" class="mono">{{ installation.install_year or "–" }}</td>
             <td data-label="Status">{{ installation.status or "–" }}</td>
           </tr>
           {% endfor %}
@@ -58,7 +60,7 @@
         <tbody>
           {% for incident in airport.incidents %}
           <tr>
-            <td data-label="Datum">{{ incident.incident_date }}</td>
+            <td data-label="Datum" class="mono">{{ incident.incident_date }}</td>
             <td data-label="Typ">{{ incident.incident_type }}</td>
             <td data-label="EMAS">{{ "Ja" if incident.emas_engaged else "Nej" }}</td>
           </tr>
@@ -78,12 +80,12 @@
         {% if airport.runways %}
         {% for runway in airport.runways %}
         <div style="margin-bottom:10px">
-          <strong>{{ runway.designation }}</strong><br>
-          <span style="color:var(--text-muted); font-size:0.88rem">{{ runway.length_m or "–" }} × {{ runway.width_m or "–" }} m</span>
+          <strong class="mono">{{ runway.designation }}</strong><br>
+          <span style="color:var(--text-dim); font-size:0.88rem" class="mono">{{ runway.length_m or "–" }} × {{ runway.width_m or "–" }} m</span>
         </div>
         {% endfor %}
         {% else %}
-        <span style="color:var(--text-muted)">Inga banor registrerade.</span>
+        <span style="color:var(--text-dim)">Inga banor registrerade.</span>
         {% endif %}
       </div>
     </div>
