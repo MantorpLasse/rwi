@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+# If this server-side session flow starts failing often because Tableau requires
+# running its JavaScript client to produce a real session (see
+# TableauClientBootstrapRequiredError below), there's an already-verified fallback:
+# capture the bootstrap payload manually via the browser's DevTools Network tab
+# (filter on "bootstrap") and parse it offline. We already have a working parser for
+# that format (length-prefixed JSON, two segments, a dataDictionary with
+# cstring/real/integer columns referenced by index from paneColumnsData). Ask for
+# that parser to be described in detail if you want it added here as a fallback.
+
 import html
 import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
 from html.parser import HTMLParser
 from time import perf_counter
 from pathlib import Path
@@ -25,33 +33,41 @@ _SUPPORTED_BOOTSTRAP_MEDIA_TYPES = {
 }
 
 
-class TableauAcquisitionErrorCode(str, Enum):
-    CONFIGURATION_MISSING = "tableau_configuration_missing"
-    SESSION_CREATION_FAILED = "tableau_session_creation_failed"
-    BOOTSTRAP_RETRIEVAL_FAILED = "tableau_bootstrap_retrieval_failed"
-    UNEXPECTED_MEDIA_TYPE = "tableau_unexpected_media_type"
-    UNSUPPORTED_RESPONSE = "unsupported_tableau_response"
-    CLIENT_BOOTSTRAP_REQUIRED = "tableau_client_bootstrap_required"
-    AMBIGUOUS_CONFIGURATION = "tableau_ambiguous_configuration"
-    CONFLICTING_CONFIGURATION = "tableau_conflicting_configuration"
-    PREBOOTSTRAP_REQUEST_AMBIGUOUS = "tableau_prebootstrap_request_ambiguous"
-    PREBOOTSTRAP_REQUIRED_VALUE_MISSING = (
-        "tableau_prebootstrap_required_value_missing"
-    )
-
-
 class TableauAcquisitionError(ValueError):
-    def __init__(
-        self,
-        code: TableauAcquisitionErrorCode,
-        message: str,
-        *,
-        diagnostic: "TableauDiagnostic | None" = None,
-    ) -> None:
+    """Base for all FAA Tableau acquisition failures."""
+
+    code = "tableau_acquisition_error"
+
+    def __init__(self, message: str, *, diagnostic: "TableauDiagnostic | None" = None) -> None:
         super().__init__(message)
-        self.error_code = code
-        self.code = code.value
         self.diagnostic = diagnostic
+
+
+class TableauConfigurationError(TableauAcquisitionError):
+    """Configuration (view URL, session config, PreBootstrap asset) could not be
+    found in, or unambiguously parsed from, the FAA article/view HTML."""
+
+    code = "tableau_configuration_error"
+
+
+class TableauSessionError(TableauAcquisitionError):
+    """The Tableau viewing session or bootstrap request could not be established."""
+
+    code = "tableau_session_error"
+
+
+class TableauClientBootstrapRequiredError(TableauSessionError):
+    """The HTML says the real session can only be produced by running Tableau's
+    JavaScript client - see the module comment above for the DevTools fallback."""
+
+    code = "tableau_client_bootstrap_required"
+
+
+class TableauResponseError(TableauAcquisitionError):
+    """The bootstrap response had the wrong shape: empty, wrong media type, or HTML
+    instead of the expected opaque payload."""
+
+    code = "tableau_response_error"
 
 
 @dataclass(frozen=True)
@@ -120,22 +136,16 @@ def sanitize_tableau_diagnostic_html(payload: bytes) -> str:
     return _SENSITIVE_QUERY.sub(r"\1[redacted]", text)
 
 
-class _ArticleParser(HTMLParser):
+class _TableauHtmlParser(HTMLParser):
+    """Extracts everything we look for across the FAA article and Tableau view HTML.
+
+    The article only ever contains the iframe, and the view only ever contains the
+    textarea/script tags, so watching for all of them in one pass is safe.
+    """
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.tableau_view_url: str | None = None
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        if tag.lower() != "iframe" or self.tableau_view_url is not None:
-            return
-        source = dict(attrs).get("src")
-        if source and "EMASIncidentsandInstallations" in source:
-            self.tableau_view_url = source
-
-
-class _TableauConfigParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
         self._active_container: str | None = None
         self._parts: dict[str, list[str]] = {
             "tsConfig": [],
@@ -146,11 +156,15 @@ class _TableauConfigParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs) -> None:
         values = dict(attrs)
-        if tag.lower() == "textarea" and values.get("id") in self._parts:
+        lowered_tag = tag.lower()
+        if lowered_tag == "iframe" and self.tableau_view_url is None:
+            source = values.get("src")
+            if source and "EMASIncidentsandInstallations" in source:
+                self.tableau_view_url = source
+        elif lowered_tag == "textarea" and values.get("id") in self._parts:
             self._active_container = values["id"]
-        source = values.get("src", "")
-        if tag.lower() == "script" and "PreBootstrap" in source:
-            self.prebootstrap_scripts.append(source)
+        elif lowered_tag == "script" and "PreBootstrap" in values.get("src", ""):
+            self.prebootstrap_scripts.append(values["src"])
 
     def handle_data(self, data: str) -> None:
         if self._active_container is not None:
@@ -169,31 +183,27 @@ def discover_prebootstrap_configuration(
 ) -> TableauPreBootstrapDiscovery:
     """Return only configuration present in HTML; never infer runtime state."""
 
-    parser = _TableauConfigParser()
+    parser = _TableauHtmlParser()
     parser.feed(response.text)
     distinct_assets = {urljoin(str(response.url), item) for item in parser.prebootstrap_scripts}
     if len(distinct_assets) > 1:
-        raise TableauAcquisitionError(
-            TableauAcquisitionErrorCode.PREBOOTSTRAP_REQUEST_AMBIGUOUS,
-            "FAA Tableau response contains multiple PreBootstrap asset candidates.",
+        raise TableauConfigurationError(
+            "FAA Tableau response contains multiple PreBootstrap asset candidates."
         )
     raw_static_config = parser.config("staticConfigContainer")
     if not distinct_assets or not raw_static_config:
-        raise TableauAcquisitionError(
-            TableauAcquisitionErrorCode.PREBOOTSTRAP_REQUIRED_VALUE_MISSING,
-            "FAA Tableau PreBootstrap asset or static configuration is missing.",
+        raise TableauConfigurationError(
+            "FAA Tableau PreBootstrap asset or static configuration is missing."
         )
     try:
         static_config = json.loads(raw_static_config)
     except json.JSONDecodeError as exc:
-        raise TableauAcquisitionError(
-            TableauAcquisitionErrorCode.PREBOOTSTRAP_REQUIRED_VALUE_MISSING,
-            "FAA Tableau static configuration is malformed.",
+        raise TableauConfigurationError(
+            "FAA Tableau static configuration is malformed."
         ) from exc
     if not isinstance(static_config, dict):
-        raise TableauAcquisitionError(
-            TableauAcquisitionErrorCode.PREBOOTSTRAP_REQUIRED_VALUE_MISSING,
-            "FAA Tableau static configuration is not an object.",
+        raise TableauConfigurationError(
+            "FAA Tableau static configuration is not an object."
         )
     return TableauPreBootstrapDiscovery(
         asset_url=distinct_assets.pop(),
@@ -238,16 +248,14 @@ class FAATableauAcquisitionProvider:
             )
             article.raise_for_status()
         except httpx.HTTPError as exc:
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.CONFIGURATION_MISSING,
-                "FAA EMAS article could not be retrieved.",
+            raise TableauConfigurationError(
+                "FAA EMAS article could not be retrieved."
             ) from exc
 
         view_url = self.tableau_view_url or self._discover_view_url(article)
         if view_url is None:
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.CONFIGURATION_MISSING,
-                "FAA article does not contain an EMAS Tableau view configuration.",
+            raise TableauConfigurationError(
+                "FAA article does not contain an EMAS Tableau view configuration."
             )
         view_url = urljoin(str(article.url), html.unescape(view_url))
 
@@ -258,16 +266,11 @@ class FAATableauAcquisitionProvider:
         except TableauAcquisitionError as exc:
             if self.diagnostic_directory is not None:
                 diagnostic = self._save_diagnostic(view)
-                raise TableauAcquisitionError(
-                    exc.error_code,
-                    str(exc),
-                    diagnostic=diagnostic,
-                ) from exc
+                raise type(exc)(str(exc), diagnostic=diagnostic) from exc
             raise
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.SESSION_CREATION_FAILED,
-                "FAA Tableau viewing session could not be established.",
+            raise TableauSessionError(
+                "FAA Tableau viewing session could not be established."
             ) from exc
 
         try:
@@ -279,23 +282,20 @@ class FAATableauAcquisitionProvider:
             )
             bootstrap.raise_for_status()
         except httpx.HTTPError as exc:
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.BOOTSTRAP_RETRIEVAL_FAILED,
-                "FAA Tableau bootstrap payload retrieval failed.",
+            raise TableauSessionError(
+                "FAA Tableau bootstrap payload retrieval failed."
             ) from exc
 
         content_type = bootstrap.headers.get("content-type")
         media_type = content_type.partition(";")[0].strip().lower() if content_type else ""
         if media_type not in _SUPPORTED_BOOTSTRAP_MEDIA_TYPES:
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.UNEXPECTED_MEDIA_TYPE,
-                f"Unexpected FAA Tableau bootstrap media type: {media_type or 'missing'}.",
+            raise TableauResponseError(
+                f"Unexpected FAA Tableau bootstrap media type: {media_type or 'missing'}."
             )
         payload = bootstrap.content
         if not payload or payload.lstrip().lower().startswith((b"<html", b"<!doctype html")):
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.UNSUPPORTED_RESPONSE,
-                "FAA Tableau bootstrap response is empty or contains HTML.",
+            raise TableauResponseError(
+                "FAA Tableau bootstrap response is empty or contains HTML."
             )
 
         return AcquisitionPayload(
@@ -328,7 +328,7 @@ class FAATableauAcquisitionProvider:
 
     @staticmethod
     def _discover_view_url(response: httpx.Response) -> str | None:
-        parser = _ArticleParser()
+        parser = _TableauHtmlParser()
         parser.feed(response.text)
         return parser.tableau_view_url
 
@@ -336,7 +336,7 @@ class FAATableauAcquisitionProvider:
     def _bootstrap_configuration(
         response: httpx.Response,
     ) -> tuple[str, dict[str, str]]:
-        parser = _TableauConfigParser()
+        parser = _TableauHtmlParser()
         parser.feed(response.text)
         raw_candidates = [
             (name, parser.config(name))
@@ -345,41 +345,36 @@ class FAATableauAcquisitionProvider:
         ]
         if len(raw_candidates) > 1:
             distinct = {raw for _, raw in raw_candidates}
-            code = (
-                TableauAcquisitionErrorCode.AMBIGUOUS_CONFIGURATION
+            detail = (
+                "duplicate (ambiguous)"
                 if len(distinct) == 1
-                else TableauAcquisitionErrorCode.CONFLICTING_CONFIGURATION
+                else "conflicting"
             )
-            raise TableauAcquisitionError(
-                code,
-                "FAA Tableau response contains multiple session configurations.",
+            raise TableauConfigurationError(
+                f"FAA Tableau response contains multiple {detail} session configurations."
             )
         if not raw_candidates:
             static_config = parser.config("staticConfigContainer")
             if parser.prebootstrap_scripts and static_config:
-                raise TableauAcquisitionError(
-                    TableauAcquisitionErrorCode.CLIENT_BOOTSTRAP_REQUIRED,
-                    "FAA Tableau configuration requires client-side PreBootstrap execution.",
+                raise TableauClientBootstrapRequiredError(
+                    "FAA Tableau configuration requires client-side PreBootstrap execution."
                 )
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.SESSION_CREATION_FAILED,
-                "FAA Tableau session configuration is missing.",
+            raise TableauSessionError(
+                "FAA Tableau session configuration is missing."
             )
         strategy, raw_config = raw_candidates[0]
         try:
             config = json.loads(raw_config)
         except json.JSONDecodeError as exc:
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.SESSION_CREATION_FAILED,
-                f"FAA Tableau {strategy} is malformed.",
+            raise TableauSessionError(
+                f"FAA Tableau {strategy} is malformed."
             ) from exc
         session_id = config.get("sessionid")
         endpoint = config.get("bootstrapSessionUrl")
         sheet_id = config.get("sheetId")
         if not session_id or not sheet_id:
-            raise TableauAcquisitionError(
-                TableauAcquisitionErrorCode.SESSION_CREATION_FAILED,
-                "FAA Tableau session or sheet configuration is missing.",
+            raise TableauSessionError(
+                "FAA Tableau session or sheet configuration is missing."
             )
         endpoint = endpoint or f"bootstrapSession/sessions/{session_id}"
         bootstrap_url = urljoin(str(response.url), endpoint)

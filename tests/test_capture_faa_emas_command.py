@@ -4,10 +4,7 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.acquisition.faa_tableau import (
-    TableauAcquisitionError,
-    TableauAcquisitionErrorCode,
-)
+from app.acquisition.faa_tableau import TableauSessionError
 from app.database import Base
 from app.models import AcquisitionRunStatus, AcquisitionSource, PublishingSource
 from app.scripts.capture_faa_emas import run_capture
@@ -107,10 +104,7 @@ class FailedService:
 
     def acquire(self, source):
         type(self).calls += 1
-        raise TableauAcquisitionError(
-            TableauAcquisitionErrorCode.BOOTSTRAP_RETRIEVAL_FAILED,
-            "bootstrap failed",
-        )
+        raise TableauSessionError("bootstrap failed")
 
 
 def test_governed_failure_returns_nonzero_and_does_not_print_sensitive_data(capsys):
@@ -124,7 +118,7 @@ def test_governed_failure_returns_nonzero_and_does_not_print_sensitive_data(caps
     assert result == 1
     assert FailedService.calls == 1
     captured = capsys.readouterr()
-    assert "tableau_bootstrap_retrieval_failed" in captured.err
+    assert "tableau_session_error" in captured.err
     assert "cookie" not in (captured.out + captured.err).lower()
 
 

@@ -10,6 +10,10 @@ from app.acquisition.faa_emas_parser import FAAEmasParseError, FAAEmasSnapshotPa
 from app.acquisition.faa_tableau import (
     FAATableauAcquisitionProvider,
     TableauAcquisitionError,
+    TableauClientBootstrapRequiredError,
+    TableauConfigurationError,
+    TableauResponseError,
+    TableauSessionError,
     discover_prebootstrap_configuration,
     sanitize_tableau_diagnostic_html,
 )
@@ -158,9 +162,10 @@ def test_missing_configuration_has_governed_error():
     def handler(request):
         return httpx.Response(200, content=b"<html></html>", request=request)
 
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauConfigurationError) as caught:
         provider(handler, view_url=None).retrieve()
-    assert caught.value.code == "tableau_configuration_missing"
+    assert caught.value.code == "tableau_configuration_error"
+    assert "does not contain an EMAS Tableau view configuration" in str(caught.value)
 
 
 def test_failed_session_creation_has_governed_error():
@@ -169,9 +174,10 @@ def test_failed_session_creation_has_governed_error():
             return httpx.Response(200, content=article_html(), request=request)
         return httpx.Response(200, content=b"<html></html>", request=request)
 
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauSessionError) as caught:
         provider(handler).retrieve()
-    assert caught.value.code == "tableau_session_creation_failed"
+    assert caught.value.code == "tableau_session_error"
+    assert "session configuration is missing" in str(caught.value)
 
 
 def test_bootstrap_failure_has_governed_error():
@@ -180,9 +186,10 @@ def test_bootstrap_failure_has_governed_error():
             return httpx.Response(503, request=request)
         return successful_handler(request)
 
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauSessionError) as caught:
         provider(handler).retrieve()
-    assert caught.value.code == "tableau_bootstrap_retrieval_failed"
+    assert caught.value.code == "tableau_session_error"
+    assert "bootstrap payload retrieval failed" in str(caught.value)
 
 
 def test_unexpected_media_type_and_html_response_are_rejected():
@@ -193,9 +200,10 @@ def test_unexpected_media_type_and_html_response_are_rejected():
             )
         return successful_handler(request)
 
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauResponseError) as caught:
         provider(wrong_media).retrieve()
-    assert caught.value.code == "tableau_unexpected_media_type"
+    assert caught.value.code == "tableau_response_error"
+    assert "Unexpected FAA Tableau bootstrap media type" in str(caught.value)
 
     def html_response(request):
         if str(request.url) == BOOTSTRAP:
@@ -204,9 +212,10 @@ def test_unexpected_media_type_and_html_response_are_rejected():
             )
         return successful_handler(request)
 
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauResponseError) as caught:
         provider(html_response).retrieve()
-    assert caught.value.code == "unsupported_tableau_response"
+    assert caught.value.code == "tableau_response_error"
+    assert "empty or contains HTML" in str(caught.value)
 
 
 def test_metadata_and_session_transport_state_are_preserved_safely(session):
@@ -261,7 +270,7 @@ def test_diagnostic_configuration_failure_writes_only_sanitized_html(tmp_path):
     diagnostic_directory = tmp_path / "diagnostics"
     item = provider(handler)
     item.diagnostic_directory = diagnostic_directory
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauSessionError) as caught:
         item.retrieve()
     diagnostic = caught.value.diagnostic
     assert diagnostic is not None
@@ -345,9 +354,10 @@ def test_prebootstrap_only_authentic_shape_has_governed_blocker():
             return httpx.Response(200, content=article_html(), request=request)
         return httpx.Response(200, content=authentic_shape, request=request)
 
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauClientBootstrapRequiredError) as caught:
         provider(handler).retrieve()
     assert caught.value.code == "tableau_client_bootstrap_required"
+    assert isinstance(caught.value, TableauSessionError)
 
 
 def test_authentic_prebootstrap_asset_and_static_config_are_discovered():
@@ -378,9 +388,10 @@ def test_prebootstrap_discovery_rejects_missing_required_values():
         content=b'<textarea id="staticConfigContainer">{}</textarea>',
         request=httpx.Request("GET", VIEW),
     )
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauConfigurationError) as caught:
         discover_prebootstrap_configuration(response)
-    assert caught.value.code == "tableau_prebootstrap_required_value_missing"
+    assert caught.value.code == "tableau_configuration_error"
+    assert "PreBootstrap asset or static configuration is missing" in str(caught.value)
 
 
 def test_prebootstrap_discovery_rejects_ambiguous_assets():
@@ -393,9 +404,10 @@ def test_prebootstrap_discovery_rejects_ambiguous_assets():
         ),
         request=httpx.Request("GET", VIEW),
     )
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauConfigurationError) as caught:
         discover_prebootstrap_configuration(response)
-    assert caught.value.code == "tableau_prebootstrap_request_ambiguous"
+    assert caught.value.code == "tableau_configuration_error"
+    assert "multiple PreBootstrap asset candidates" in str(caught.value)
 
 
 def test_prebootstrap_discovery_repr_omits_values_and_query_secrets():
@@ -416,16 +428,16 @@ def test_prebootstrap_discovery_repr_omits_values_and_query_secrets():
 
 
 @pytest.mark.parametrize(
-    "second_config, expected_code",
+    "second_config, expected_detail",
     [
-        (None, "tableau_ambiguous_configuration"),
+        (None, "duplicate (ambiguous)"),
         (
             '{"sessionid":"other","sheetId":"Main"}',
-            "tableau_conflicting_configuration",
+            "conflicting",
         ),
     ],
 )
-def test_multiple_configuration_candidates_fail_closed(second_config, expected_code):
+def test_multiple_configuration_candidates_fail_closed(second_config, expected_detail):
     legacy = view_html().decode().removesuffix("</html>")
     first_raw = legacy.split('<textarea id="tsConfig">', 1)[1].split("</textarea>", 1)[0]
     other = second_config or first_raw
@@ -438,6 +450,7 @@ def test_multiple_configuration_candidates_fail_closed(second_config, expected_c
             return httpx.Response(200, content=article_html(), request=request)
         return httpx.Response(200, content=payload, request=request)
 
-    with pytest.raises(TableauAcquisitionError) as caught:
+    with pytest.raises(TableauConfigurationError) as caught:
         provider(handler).retrieve()
-    assert caught.value.code == expected_code
+    assert caught.value.code == "tableau_configuration_error"
+    assert expected_detail in str(caught.value)

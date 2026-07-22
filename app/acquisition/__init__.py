@@ -9,9 +9,12 @@ from app.acquisition.faa_emas_parser import (
 from app.acquisition.faa_tableau import (
     FAATableauAcquisitionProvider,
     TableauAcquisitionError,
-    TableauAcquisitionErrorCode,
+    TableauClientBootstrapRequiredError,
+    TableauConfigurationError,
     TableauDiagnostic,
     TableauPreBootstrapDiscovery,
+    TableauResponseError,
+    TableauSessionError,
     discover_prebootstrap_configuration,
     sanitize_tableau_diagnostic_html,
 )
@@ -25,9 +28,12 @@ __all__ = [
     "FAAEmasSnapshotParser",
     "FAATableauAcquisitionProvider",
     "TableauAcquisitionError",
-    "TableauAcquisitionErrorCode",
+    "TableauClientBootstrapRequiredError",
+    "TableauConfigurationError",
     "TableauDiagnostic",
     "TableauPreBootstrapDiscovery",
+    "TableauResponseError",
+    "TableauSessionError",
     "discover_prebootstrap_configuration",
     "sanitize_tableau_diagnostic_html",
 ]
