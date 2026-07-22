@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Date, String, Text
+from sqlalchemy import Date, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -18,6 +18,9 @@ class Source(Base):
     """
 
     __tablename__ = "sources"
+    __table_args__ = (
+        Index("uq_sources_external_id", "external_id", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
@@ -31,3 +34,8 @@ class Source(Base):
     page_number: Mapped[Optional[str]] = mapped_column(String(30))
     summary: Mapped[Optional[str]] = mapped_column(Text)
     reliability_level: Mapped[str] = mapped_column(String(30), default="official")
+    # Stable identifier from the source system (e.g. USAspending's
+    # generated_internal_id), namespaced per system, so re-running an import
+    # script - or a second script covering the same real-world grant - can
+    # detect and skip a row it already created.
+    external_id: Mapped[Optional[str]] = mapped_column(String(200))

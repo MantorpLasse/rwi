@@ -104,6 +104,7 @@ EXPECTED_COLUMNS = {
         "page_number": ("VARCHAR(30)", True, None, None),
         "summary": ("TEXT", True, None, None),
         "reliability_level": ("VARCHAR(30)", False, ("scalar", "official"), None),
+        "external_id": ("VARCHAR(200)", True, None, None),
     },
     "installations": {
         "id": ("INTEGER", False, None, None),
@@ -223,6 +224,7 @@ EXPECTED_INDEXES = {
     "publishing_sources": set(),
     "sources": {
         ("ix_sources_source_type", ("source_type",), False),
+        ("uq_sources_external_id", ("external_id",), True),
     },
     "installations": {
         ("ix_installations_airport_id", ("airport_id",), False),

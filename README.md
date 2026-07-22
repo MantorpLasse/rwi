@@ -8,14 +8,24 @@ incidenter har skett, och vilka är på väg att beställa. Se
 
 Fem kärntabeller: `Airport`, `Runway`, `Installation`, `Incident`, `Signal`,
 `Source`. En `Signal` är "det här kan bli en framtida order" – ersätter den
-gamla Project/Observation/Verification/Fact/Intelligence-pipelinen. Två enkla
-regler skapar signaler automatiskt:
+gamla Project/Observation/Verification/Fact/Intelligence-pipelinen. Regler
+som skapar signaler automatiskt:
 
 1. En `Incident` skapar alltid en `confidence=high`-signal (arresting-material
    måste bytas efter en aktivering).
 2. En `Source` vars titel/sammanfattning nämner EMAS/RSA/"runway safety
    area"/"arresting system" skapas via `add_source_and_flag_keywords()` och ger
    en `confidence=low`-signal som väntar på manuell granskning.
+3. `scripts/import_usaspending_grants.py` hämtar alla historiska federala
+   bidrag (2007→) som nämner "Engineered Material Arresting System" via
+   [api.usaspending.gov](https://api.usaspending.gov) och skapar en
+   `confidence=high`-signal direkt (redan beviljat bidrag, ingen tolkning
+   behövs). Detta är den **aktiva** källan för bidragsdata –
+   `scripts/import_faa_aip_grants.py` (som parsar FAA:s årliga AIP-grant-PDF:er
+   och kör nyckelordsregeln ovan) är kvar i kodbasen och testad, men **vilande**
+   sedan 2026-07-22: körs inte längre rutinmässigt, bara som fallback om
+   USAspending-API:et någon gång slutar fungera. Se PLAN_FORENKLING.md:s
+   "USAspending.gov"-avsnitt för research bakom valet.
 
 ## Två sätt att titta på datan
 

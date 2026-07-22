@@ -1,3 +1,15 @@
+"""FALLBACK / DORMANT since 2026-07-22.
+
+scripts/import_usaspending_grants.py is now the active source for EMAS grant
+data (structured JSON, goes back to 2007, no PDF parsing needed - see
+PLAN_FORENKLING.md's "USAspending.gov" section). This script is kept working
+and tested as a fallback in case that API ever stops serving this data, but
+isn't run as part of the normal refresh flow. If you do run it after
+USAspending data already covers the same fiscal year, check for near-duplicate
+Signals at the same airport before trusting the result - the two scripts
+don't share a common external ID, so cross-source dedup isn't automatic.
+"""
+
 from __future__ import annotations
 
 import argparse
