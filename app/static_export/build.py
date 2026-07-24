@@ -80,6 +80,7 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         probability_score=signal.probability_score,
         notes=signal.notes,
         manual_year_estimate=signal.manual_year_estimate,
+        confirmed_vendor=signal.confirmed_vendor,
         likely_supplier=signal.likely_supplier,
         supplier_reason=signal.supplier_reason,
         estimated_total_value_usd=signal.estimated_total_value_usd,
@@ -126,6 +127,7 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
                 runway_end=i.runway_end,
                 install_year=i.install_year,
                 status=i.status,
+                confirmed_vendor=i.confirmed_vendor,
             )
             for i in airport.installations
         ],

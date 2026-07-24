@@ -35,7 +35,7 @@
       <div class="card-header">Installationer</div>
       {% if airport.installations %}
       <table>
-        <thead><tr><th>Typ</th><th>Bana/ände</th><th>Installerad</th><th>Status</th></tr></thead>
+        <thead><tr><th>Typ</th><th>Bana/ände</th><th>Installerad</th><th>Status</th><th>Leverantör</th></tr></thead>
         <tbody>
           {% for installation in airport.installations %}
           <tr>
@@ -43,6 +43,11 @@
             <td data-label="Bana/ände">{{ installation.runway_end or "–" }}</td>
             <td data-label="Installerad" class="mono">{{ installation.install_year or "–" }}</td>
             <td data-label="Status">{{ installation.status or "–" }}</td>
+            <td data-label="Leverantör">
+              {% if installation.confirmed_vendor %}
+              <span class="pill vendor">Bekräftad: {{ installation.confirmed_vendor }}</span>
+              {% else %}–{% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>

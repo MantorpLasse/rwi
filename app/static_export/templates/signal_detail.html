@@ -12,6 +12,9 @@
     <span class="pill status">{{ signal.status or signal.category_label }}</span>
     {{ cat(signal.category_label, signal.category_class) }}
     {{ gauge(signal.confidence_level, signal.confidence_label) }}
+    {% if signal.confirmed_vendor %}
+    <span class="pill vendor">Bekräftad leverantör: {{ signal.confirmed_vendor }}</span>
+    {% endif %}
   </div>
   {% if signal.probability_score is not none %}
   <span class="score" style="font-size:1.5rem">{{ "%.1f"|format(signal.probability_score) }}</span>
@@ -60,7 +63,11 @@
         {% if signal.source_title %}
         <h2>{{ signal.source_title }}</h2>
         <p style="color:var(--text-dim); margin-top:-6px">{{ signal.source_publisher or "" }}{% if signal.source_publisher and signal.source_type %} · {% endif %}{{ signal.source_type or "" }}</p>
+        {% if signal.source_url %}
         <a href="{{ signal.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
+        {% else %}
+        <span style="color:var(--text-faint)">Ingen offentlig länk (t.ex. internt dokument).</span>
+        {% endif %}
         {% else %}
         <span style="color:var(--text-dim)">Ingen källa kopplad ännu.</span>
         {% endif %}

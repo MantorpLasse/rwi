@@ -27,7 +27,10 @@ class Source(Base):
     title: Mapped[str] = mapped_column(String(300))
     source_type: Mapped[str] = mapped_column(String(50), index=True)
     publisher: Mapped[Optional[str]] = mapped_column(String(200))
-    url: Mapped[str] = mapped_column(String(1000))
+    # Nullable: some sources (e.g. a shareholder newsletter) have no public
+    # link - published_date/title/notes on the citing row carry the date
+    # instead of a fabricated URL.
+    url: Mapped[Optional[str]] = mapped_column(String(1000))
     published_date: Mapped[Optional[date]] = mapped_column(Date)
     retrieved_at: Mapped[Optional[date]] = mapped_column(Date)
     document_reference: Mapped[Optional[str]] = mapped_column(String(200))

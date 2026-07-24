@@ -55,6 +55,11 @@ class Signal(Base):
     supplier: Mapped[Optional[str]] = mapped_column(String(150))
     likely_supplier: Mapped[Optional[str]] = mapped_column(String(150))
     supplier_reason: Mapped[Optional[str]] = mapped_column(Text)
+
+    # A vendor the source explicitly names as awarded/contracted - distinct
+    # from likely_supplier (our own guess), so a confirmed fact is never
+    # displayed the same way as an analytical judgment call.
+    confirmed_vendor: Mapped[Optional[str]] = mapped_column(String(150))
     last_verified_at: Mapped[Optional[date]] = mapped_column(Date)
 
     airport: Mapped["Airport"] = relationship(back_populates="signals")

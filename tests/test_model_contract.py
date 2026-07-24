@@ -97,7 +97,7 @@ EXPECTED_COLUMNS = {
         "title": ("VARCHAR(300)", False, None, None),
         "source_type": ("VARCHAR(50)", False, None, None),
         "publisher": ("VARCHAR(200)", True, None, None),
-        "url": ("VARCHAR(1000)", False, None, None),
+        "url": ("VARCHAR(1000)", True, None, None),
         "published_date": ("DATE", True, None, None),
         "retrieved_at": ("DATE", True, None, None),
         "document_reference": ("VARCHAR(200)", True, None, None),
@@ -122,6 +122,7 @@ EXPECTED_COLUMNS = {
         "width_m": ("FLOAT", True, None, None),
         "faa_accepted": ("BOOLEAN", True, None, None),
         "notes": ("TEXT", True, None, None),
+        "confirmed_vendor": ("VARCHAR(150)", True, None, None),
     },
     "incidents": {
         "id": ("INTEGER", False, None, None),
@@ -163,6 +164,7 @@ EXPECTED_COLUMNS = {
         "supplier_reason": ("TEXT", True, None, None),
         "last_verified_at": ("DATE", True, None, None),
         "manual_year_estimate": ("INTEGER", True, None, None),
+        "confirmed_vendor": ("VARCHAR(150)", True, None, None),
     },
 }
 

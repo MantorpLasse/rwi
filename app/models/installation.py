@@ -33,6 +33,11 @@ class Installation(Base):
     faa_accepted: Mapped[Optional[bool]] = mapped_column(Boolean)
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
+    # A vendor the source explicitly names as having done the install -
+    # see app/models/signal.py's confirmed_vendor for why this is kept
+    # separate from a mere guess.
+    confirmed_vendor: Mapped[Optional[str]] = mapped_column(String(150))
+
     airport: Mapped["Airport"] = relationship(back_populates="installations")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="installations")
     source: Mapped[Optional["Source"]] = relationship()

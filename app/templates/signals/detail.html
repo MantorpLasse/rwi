@@ -8,6 +8,9 @@
         </div>
         <h1>{{ signal.title }}</h1>
         <span class="badge text-bg-secondary">{{ signal.status or signal.category }}</span>
+        {% if signal.confirmed_vendor %}
+        <span class="badge text-bg-success">Bekräftad leverantör: {{ signal.confirmed_vendor }}</span>
+        {% endif %}
     </div>
     {% if signal.probability_score is not none %}
     <span class="score-pill score-large">{{ "%.1f"|format(signal.probability_score) }}</span>
@@ -61,7 +64,11 @@
                 {% if signal.source %}
                 <h2 class="h6 mb-1">{{ signal.source.title }}</h2>
                 <div class="small text-secondary mb-2">{{ signal.source.publisher or "" }}{% if signal.source.source_type %} · {{ signal.source.source_type }}{% endif %}</div>
+                {% if signal.source.url %}
                 <a href="{{ signal.source.url }}" target="_blank" rel="noopener">Öppna källa</a>
+                {% else %}
+                <p class="text-secondary mb-0">Ingen offentlig länk (t.ex. internt dokument).</p>
+                {% endif %}
                 {% else %}
                 <p class="text-secondary mb-0">Ingen källa kopplad ännu.</p>
                 {% endif %}

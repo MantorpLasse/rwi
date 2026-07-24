@@ -21,6 +21,8 @@
   --low-bg: #1b2436;
   --low-ink: #aeb9ce;
   --verified: #3fa34d;
+  --verified-bg: #123a1e;
+  --verified-ink: #a8e8bc;
   /* Extension: "new installation" category needs its own token too — the
      brief's own mockup hardcodes a teal for .cat.new, which would violate
      "never hardcode hex in components" if copied as-is. */
@@ -328,6 +330,20 @@ td.title {
   background: var(--panel2);
   border: 1px solid var(--border);
   color: var(--text-dim);
+}
+
+/* Confirmed vendor - a fact the source explicitly named, not a guess -
+   distinct green so it never reads like the category/confidence pills. */
+.pill.vendor {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--verified-bg);
+  border: 1px solid var(--verified);
+  color: var(--verified-ink);
 }
 
 .score {
