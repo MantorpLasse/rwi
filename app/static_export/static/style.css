@@ -198,6 +198,35 @@ h2 {
   padding: 18px;
 }
 
+/* Personal annotations (scripts/annotate_signal.py) - dashed border marks
+   this as an outside note, not something the source itself said. */
+.card.annotation {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.card.annotation .card-header {
+  background: transparent;
+  border-bottom-style: dashed;
+  border-bottom-color: var(--accent);
+}
+
+.card.annotation .eyebrow {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+.year-estimate {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-weight: 500;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

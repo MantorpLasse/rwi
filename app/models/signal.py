@@ -37,6 +37,11 @@ class Signal(Base):
     target_year: Mapped[Optional[int]] = mapped_column(Integer, index=True)
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Personal, unverified year guess set via scripts/annotate_signal.py -
+    # deliberately separate from target_year/planning_year/procurement_year
+    # so an outside hunch is never confused with an officially sourced date.
+    manual_year_estimate: Mapped[Optional[int]] = mapped_column(Integer)
+
     # Carried over from the old Project model so real research data
     # (financial estimates, pipeline stage, supplier reasoning) isn't lost.
     status: Mapped[Optional[str]] = mapped_column(String(50), index=True)

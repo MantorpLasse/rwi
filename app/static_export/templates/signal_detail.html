@@ -21,9 +21,8 @@
 <div class="grid-2" style="margin-top:24px">
   <div>
     <div class="card">
-      <div class="card-header">Anteckningar</div>
+      <div class="card-header">Detaljer</div>
       <div class="card-body">
-        <p>{{ signal.notes or "Inga anteckningar." }}</p>
         <dl class="meta">
           <dt>Kategori</dt><dd>{{ cat(signal.category_label, signal.category_class) }}</dd>
           <dt>Status</dt><dd>{{ signal.status or "–" }}</dd>
@@ -36,6 +35,24 @@
         </dl>
       </div>
     </div>
+
+    {% if signal.notes or signal.manual_year_estimate %}
+    <div class="card annotation">
+      <div class="card-header">
+        Min bedömning
+        <span class="eyebrow">Manuell anteckning – inte officiell källdata</span>
+      </div>
+      <div class="card-body">
+        {% if signal.manual_year_estimate %}
+        <div style="color:var(--text-dim); font-size:0.85rem">Min årsuppskattning</div>
+        <div class="year-estimate" style="font-size:1.3rem; margin-bottom:14px">{{ signal.manual_year_estimate }}</div>
+        {% endif %}
+        {% if signal.notes %}
+        <p style="white-space:pre-line; margin:0">{{ signal.notes }}</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
 
     <div class="card">
       <div class="card-header">Källa</div>

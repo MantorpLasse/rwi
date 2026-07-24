@@ -23,9 +23,7 @@
     <div class="col-lg-8">
         <div class="card mb-4">
             <div class="card-body">
-                <h2 class="h5">Anteckningar</h2>
-                <p>{{ signal.notes or "Inga anteckningar." }}</p>
-
+                <h2 class="h5">Detaljer</h2>
                 <dl class="row mb-0">
                     <dt class="col-sm-4">Kategori</dt><dd class="col-sm-8">{{ signal.category }}</dd>
                     <dt class="col-sm-4">Status</dt><dd class="col-sm-8">{{ signal.status or "–" }}</dd>
@@ -38,6 +36,24 @@
                 </dl>
             </div>
         </div>
+
+        {% if signal.notes or signal.manual_year_estimate %}
+        <div class="card mb-4 border-warning">
+            <div class="card-header bg-white fw-semibold">
+                Min bedömning
+                <div class="small text-secondary fw-normal">Manuell anteckning – inte officiell källdata</div>
+            </div>
+            <div class="card-body">
+                {% if signal.manual_year_estimate %}
+                <div class="text-secondary small">Min årsuppskattning</div>
+                <div class="fs-4 mb-3">{{ signal.manual_year_estimate }}</div>
+                {% endif %}
+                {% if signal.notes %}
+                <p class="mb-0" style="white-space: pre-line">{{ signal.notes }}</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
 
         <div class="card">
             <div class="card-header bg-white fw-semibold">Källa</div>

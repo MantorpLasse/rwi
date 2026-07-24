@@ -79,6 +79,7 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         procurement_year=signal.procurement_year,
         probability_score=signal.probability_score,
         notes=signal.notes,
+        manual_year_estimate=signal.manual_year_estimate,
         likely_supplier=signal.likely_supplier,
         supplier_reason=signal.supplier_reason,
         estimated_total_value_usd=signal.estimated_total_value_usd,

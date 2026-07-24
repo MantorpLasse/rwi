@@ -162,6 +162,7 @@ EXPECTED_COLUMNS = {
         "likely_supplier": ("VARCHAR(150)", True, None, None),
         "supplier_reason": ("TEXT", True, None, None),
         "last_verified_at": ("DATE", True, None, None),
+        "manual_year_estimate": ("INTEGER", True, None, None),
     },
 }
 
