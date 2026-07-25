@@ -222,6 +222,32 @@ aip_grant`. Bevaka: samma URL-mönster år för år
 (`.../airports/aip/{ÅR}_aip_grants`), fyra nya PDF:er per år att
 parsa/söka igenom med nyckelordsregeln.
 
+### FAA IIJA Grants (https://www.faa.gov/iija/iija-airport-infrastructure-grant-funding-amounts/) — byggt 2026-07-25
+IIJA (Infrastructure Investment and Jobs Act) är en egen, öronmärkt
+finansieringspott, separat från den vanliga AIP-potten ovan. Samma
+"Announcement"-PDF-tabellformat som AIP, så `app/acquisition/faa_iija_grants.py`
+återanvänder `parse_grant_pdf` från AIP-parsern rakt av snarare än att
+återimplementera en tabellparser. Sex PDF:er per budgetår på en
+förutsägbar URL (`AIG-FY{ÅR}-A{1-6}.pdf`) – ingen HTML-listsida att skrapa,
+till skillnad från AIP. Källa för `Source.source_type = iija_grant` (skilt
+från `aip_grant`/`usaspending_grant` – samma bidrag kan i praktiken synas i
+flera pottar/rapporteringsvägar samtidigt, se dedup-resonemanget under
+USAspending nedan).
+
+`scripts/import_faa_iija_grants.py` är den återkommande importskriptet
+(samma mönster som `import_faa_aip_grants.py`, men aktiv, inte vilande).
+`scripts/add_iija_fy2026_known_grants.py` är en engångskörning mot tre
+redan verifierade FY2026-träffar (MHT, BOS, MMU) som alla matchade
+befintliga USAspending-signaler nästan ord för ord – i stället för att
+skapa dubblettsignaler skapas en fristående `iija_grant`-Source per fynd
+(för proveniens/dedup) och en daterad notering läggs till på den befintliga
+signalen; `Signal.source_id` lämnas oförändrat (en Signal har bara en källa,
+och USAspending-källans PURPOSE-text är värd att behålla som primärkälla).
+Samma engångsskript flaggar också explicit, på CLT:s befintliga Runway
+Safe-EMAS-signal, att CLT separat har ett IIJA-bidrag för "Expand/Reconstruct
+Apron" – asfaltsyta, helt orelaterat till EMAS-ordern – för att förhindra att
+en framtida automatisk import blandar ihop de två.
+
 ### FAA Runway Ends Table (catalog.data.gov, del av NTAD) — RSA-regeln, avbruten 2026-07-22
 Planen antog att denna databas innehåller Runway Safety Area (RSA)-mått
 per bana. **Det gör den inte.** Undersökt grundligt innan något byggdes:
@@ -392,3 +418,28 @@ manuellt (Tableau bootstrap-parsing). Den logiken är i praktiken en
 nästan komplett ersättning för `faa_tableau.py` i sitt nuvarande skick –
 ge gärna den koden till Claude Code som referens/startpunkt istället för
 att låta den återuppfinna hjulet.
+
+## Kvarstående, ej brådskande
+
+### FastAPI-devserverns luckor (upptäckt 2026-07-25)
+Devservern (`app/templates/airports/detail.html`) visar fortfarande
+inte installationer på flygplatssidan alls — funktionen finns bara i
+den statiska exporten (`app/static_export/`), som är den faktiska
+produkten. Ingen brådska att fixa eftersom devservern bara är ett
+internt utvecklingsverktyg, inte det som faktiskt driftsätts. Bra att
+komma ihåg om devservern någon gång känns "trasig" jämfört med den
+statiska sajten — det är väntat, inte en bugg.
+
+### Framtida idé: n8n + AI-driven bevakning
+Istället för att jag (användaren) manuellt googlar/läser PDF:er för
+att hitta nya Master Plans/AIP/CIP-beslut, kan n8n (eller liknande
+verktyg) bevaka kända källor och använda AI för att sammanfatta nya
+dokument automatiskt. Viktigt designval om/när detta byggs: AI-
+sammanfattningar ska gå till en "väntar på granskning"-status, INTE
+skrivas direkt till `notes` som en bekräftad signal — jag ska
+fortfarande bedöma relevans/tolkning själv, AI:n ska bara hitta och
+sammanfatta, inte avgöra. Matcha/skapa flygplatser automatiskt
+(samma mönster som USAspending-importen redan gör) om en ny,
+okänd flygplats dyker upp. Inte påbörjat — kräver mer eftertanke om
+vilka källor, hur ofta, och exakt vilket granskningsflöde som behövs
+innan det byggs.

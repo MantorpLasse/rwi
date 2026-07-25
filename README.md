@@ -20,12 +20,19 @@ som skapar signaler automatiskt:
    bidrag (2007→) som nämner "Engineered Material Arresting System" via
    [api.usaspending.gov](https://api.usaspending.gov) och skapar en
    `confidence=high`-signal direkt (redan beviljat bidrag, ingen tolkning
-   behövs). Detta är den **aktiva** källan för bidragsdata –
+   behövs). Detta är den **aktiva** källan för AIP-bidragsdata –
    `scripts/import_faa_aip_grants.py` (som parsar FAA:s årliga AIP-grant-PDF:er
    och kör nyckelordsregeln ovan) är kvar i kodbasen och testad, men **vilande**
    sedan 2026-07-22: körs inte längre rutinmässigt, bara som fallback om
    USAspending-API:et någon gång slutar fungera. Se PLAN_FORENKLING.md:s
    "USAspending.gov"-avsnitt för research bakom valet.
+4. `scripts/import_faa_iija_grants.py` är en helt separat, återkommande källa:
+   IIJA (Infrastructure Investment and Jobs Act) är en egen, öronmärkt
+   finansieringspott utöver den vanliga AIP-potten ovan – samma PDF-tabellformat
+   (återanvänder `parse_grant_pdf` från AIP-parsern), men `Source.source_type =
+   iija_grant` för att hålla potterna isär. Sex "Announcement"-PDF:er per
+   budgetår på förutsägbara URL:er (ingen HTML-listsida att skrapa, till
+   skillnad från AIP). Se PLAN_FORENKLING.md:s "FAA IIJA Grants"-avsnitt.
 
 ## Två sätt att titta på datan
 
