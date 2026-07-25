@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import SessionLocal
-from app.models import Airport, Signal
+from app.models import Airport, Installation, Signal
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -97,6 +97,36 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
     )
 
 
+_RUNWAY_TRACKED_INSTALLATION_TYPES = ("EMASMAX", "greenEMAS")
+
+
+def _installation_view(installation: Installation) -> SimpleNamespace:
+    source = installation.source
+    return SimpleNamespace(
+        type=installation.type,
+        runway_end=installation.runway_end,
+        # True only when no runway link exists at all (genuinely ambiguous
+        # between real, different runways, or no FAA match yet) - not when a
+        # runway is linked but the specific end isn't (see
+        # scripts/import_faa_runway_ends.py's "resolved_same_runway_multiple_ends").
+        # Lets the UI say so explicitly instead of silently omitting a pill,
+        # so a reader never mistakes an unrelated runway in the "Banor" panel
+        # for this installation's runway.
+        no_confirmed_runway=(
+            installation.type in _RUNWAY_TRACKED_INSTALLATION_TYPES and installation.runway_id is None
+        ),
+        install_year=installation.install_year,
+        status=installation.status,
+        confirmed_vendor=installation.confirmed_vendor,
+        notes=installation.notes,
+        source_title=source.title if source else None,
+        source_publisher=source.publisher if source else None,
+        source_type=source.source_type if source else None,
+        source_url=source.url if source else None,
+        source_published_date=source.published_date if source else None,
+    )
+
+
 def _airport_view(airport: Airport) -> SimpleNamespace:
     return SimpleNamespace(
         id=airport.id,
@@ -121,16 +151,7 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
                 key=lambda s: (s.probability_score is None, -(s.probability_score or 0)),
             )
         ],
-        installations=[
-            SimpleNamespace(
-                type=i.type,
-                runway_end=i.runway_end,
-                install_year=i.install_year,
-                status=i.status,
-                confirmed_vendor=i.confirmed_vendor,
-            )
-            for i in airport.installations
-        ],
+        installations=[_installation_view(i) for i in airport.installations],
         incidents=[
             SimpleNamespace(
                 incident_date=i.incident_date,
@@ -182,7 +203,7 @@ def _build(output_dir: Path, session: Session) -> None:
             selectinload(Airport.signals).selectinload(Signal.airport),
             selectinload(Airport.signals).selectinload(Signal.runway),
             selectinload(Airport.signals).selectinload(Signal.source),
-            selectinload(Airport.installations),
+            selectinload(Airport.installations).selectinload(Installation.source),
             selectinload(Airport.incidents),
         ).order_by(Airport.name)
     ).all()

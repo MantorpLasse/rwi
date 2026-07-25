@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import date
 from typing import Callable
@@ -18,6 +19,14 @@ from app.acquisition.faa_runway_ends import (
 from app.database import SessionLocal
 from app.models import Airport, Installation, Runway
 
+# FAA NASR designations zero-pad single-digit headings ("06/24"); hand-seeded
+# rows and most other sources don't ("6/24"). Strip that so the two agree.
+_LEADING_ZERO = re.compile(r"^0(\d)")
+
+
+def _normalize_designation(designation: str) -> str:
+    return "/".join(_LEADING_ZERO.sub(r"\1", part) for part in designation.split("/"))
+
 
 def _group_by_airport(rows: list[ArrestingSystemRow]) -> dict[str, list[ArrestingSystemRow]]:
     by_airport: dict[str, list[ArrestingSystemRow]] = {}
@@ -27,15 +36,32 @@ def _group_by_airport(rows: list[ArrestingSystemRow]) -> dict[str, list[Arrestin
 
 
 def _get_or_create_runway(session: Session, airport: Airport, designation: str) -> Runway:
-    runway = session.scalar(
-        select(Runway).where(Runway.airport_id == airport.id, Runway.designation == designation)
-    )
-    if runway is not None:
-        return runway
-    runway = Runway(airport=airport, designation=designation)
+    normalized = _normalize_designation(designation)
+    for runway in airport.runways:
+        if _normalize_designation(runway.designation) == normalized:
+            return runway
+    runway = Runway(airport=airport, designation=normalized)
     session.add(runway)
     session.flush()
     return runway
+
+
+def _append_note_once(installation: Installation, note: str) -> None:
+    """Append note unless it (or an identical prior run's copy) is already there."""
+    if note in (installation.notes or ""):
+        return
+    installation.notes = f"{installation.notes}\n{note}" if installation.notes else note
+
+
+_OLD_AMBIGUOUS_NOTE_PREFIX = "FAA arresting-system data lists multiple EMAS-equipped ends here:"
+
+
+def _remove_stale_ambiguous_note(installation: Installation) -> None:
+    """Drop a prior run's "genuinely ambiguous" note once same-rwy_id logic resolves it."""
+    if not installation.notes:
+        return
+    kept = [line for line in installation.notes.splitlines() if not line.startswith(_OLD_AMBIGUOUS_NOTE_PREFIX)]
+    installation.notes = "\n".join(kept) or None
 
 
 def enrich_installations(
@@ -43,6 +69,7 @@ def enrich_installations(
 ) -> dict:
     stats = {
         "enriched": 0,
+        "resolved_same_runway_multiple_ends": 0,
         "already_enriched": 0,
         "no_faa_arresting_system_match": 0,
         "ambiguous_multiple_ends": 0,
@@ -52,7 +79,10 @@ def enrich_installations(
     ).all()
 
     for installation in installations:
-        if installation.runway_end is not None:
+        # runway_id (not runway_end) is the "already handled" marker: the
+        # same-runway-multiple-ends case below sets runway_id but leaves
+        # runway_end blank, since which specific end still isn't known.
+        if installation.runway_id is not None:
             stats["already_enriched"] += 1
             continue
 
@@ -74,11 +104,34 @@ def enrich_installations(
         if not unique_candidates:
             stats["no_faa_arresting_system_match"] += 1
             continue
+
         if len(unique_candidates) > 1:
+            # Candidates naming different ends of one physical runway (e.g.
+            # "1/19" ends "1" and "19") aren't actually ambiguous about which
+            # runway - only about which end. Link the runway; leave the end
+            # unset rather than guessing.
+            normalized_rwy_ids = {_normalize_designation(row.rwy_id) for row in unique_candidates}
+            if len(normalized_rwy_ids) == 1:
+                match = unique_candidates[0]
+                runway = _get_or_create_runway(session, airport, match.rwy_id)
+                installation.runway = runway
+                ends = ", ".join(sorted({row.rwy_end_id for row in unique_candidates}))
+                _remove_stale_ambiguous_note(installation)
+                _append_note_once(
+                    installation,
+                    f"FAA arresting-system data lists EMAS at multiple ends of runway "
+                    f"{runway.designation} ({ends}); exact end not recorded.",
+                )
+                stats["resolved_same_runway_multiple_ends"] += 1
+                continue
+
+            # Genuinely different runways for one Installation row - no safe
+            # link to make; record the raw data as text only.
             stats["ambiguous_multiple_ends"] += 1
             ends = ", ".join(sorted(f"{row.rwy_id}/{row.rwy_end_id}" for row in unique_candidates))
-            note = f"FAA arresting-system data lists multiple EMAS-equipped ends here: {ends}."
-            installation.notes = f"{installation.notes}\n{note}" if installation.notes else note
+            _append_note_once(
+                installation, f"FAA arresting-system data lists multiple EMAS-equipped ends here: {ends}."
+            )
             continue
 
         match = unique_candidates[0]
@@ -140,11 +193,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Enrichment failed: {exc}", file=sys.stderr)
         return 1
 
-    print(f"FAA EMAS arresting-system rows fetched: {stats['faa_emas_rows_fetched']}")
-    print(f"Installations enriched:                 {stats['enriched']}")
-    print(f"Already enriched (skipped):              {stats['already_enriched']}")
-    print(f"No FAA arresting-system match:            {stats['no_faa_arresting_system_match']}")
-    print(f"Ambiguous (multiple ends, noted only):    {stats['ambiguous_multiple_ends']}")
+    print(f"FAA EMAS arresting-system rows fetched:      {stats['faa_emas_rows_fetched']}")
+    print(f"Installations enriched (single end match):   {stats['enriched']}")
+    print(f"Resolved (multiple ends, same runway):       {stats['resolved_same_runway_multiple_ends']}")
+    print(f"Already enriched (skipped):                  {stats['already_enriched']}")
+    print(f"No FAA arresting-system match:               {stats['no_faa_arresting_system_match']}")
+    print(f"Still ambiguous (different runways, noted):  {stats['ambiguous_multiple_ends']}")
     return 0
 
 

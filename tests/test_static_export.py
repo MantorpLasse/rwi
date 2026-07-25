@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.database import Base
-from app.models import Airport, Runway, Signal, Source
+from app.models import Airport, Installation, Runway, Signal, Source
 from app.static_export import build_site
 
 
@@ -58,6 +58,32 @@ def test_build_site_writes_expected_pages_and_data(tmp_path):
     assert len(data["airports"]) == 1
     assert len(data["signals"]) == 1
     assert data["signals"][0]["title"] == "Runway 15/33 future EMAS"
+
+
+def test_build_site_shows_unconfirmed_runway_pill_instead_of_a_pill_with_no_end(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        _seed(session)
+        airport = session.query(Airport).one()
+        unrelated_runway = Runway(airport=airport, designation="13C/31C", length_m=1988)
+        session.add(unrelated_runway)
+        session.add(
+            Installation(
+                airport=airport,
+                type="EMASMAX",
+                status="active",
+                notes="FAA arresting-system data lists multiple EMAS-equipped ends here: 04R/22L/04R, 04R/22L/22L.",
+            )
+        )
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert "Ingen bekräftad bankoppling" in detail_html
+    assert "13C/31C" in detail_html  # the airport's real, unrelated runway is still shown in "Banor"
 
 
 def test_build_site_is_idempotent_and_replaces_stale_output(tmp_path):

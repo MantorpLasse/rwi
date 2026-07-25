@@ -332,6 +332,20 @@ td.title {
   color: var(--text-dim);
 }
 
+/* Explicit "we checked and can't confirm this" - dashed/muted so it never
+   reads like a normal status pill (e.g. "Bana 24") stating a known fact. */
+.pill.unconfirmed {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px dashed var(--text-faint);
+  color: var(--text-faint);
+}
+
 /* Confirmed vendor - a fact the source explicitly named, not a guess -
    distinct green so it never reads like the category/confidence pills. */
 .pill.vendor {

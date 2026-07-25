@@ -34,24 +34,49 @@
     <div class="card">
       <div class="card-header">Installationer</div>
       {% if airport.installations %}
-      <table>
-        <thead><tr><th>Typ</th><th>Bana/ände</th><th>Installerad</th><th>Status</th><th>Leverantör</th></tr></thead>
-        <tbody>
-          {% for installation in airport.installations %}
-          <tr>
-            <td data-label="Typ">{{ installation.type or "–" }}</td>
-            <td data-label="Bana/ände">{{ installation.runway_end or "–" }}</td>
-            <td data-label="Installerad" class="mono">{{ installation.install_year or "–" }}</td>
-            <td data-label="Status">{{ installation.status or "–" }}</td>
-            <td data-label="Leverantör">
-              {% if installation.confirmed_vendor %}
-              <span class="pill vendor">Bekräftad: {{ installation.confirmed_vendor }}</span>
-              {% else %}–{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <div class="card-body" style="display:flex; flex-direction:column; gap:22px">
+        {% for installation in airport.installations %}
+        <div{% if not loop.last %} style="padding-bottom:22px; border-bottom:1px solid var(--border)"{% endif %}>
+          <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px">
+            <strong>{{ installation.type or "Okänd typ" }}</strong>
+            {% if installation.runway_end %}<span class="pill status">Bana {{ installation.runway_end }}</span>
+            {% elif installation.no_confirmed_runway %}<span class="pill unconfirmed" title="Källan pekar ut flera olika banor för denna installation - ingen enskild bana kan bekräftas, se detaljer nedan.">Ingen bekräftad bankoppling</span>{% endif %}
+            {% if installation.status %}<span class="pill status">{{ installation.status }}</span>{% endif %}
+            {% if installation.install_year %}<span class="mono" style="color:var(--text-dim)">Installerad {{ installation.install_year }}</span>{% endif %}
+            {% if installation.confirmed_vendor %}<span class="pill vendor">Bekräftad leverantör: {{ installation.confirmed_vendor }}</span>{% endif %}
+          </div>
+
+          {% if installation.source_title %}
+          <div style="margin-bottom:14px">
+            <div style="color:var(--text-faint); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em">Källa</div>
+            <div>{{ installation.source_title }}</div>
+            <div style="color:var(--text-dim); font-size:0.85rem">
+              {{ installation.source_publisher or "" }}{% if installation.source_publisher and installation.source_type %} · {% endif %}{{ installation.source_type or "" }}{% if installation.source_published_date %} · {{ installation.source_published_date }}{% endif %}
+            </div>
+            {% if installation.source_url %}
+            <a href="{{ installation.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
+            {% else %}
+            <span style="color:var(--text-faint)">Ingen offentlig länk (t.ex. internt dokument).</span>
+            {% endif %}
+          </div>
+          {% else %}
+          <div style="margin-bottom:14px; color:var(--text-dim)">Ingen källa kopplad ännu.</div>
+          {% endif %}
+
+          {% if installation.notes %}
+          <div class="card annotation" style="margin-bottom:0">
+            <div class="card-header">
+              Detaljer från källan
+              <span class="eyebrow">Fritext (kostnad, datum m.m.) utan egna fält i databasen</span>
+            </div>
+            <div class="card-body">
+              <p style="white-space:pre-line; margin:0">{{ installation.notes }}</p>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
       {% else %}
       <div class="empty-state">Inga installationer registrerade.</div>
       {% endif %}
