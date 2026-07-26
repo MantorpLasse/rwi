@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_components.html" import sign, gauge, cat %}
+{% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill %}
 {% block title %}{{ signal.title }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <div class="breadcrumbs"><a href="{{ root }}/signals/index.html">← Signaler</a></div>
@@ -11,10 +11,8 @@
     <h1>{{ signal.title }}</h1>
     <span class="pill {{ 'done' if signal.is_completed else 'status' }}">{{ signal.status_label or signal.category_label }}</span>
     {{ cat(signal.category_label, signal.category_class) }}
-    {{ gauge(signal.confidence_level, signal.confidence_label) }}
-    {% if signal.confirmed_vendor %}
-    <span class="pill vendor">Bekräftad leverantör: {{ signal.confirmed_vendor }}</span>
-    {% endif %}
+    {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
+    {{ vendor_pill(signal.confirmed_vendor, root) }}
     {% if signal.installation_id %}
     <a href="{{ root }}/airports/{{ signal.airport_id }}.html#installation-{{ signal.installation_id }}">→ Se installation</a>
     {% endif %}
@@ -32,7 +30,7 @@
         <dl class="meta">
           <dt>Kategori</dt><dd>{{ cat(signal.category_label, signal.category_class) }}</dd>
           <dt>Status</dt><dd>{{ signal.status_label or "–" }}</dd>
-          <dt>Confidence</dt><dd>{{ gauge(signal.confidence_level, signal.confidence_label) }}</dd>
+          <dt>Confidence</dt><dd>{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</dd>
           <dt>Planeringsår</dt><dd class="mono">{{ signal.planning_year or "–" }}</dd>
           <dt>Upphandlingsår</dt><dd class="mono">{{ signal.procurement_year or "–" }}</dd>
           <dt>Bana</dt><dd class="mono">{{ signal.runway_designation or "–" }}</dd>
@@ -65,7 +63,7 @@
       <div class="card-body">
         {% if signal.source_title %}
         <h2>{{ signal.source_title }}</h2>
-        <p style="color:var(--text-dim); margin-top:-6px">{{ signal.source_publisher or "" }}{% if signal.source_publisher and signal.source_type %} · {% endif %}{{ signal.source_type or "" }}</p>
+        <p style="color:var(--text-dim); margin-top:-6px">{{ signal.source_publisher or "" }}{% if signal.source_publisher and signal.source_type %} · {% endif %}{{ source_badge(signal, root) }}</p>
         {% if signal.source_url %}
         <a href="{{ signal.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
         {% else %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_components.html" import sign, gauge, cat %}
+{% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill %}
 {% block title %}{{ airport.name }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a></div>
@@ -19,7 +19,7 @@
             <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
             <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
             <td data-label="Status"><span class="pill status">{{ signal.status or signal.category_label }}</span></td>
-            <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label) }}</td>
+            <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
             <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
             <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
           </tr>
@@ -43,7 +43,7 @@
             {% elif installation.no_confirmed_runway %}<span class="pill unconfirmed" title="Källan pekar ut flera olika banor för denna installation - ingen enskild bana kan bekräftas, se detaljer nedan.">Ingen bekräftad bankoppling</span>{% endif %}
             {% if installation.status %}<span class="pill status">{{ installation.status }}</span>{% endif %}
             {% if installation.install_year %}<span class="mono" style="color:var(--text-dim)">Installerad {{ installation.install_year }}</span>{% endif %}
-            {% if installation.confirmed_vendor %}<span class="pill vendor">Bekräftad leverantör: {{ installation.confirmed_vendor }}</span>{% endif %}
+            {{ vendor_pill(installation.confirmed_vendor, root) }}
           </div>
 
           {% if installation.source_title %}
@@ -51,7 +51,7 @@
             <div style="color:var(--text-faint); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em">Källa</div>
             <div>{{ installation.source_title }}</div>
             <div style="color:var(--text-dim); font-size:0.85rem">
-              {{ installation.source_publisher or "" }}{% if installation.source_publisher and installation.source_type %} · {% endif %}{{ installation.source_type or "" }}{% if installation.source_published_date %} · {{ installation.source_published_date }}{% endif %}
+              {{ installation.source_publisher or "" }}{% if installation.source_publisher and installation.source_type %} · {% endif %}{{ source_badge(installation, root) }}{% if installation.source_published_date %} · {{ installation.source_published_date }}{% endif %}
             </div>
             {% if installation.source_url %}
             <a href="{{ installation.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>

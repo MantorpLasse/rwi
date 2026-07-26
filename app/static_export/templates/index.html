@@ -24,7 +24,7 @@
         <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }}</a></td>
         <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
         <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
-        <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label) }}</td>
+        <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
         <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
         <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
       </tr>

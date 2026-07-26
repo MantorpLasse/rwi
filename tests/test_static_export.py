@@ -187,3 +187,121 @@ def test_build_site_is_idempotent_and_replaces_stale_output(tmp_path):
 
     assert not stale.exists()
     assert (output / "index.html").exists()
+
+
+def test_build_site_writes_ordlista_page_linked_from_nav(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        build_site(tmp_path / "site", session=session)
+
+    output = tmp_path / "site"
+    assert (output / "ordlista.html").exists()
+
+    ordlista_html = (output / "ordlista.html").read_text(encoding="utf-8")
+    for anchor, heading in [
+        ("emas", "EMAS (Engineered Material Arresting System)"),
+        ("emasmax", "EMASMAX"),
+        ("greenemas", "greenEMAS"),
+        ("rsa", "RSA (Runway Safety Area)"),
+        ("resa", "RESA (Runway End Safety Area)"),
+        ("part-139", "Part 139"),
+        ("notam", "NOTAM (Notice to Airmen)"),
+        ("master-plan", "Master Plan"),
+        ("aip", "AIP (Airport Improvement Program)"),
+        ("iija-bidrag", "IIJA-bidrag"),
+        ("cip", "CIP (Capital Improvement Plan)"),
+        ("alp", "ALP (Airport Layout Plan)"),
+        ("usaspending-bidrag", "USAspending-bidrag"),
+        ("faa-kartdata", "FAA:s kartdata / FAA:s faktablad"),
+        ("bekraftad-leverantor", "Bekräftad leverantör"),
+        ("confidence", "Confidence (Hög/Medel/Låg)"),
+    ]:
+        assert f'id="{anchor}"' in ordlista_html
+        assert heading in ordlista_html
+
+    index_html = (output / "index.html").read_text(encoding="utf-8")
+    assert '<a href="./ordlista.html">Ordlista</a>' in index_html
+
+
+def test_build_site_links_recognized_source_types_to_glossary_anchors(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Test Field", iata_code="TST", country="USA")
+        session.add(airport)
+        session.flush()
+
+        master_plan_source = Source(title="Some Master Plan", source_type="master_plan", url="https://example.test/mp")
+        faa_source = Source(title="FAA map", source_type="faa_tableau")
+        signal = Signal(
+            airport=airport, source=master_plan_source, title="A signal",
+            category="new_installation", confidence="high",
+        )
+        installation = Installation(airport=airport, source=faa_source, type="EMASMAX", status="active")
+        session.add_all([signal, installation])
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
+    assert 'href="../ordlista.html#master-plan"' in signal_html
+    assert 'href="../ordlista.html#confidence"' in signal_html
+
+    airport_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert 'href="../ordlista.html#faa-kartdata"' in airport_html
+
+    list_html = (output / "signals" / "index.html").read_text(encoding="utf-8")
+    assert 'href="../ordlista.html#master-plan"' in list_html
+
+
+def test_build_site_falls_back_to_unlinked_badge_for_unmapped_source_type(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Test Field", iata_code="TST", country="USA")
+        session.add(airport)
+        session.flush()
+        source = Source(title="Old free-text source", source_type="Environmental")
+        signal = Signal(
+            airport=airport, source=source, title="A signal",
+            category="new_installation", confidence="high",
+        )
+        session.add(signal)
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
+    assert '<span class="pill status" title="Källtyp: Environmental">Environmental</span>' in signal_html
+    assert "ordlista.html#environmental" not in signal_html.lower()
+
+
+def test_build_site_links_confirmed_vendor_pill_to_glossary(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Test Field", iata_code="TST", country="USA")
+        session.add(airport)
+        session.flush()
+        installation = Installation(
+            airport=airport, type="EMASMAX", status="active", confirmed_vendor="Runway Safe",
+        )
+        signal = Signal(
+            airport=airport, title="A signal", category="new_installation", confidence="high",
+            confirmed_vendor="Runway Safe",
+        )
+        session.add_all([installation, signal])
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    airport_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert 'href="../ordlista.html#bekraftad-leverantor"' in airport_html
+    assert "Bekräftad leverantör</a>: Runway Safe" in airport_html
+
+    signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
+    assert 'href="../ordlista.html#bekraftad-leverantor"' in signal_html

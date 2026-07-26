@@ -56,6 +56,67 @@ _CATEGORY = {
     "unknown": ("Ej klassificerad", "study"),
 }
 
+# Source.source_type -> (display label, /ordlista.html anchor, one-sentence
+# tooltip) - the single place this mapping lives, per DESIGN_BRIEF.md's
+# "Bygg denna mappning på ett ställe" (already applied to _CATEGORY above).
+# Anchor/tooltip text is verbatim from the glossary content the source-type
+# badges link to - never paraphrased here.
+#
+# "Master Plan" (capitalized, space) is an older, pre-snake_case alias for
+# the same concept as "master_plan" - both map to the same anchor. A few
+# source_type values already in the database (Airport/Authority/
+# Environmental/FAA/Procurement/Watchlist) are leftover free-text fragments
+# from early, pre-"forenkling" data, not a real taxonomy - deliberately not
+# mapped here (fixing that is a separate, unrelated data-quality task); they
+# fall through to the "no entry" branch below and render as a plain,
+# unlinked badge showing the raw value, exactly as before this change.
+_SOURCE_TYPE = {
+    "master_plan": (
+        "Master Plan", "master-plan",
+        "En flygplats långsiktiga utvecklingsplan, ofta 10-20 år framåt.",
+    ),
+    "Master Plan": (
+        "Master Plan", "master-plan",
+        "En flygplats långsiktiga utvecklingsplan, ofta 10-20 år framåt.",
+    ),
+    "aip_grant": (
+        "AIP-bidrag", "aip",
+        "Ett amerikanskt statligt bidragsprogram. Ett beviljat AIP-bidrag betyder att "
+        "pengarna finns, men inte alltid att bygget redan startat.",
+    ),
+    "iija_grant": (
+        "IIJA-bidrag", "iija-bidrag",
+        "En separat, större statlig bidragspott, fungerar ungefär som AIP men är en "
+        "egen pengapåse.",
+    ),
+    "usaspending_grant": (
+        "USAspending-bidrag", "usaspending-bidrag",
+        "Ett verkligt, redan beviljat federalt bidrag, hämtat direkt från den "
+        "amerikanska statens egna offentliga utbetalningsregister.",
+    ),
+    "faa_tableau": (
+        "FAA:s kartdata", "faa-kartdata",
+        "Officiell information direkt från den amerikanska luftfartsmyndigheten "
+        "(FAA) om vad som redan är byggt.",
+    ),
+    "faa_fact_sheet": (
+        "FAA:s faktablad", "faa-kartdata",
+        "Officiell information direkt från den amerikanska luftfartsmyndigheten "
+        "(FAA) om vad som redan är byggt.",
+    ),
+    "CIP": (
+        "CIP", "cip",
+        "En flygplats egen, mer kortsiktiga investeringslista (vanligtvis 3-5 år).",
+    ),
+    "ALP": (
+        "ALP", "alp",
+        "En teknisk ritning över hur flygplatsen ser ut och ska se ut.",
+    ),
+    "news": ("Nyhetskälla", None, None),
+    "shareholder_newsletter": ("Aktieägarbrev", None, None),
+    "faa_construction_report": ("FAA byggrapport", None, None),
+}
+
 
 def _confidence_level(value: str | None) -> str:
     return _CONFIDENCE_LEVEL.get((value or "").lower(), "low")
@@ -65,10 +126,22 @@ def _category_view(value: str | None) -> tuple[str, str]:
     return _CATEGORY.get(value or "", (value or "Okänd", "study"))
 
 
+def _source_type_view(value: str | None) -> tuple[str | None, str | None, str | None]:
+    """Returns (label, anchor, tooltip) - anchor/tooltip are None when this
+    source_type has no glossary entry, so source_badge() falls back to a
+    plain, unlinked badge instead of a dead link."""
+    if not value:
+        return None, None, None
+    return _SOURCE_TYPE.get(value, (value, None, None))
+
+
 def _signal_view(signal: Signal) -> SimpleNamespace:
     source = signal.source
     category_label, category_class = _category_view(signal.category)
     confidence_level = _confidence_level(signal.confidence)
+    source_type_label, source_type_anchor, source_type_tooltip = _source_type_view(
+        source.source_type if source else None
+    )
     return SimpleNamespace(
         id=signal.id,
         title=signal.title,
@@ -100,6 +173,9 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         source_title=source.title if source else None,
         source_publisher=source.publisher if source else None,
         source_type=source.source_type if source else None,
+        source_type_label=source_type_label,
+        source_type_anchor=source_type_anchor,
+        source_type_tooltip=source_type_tooltip,
         source_url=source.url if source else None,
     )
 
@@ -109,6 +185,9 @@ _RUNWAY_TRACKED_INSTALLATION_TYPES = ("EMASMAX", "greenEMAS")
 
 def _installation_view(installation: Installation) -> SimpleNamespace:
     source = installation.source
+    source_type_label, source_type_anchor, source_type_tooltip = _source_type_view(
+        source.source_type if source else None
+    )
     return SimpleNamespace(
         id=installation.id,
         type=installation.type,
@@ -130,6 +209,9 @@ def _installation_view(installation: Installation) -> SimpleNamespace:
         source_title=source.title if source else None,
         source_publisher=source.publisher if source else None,
         source_type=source.source_type if source else None,
+        source_type_label=source_type_label,
+        source_type_anchor=source_type_anchor,
+        source_type_tooltip=source_type_tooltip,
         source_url=source.url if source else None,
         source_published_date=source.published_date if source else None,
     )
@@ -296,6 +378,12 @@ def _build(output_dir: Path, session: Session) -> None:
         signal_count=len(signal_views),
         high_confidence_count=sum(1 for s in signal_views if s.confidence_level == "high"),
         top_signals=signal_views[:8],
+    )
+
+    render(
+        "ordlista.html",
+        output_dir / "ordlista.html",
+        root=".",
     )
 
     render(

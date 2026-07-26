@@ -202,6 +202,11 @@ h2 {
 
 /* Personal annotations (scripts/annotate_signal.py) - dashed border marks
    this as an outside note, not something the source itself said. */
+/* /ordlista.html: highlight the term a #anchor link landed on. */
+.card:target {
+  border-color: var(--accent);
+}
+
 .card.annotation {
   border-style: dashed;
   border-color: var(--accent);
@@ -431,6 +436,37 @@ td.title {
   background: var(--panel2);
   border: 1px solid var(--border);
   color: var(--text-dim);
+}
+
+/* .pill.status doubles as a source-type badge linking to /ordlista.html
+   (see _components.html's source_badge macro) - give the linked variant a
+   visible hover affordance distinct from the plain (non-clickable) span
+   version, without changing its resting look. */
+a.pill.status {
+  cursor: help;
+}
+
+a.pill.status:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  text-decoration: none;
+}
+
+/* Inline glossary link - used for the confidence gauge label and the
+   "Bekräftad leverantör" pill's prefix, where a full badge would look out
+   of place mid-text. color:inherit so it matches whatever muted/accent ink
+   it's embedded in; the dotted underline is the only "this is clickable"
+   signal until hover. */
+.gloss-link {
+  color: inherit;
+  cursor: help;
+  border-bottom: 1px dotted currentColor;
+  text-decoration: none;
+}
+
+.gloss-link:hover {
+  border-bottom-style: solid;
+  text-decoration: none;
 }
 
 /* Explicit "we checked and can't confirm this" - dashed/muted so it never

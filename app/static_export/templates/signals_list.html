@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_components.html" import sign, gauge, cat, signal_row, signal_strip %}
+{% from "_components.html" import sign, gauge, cat, signal_row, signal_strip, source_badge %}
 {% block title %}Signaler · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <h1>Signaler</h1>
@@ -36,9 +36,9 @@
             <span class="caret">▶</span><span class="grouptitle">{{ item.top_signal.title }}</span><span class="more-tag">+{{ item.more_count }} till</span>
           </td>
           <td data-label="Kategori">{{ cat(item.category_label, item.category_class) }}</td>
-          <td data-label="Confidence">{{ gauge(item.confidence_level, item.confidence_label) }}</td>
+          <td data-label="Confidence">{{ gauge(item.confidence_level, item.confidence_label, root) }}</td>
           <td data-label="År" class="mono">{{ item.top_signal.planning_year or "–" }}</td>
-          <td data-label="Källa" class="src">{{ item.top_signal.source_type or "–" }}</td>
+          <td data-label="Källa" class="src">{{ source_badge(item.top_signal, root) }}</td>
           <td data-label="Score">{% if item.top_signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(item.top_signal.probability_score) }}</span>{% else %}–{% endif %}</td>
         </tr>
         <tr class="detail-row" data-detail-for="{{ item.group_id }}">

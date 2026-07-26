@@ -1,5 +1,6 @@
 {# Återanvändbara byggstenar för hela sajten – se DESIGN_BRIEF.md.
-   Importeras med `{% from "_components.html" import sign, gauge, cat %}`. #}
+   Importeras med
+   `{% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill %}`. #}
 
 {% macro sign(code, name) -%}
 {%- if code and code != "–" -%}
@@ -9,12 +10,35 @@
 {%- endif -%}
 {%- endmacro %}
 
-{% macro gauge(level, label) -%}
-<div class="gauge {{ level }}"><span></span><span></span><span></span><span class="gauge-label">{{ label }}</span></div>
+{% macro gauge(level, label, root) -%}
+<div class="gauge {{ level }}"><span></span><span></span><span></span><a class="gauge-label gloss-link" href="{{ root }}/ordlista.html#confidence" title="Hur säkra vi är på att informationen stämmer, baserat på hur bra källan är – inte hur säkert det är att projektet blir av.">{{ label }}</a></div>
 {%- endmacro %}
 
 {% macro cat(label, css_class) -%}
 <span class="cat {{ css_class }}">{{ label }}</span>
+{%- endmacro %}
+
+{# Källtyp-badge - länkar till rätt ankarpunkt i ordlistan (/ordlista.html)
+   när källtypen har en definition där, annars en icke-klickbar badge med
+   den mänskliga etiketten (aldrig det råa databasvärdet - se
+   DESIGN_BRIEF.md:s "aldrig råa databasnamn i UI"). `view` är en
+   signal/installation-vy med source_type_label/source_type_anchor/
+   source_type_tooltip satta av app/static_export/build.py. #}
+{% macro source_badge(view, root) -%}
+{%- if not view.source_type -%}
+<span style="color:var(--text-faint)">–</span>
+{%- elif view.source_type_anchor -%}
+<a class="pill status" href="{{ root }}/ordlista.html#{{ view.source_type_anchor }}" title="{{ view.source_type_tooltip }}">{{ view.source_type_label }}</a>
+{%- else -%}
+<span class="pill status" title="Källtyp: {{ view.source_type_label }}">{{ view.source_type_label }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{# "Bekräftad leverantör"-pillen, med etiketten länkad till ordlistan. #}
+{% macro vendor_pill(vendor, root) -%}
+{%- if vendor -%}
+<span class="pill vendor"><a class="gloss-link" href="{{ root }}/ordlista.html#bekraftad-leverantor" title="Vi har hittat en källa som namnger exakt vilket företag som levererat eller ska leverera systemet.">Bekräftad leverantör</a>: {{ vendor }}</span>
+{%- endif -%}
 {%- endmacro %}
 
 {# One standalone signal table row (signals_list.html's ungrouped rows).
@@ -29,9 +53,9 @@
   <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }}</a></td>
   <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
   <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
-  <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label) }}</td>
+  <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
   <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
-  <td data-label="Källa" class="src">{{ signal.source_type or "–" }}</td>
+  <td data-label="Källa" class="src">{{ source_badge(signal, root) }}</td>
   <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
 </tr>
 {%- endmacro %}
@@ -42,9 +66,9 @@
 {% macro signal_strip(signal, root) -%}
 <div class="strip">
   <div class="title"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></div>
-  {{ gauge(signal.confidence_level, signal.confidence_label) }}
+  {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
   <div class="meta mono">{{ signal.planning_year or "–" }}</div>
-  <div class="src">{{ signal.source_type or "–" }}</div>
+  <div class="src">{{ source_badge(signal, root) }}</div>
   <div class="score mono">{% if signal.probability_score is not none %}{{ "%.1f"|format(signal.probability_score) }}{% else %}–{% endif %}</div>
 </div>
 {%- endmacro %}

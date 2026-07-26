@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Ordlista · Runway Safe Intelligence{% endblock %}
+{% block content %}
+<h1>Ordlista</h1>
+<p class="subtitle">Förklaringar till signaler och källor.</p>
+
+<div class="card" id="emas">
+  <div class="card-header">EMAS (Engineered Material Arresting System)</div>
+  <div class="card-body">
+    <p style="margin:0">Ett säkerhetssystem i slutet av en landningsbana, byggt av krossbart material. Om ett plan kör för långt vid landning eller start bromsas det säkert in i materialet istället för att fortsätta ut i terrängen.</p>
+  </div>
+</div>
+
+<div class="card" id="emasmax">
+  <div class="card-header">EMASMAX</div>
+  <div class="card-body">
+    <p style="margin:0">Ett specifikt varumärke/produktlinje av EMAS, tillverkat av Runway Safe.</p>
+  </div>
+</div>
+
+<div class="card" id="greenemas">
+  <div class="card-header">greenEMAS</div>
+  <div class="card-body">
+    <p style="margin:0">En miljövänligare variant av EMAS-tekniken, även den från Runway Safe.</p>
+  </div>
+</div>
+
+<div class="card" id="rsa">
+  <div class="card-header">RSA (Runway Safety Area)</div>
+  <div class="card-body">
+    <p style="margin:0">Det säkerhetsområde som enligt lag ska finnas runt en landningsbana. Om platsen inte räcker till för det normala kravet kan EMAS användas som lösning istället.</p>
+  </div>
+</div>
+
+<div class="card" id="resa">
+  <div class="card-header">RESA (Runway End Safety Area)</div>
+  <div class="card-body">
+    <p style="margin:0">Samma sak som RSA, men den beteckning som används internationellt (utanför USA).</p>
+  </div>
+</div>
+
+<div class="card" id="part-139">
+  <div class="card-header">Part 139</div>
+  <div class="card-body">
+    <p style="margin:0">Det amerikanska regelverket som styr säkerhetskrav på kommersiella flygplatser, inklusive kravet på RSA/EMAS.</p>
+  </div>
+</div>
+
+<div class="card" id="notam">
+  <div class="card-header">NOTAM (Notice to Airmen)</div>
+  <div class="card-body">
+    <p style="margin:0">Ett officiellt meddelande till piloter om tillfälliga förändringar på en flygplats, t.ex. en stängd bana under ett byggprojekt.</p>
+  </div>
+</div>
+
+<div class="card" id="master-plan">
+  <div class="card-header">Master Plan</div>
+  <div class="card-body">
+    <p style="margin:0">En flygplats långsiktiga utvecklingsplan, ofta 10-20 år framåt. Om EMAS nämns här är det oftast flera år innan något faktiskt byggs.</p>
+  </div>
+</div>
+
+<div class="card" id="aip">
+  <div class="card-header">AIP (Airport Improvement Program)</div>
+  <div class="card-body">
+    <p style="margin:0">Ett amerikanskt statligt bidragsprogram. Varje år delar staten ut pengar till flygplatser för säkerhets- och underhållsprojekt. Ett beviljat AIP-bidrag betyder att pengarna finns, men inte alltid att bygget redan startat.</p>
+  </div>
+</div>
+
+<div class="card" id="iija-bidrag">
+  <div class="card-header">IIJA-bidrag</div>
+  <div class="card-body">
+    <p style="margin:0">En separat, större statlig bidragspott (del av en stor amerikansk infrastruktursatsning från 2021), fungerar ungefär som AIP men är en egen pengapåse.</p>
+  </div>
+</div>
+
+<div class="card" id="cip">
+  <div class="card-header">CIP (Capital Improvement Plan)</div>
+  <div class="card-body">
+    <p style="margin:0">En flygplats egen, mer kortsiktiga investeringslista (vanligtvis 3-5 år). Mer konkret än en Master Plan, men fortfarande en plan, inte ett färdigt bygge.</p>
+  </div>
+</div>
+
+<div class="card" id="alp">
+  <div class="card-header">ALP (Airport Layout Plan)</div>
+  <div class="card-body">
+    <p style="margin:0">En teknisk ritning över hur flygplatsen ser ut och ska se ut. Om EMAS finns med på en ny ALP-ritning är det ett tidigt tecken på att något är på gång.</p>
+  </div>
+</div>
+
+<div class="card" id="usaspending-bidrag">
+  <div class="card-header">USAspending-bidrag</div>
+  <div class="card-body">
+    <p style="margin:0">Ett verkligt, redan beviljat federalt bidrag, hämtat direkt från den amerikanska statens egna offentliga utbetalningsregister. Högre konfidens än en plan, eftersom pengarna redan är tilldelade.</p>
+  </div>
+</div>
+
+<div class="card" id="faa-kartdata">
+  <div class="card-header">FAA:s kartdata / FAA:s faktablad</div>
+  <div class="card-body">
+    <p style="margin:0">Officiell information direkt från den amerikanska luftfartsmyndigheten (FAA) om vad som redan är byggt.</p>
+  </div>
+</div>
+
+<div class="card" id="bekraftad-leverantor">
+  <div class="card-header">Bekräftad leverantör</div>
+  <div class="card-body">
+    <p style="margin:0">Vi har hittat en källa som namnger exakt vilket företag som levererat eller ska leverera systemet.</p>
+  </div>
+</div>
+
+<div class="card" id="confidence">
+  <div class="card-header">Confidence (Hög/Medel/Låg)</div>
+  <div class="card-body">
+    <p style="margin:0">Hur säkra vi är på att informationen stämmer, baserat på hur bra källan är – inte hur säkert det är att projektet blir av.</p>
+  </div>
+</div>
+{% endblock %}
