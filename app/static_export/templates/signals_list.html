@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_components.html" import sign, gauge, cat %}
+{% from "_components.html" import sign, gauge, cat, signal_row, signal_strip %}
 {% block title %}Signaler · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <h1>Signaler</h1>
@@ -23,20 +23,36 @@
       <tr><th>Flygplats</th><th>Signal</th><th>Kategori</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
     </thead>
     <tbody>
-      {% for signal in signals %}
-      <tr
-        data-search="{{ (signal.title ~ ' ' ~ signal.airport_name ~ ' ' ~ signal.airport_code)|lower }}"
-        data-status="{{ signal.status or '' }}"
-        data-country="{{ signal.country }}"
-      >
-        <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }}</a></td>
-        <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-        <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
-        <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label) }}</td>
-        <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
-        <td data-label="Källa" class="src">{{ signal.source_type or "–" }}</td>
-        <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
-      </tr>
+      {% for item in signal_rows %}
+        {% if item.kind == "single" %}
+        {{ signal_row(item.signal, root) }}
+        {% else %}
+        <tr class="grouprow" data-toggle="{{ item.group_id }}"
+            data-search="{{ (item.members|map(attribute='title')|join(' ') ~ ' ' ~ item.airport_name ~ ' ' ~ item.airport_code)|lower }}"
+            data-status="" data-country="{{ item.country }}"
+        >
+          <td data-label="Flygplats"><a href="{{ root }}/airports/{{ item.airport_id }}.html">{{ sign(item.airport_code, item.airport_name) }}</a></td>
+          <td class="title" data-label="Signal">
+            <span class="caret">▶</span><span class="grouptitle">{{ item.top_signal.title }}</span><span class="more-tag">+{{ item.more_count }} till</span>
+          </td>
+          <td data-label="Kategori">{{ cat(item.category_label, item.category_class) }}</td>
+          <td data-label="Confidence">{{ gauge(item.confidence_level, item.confidence_label) }}</td>
+          <td data-label="År" class="mono">{{ item.top_signal.planning_year or "–" }}</td>
+          <td data-label="Källa" class="src">{{ item.top_signal.source_type or "–" }}</td>
+          <td data-label="Score">{% if item.top_signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(item.top_signal.probability_score) }}</span>{% else %}–{% endif %}</td>
+        </tr>
+        <tr class="detail-row" data-detail-for="{{ item.group_id }}">
+          <td colspan="7">
+            <div class="detail-wrap" data-wrap="{{ item.group_id }}">
+              <div class="detail-panel">
+                {% for signal in item.members %}
+                {{ signal_strip(signal, root) }}
+                {% endfor %}
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
       {% else %}
       <tr><td colspan="7" class="empty-state">Inga signaler registrerade.</td></tr>
       {% endfor %}
@@ -50,22 +66,39 @@
   var q = document.getElementById("q");
   var statusFilter = document.getElementById("status-filter");
   var countryFilter = document.getElementById("country-filter");
-  var rows = Array.prototype.slice.call(document.querySelectorAll("#signals-table tbody tr[data-search]"));
+  var table = document.getElementById("signals-table");
+  var rows = Array.prototype.slice.call(table.querySelectorAll("tbody tr[data-search]"));
   var noMatch = document.getElementById("no-match");
+
+  table.querySelectorAll(".grouprow").forEach(function (row) {
+    row.addEventListener("click", function () {
+      var groupId = row.getAttribute("data-toggle");
+      var wrap = table.querySelector('.detail-wrap[data-wrap="' + groupId + '"]');
+      var opening = !row.classList.contains("open");
+      row.classList.toggle("open", opening);
+      wrap.classList.toggle("open", opening);
+    });
+  });
 
   function apply() {
     var term = q.value.trim().toLowerCase();
     var status = statusFilter.value;
     var country = countryFilter.value;
     var visible = 0;
+
     rows.forEach(function (row) {
       var matches =
         (!term || row.getAttribute("data-search").indexOf(term) !== -1) &&
         (!status || row.getAttribute("data-status") === status) &&
         (!country || row.getAttribute("data-country") === country);
       row.hidden = !matches;
+      if (row.classList.contains("grouprow")) {
+        var detailRow = table.querySelector('tr.detail-row[data-detail-for="' + row.getAttribute("data-toggle") + '"]');
+        if (detailRow) detailRow.hidden = !matches;
+      }
       if (matches) visible += 1;
     });
+
     noMatch.hidden = visible !== 0 || rows.length === 0;
   }
 

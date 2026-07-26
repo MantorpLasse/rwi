@@ -31,6 +31,13 @@ class Signal(Base):
     runway_id: Mapped[Optional[int]] = mapped_column(ForeignKey("runways.id"), nullable=True, index=True)
     source_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sources.id"), nullable=True, index=True)
 
+    # Set when scripts/graduate_signal_to_installation.py turns a confirmed-
+    # built Signal into a real Installation row - lets status="completed"
+    # link forward to what it became, instead of just going quiet.
+    installation_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("installations.id"), nullable=True, index=True
+    )
+
     title: Mapped[str] = mapped_column(String(250), index=True)
     category: Mapped[str] = mapped_column(String(50), index=True)
     confidence: Mapped[str] = mapped_column(String(30), index=True)
@@ -65,3 +72,4 @@ class Signal(Base):
     airport: Mapped["Airport"] = relationship(back_populates="signals")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="signals")
     source: Mapped[Optional["Source"]] = relationship()
+    installation: Mapped[Optional["Installation"]] = relationship()

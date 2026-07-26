@@ -165,6 +165,7 @@ EXPECTED_COLUMNS = {
         "last_verified_at": ("DATE", True, None, None),
         "manual_year_estimate": ("INTEGER", True, None, None),
         "confirmed_vendor": ("VARCHAR(150)", True, None, None),
+        "installation_id": ("INTEGER", True, None, None),
     },
 }
 
@@ -198,6 +199,7 @@ EXPECTED_FOREIGN_KEYS = {
         ("airport_id", "airports.id"),
         ("runway_id", "runways.id"),
         ("source_id", "sources.id"),
+        ("installation_id", "installations.id"),
     },
 }
 
@@ -255,6 +257,7 @@ EXPECTED_INDEXES = {
         ("ix_signals_status", ("status",), False),
         ("ix_signals_planning_year", ("planning_year",), False),
         ("ix_signals_procurement_year", ("procurement_year",), False),
+        ("ix_signals_installation_id", ("installation_id",), False),
     },
 }
 
@@ -294,6 +297,7 @@ EXPECTED_RELATIONSHIPS = {
         "airport": ("Airport", "signals", DEFAULT_CASCADE),
         "runway": ("Runway", "signals", DEFAULT_CASCADE),
         "source": ("Source", None, DEFAULT_CASCADE),
+        "installation": ("Installation", None, DEFAULT_CASCADE),
     },
     "PublishingSource": {
         "acquisition_sources": ("AcquisitionSource", "publishing_source", DEFAULT_CASCADE),

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"http://127.0.0.1:8001/signals\")",
+      "Bash(curl -s -o /dev/null -w \"/signals -> %{http_code}\\\\n\" \"http://127.0.0.1:8001/signals\")",
+      "PowerShell(Get-NetTCPConnection -LocalPort 8001 -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Id 12004 -Force -ErrorAction SilentlyContinue)",
+      "Bash(curl -s \"http://127.0.0.1:8001/\")",
+      "Bash(git commit -m ' *)",
+      "Bash(cp data/runway_safe.db \"data/backups/runway_safe-pre-drop-documents-table-$\\(date +%Y%m%d-%H%M%S\\).db\")",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(cp data/runway_safe.db \"data/backups/runway_safe-pre-status-score-backfill-$\\(date +%Y%m%d-%H%M%S\\).db\")",
+      "Bash(curl -s -o /dev/null -w \"signals: %{http_code}\\\\n\" \"http://127.0.0.1:8004/signals\")",
+      "Bash(./.venv/Scripts/python.exe \"C:/Users/lkarl/AppData/Local/Temp/claude/c--Runwaysafe-runway-safe-intelligence/06874ab7-1a15-499c-afd1-0b503e0d0f75/scratchpad/check_signals_page2.py\")",
+      "Bash(curl -s --max-time 20 -X POST https://api.usaspending.gov/api/v2/search/spending_by_award/ -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s --max-time 20 -X POST https://api.usaspending.gov/api/v2/autocomplete/recipient/ -H 'Content-Type: application/json' -d '{\"search_text\": \"Runway Safe\", \"limit\": 10}' -o /tmp/usaspending_recipient.json -w 'http: %{http_code}\\\\n')",
+      "Bash(./.venv/Scripts/python.exe -m scripts.explore_usaspending)",
+      "Bash(/c/Python314/python -c ' *)"
+    ]
+  }
+}

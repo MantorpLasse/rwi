@@ -4,6 +4,7 @@ import argparse
 import re
 import sys
 from datetime import date
+from decimal import Decimal
 from typing import Callable
 
 import httpx
@@ -44,6 +45,32 @@ def ensure_source_external_id_column(bind=engine) -> None:
         connection.execute(
             text("CREATE UNIQUE INDEX IF NOT EXISTS uq_sources_external_id ON sources(external_id)")
         )
+
+
+def _format_amount(amount: Decimal | None) -> str:
+    if amount is None:
+        return "okänt belopp"
+    value = float(amount)
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.0f}K"
+    return f"${value:.0f}"
+
+
+def signal_title(grant: UsaspendingGrant) -> str:
+    """One grant's title, distinct from every other grant at the same airport.
+
+    Every grant used to become "USAspending grant: {recipient} EMAS" -
+    identical across all of an airport's grants (see
+    docs/utredning_2026-07-26-del4.md), which read as duplicates in the
+    signals list. Amount + fiscal year make each one recognizable at a glance.
+    """
+    fiscal_year = grant.start_date.year if grant.start_date else None
+    amount_text = _format_amount(grant.award_amount)
+    if fiscal_year:
+        return f"USAspending grant — {amount_text}, FY{fiscal_year}"
+    return f"USAspending grant — {amount_text}"
 
 
 def classify_category(description: str) -> str:
@@ -183,7 +210,7 @@ def import_all(
                     Signal(
                         airport=airport,
                         source=source,
-                        title=f"USAspending grant: {grant.recipient_name.title()} EMAS",
+                        title=signal_title(grant),
                         category=classify_category(grant.description),
                         confidence=confidence,
                         status="identified",

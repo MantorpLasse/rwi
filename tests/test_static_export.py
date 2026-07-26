@@ -86,6 +86,94 @@ def test_build_site_shows_unconfirmed_runway_pill_instead_of_a_pill_with_no_end(
     assert "13C/31C" in detail_html  # the airport's real, unrelated runway is still shown in "Banor"
 
 
+def test_build_site_groups_multiple_signals_at_the_same_airport_and_category(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Chicago Executive", iata_code="PWK", country="USA")
+        session.add(airport)
+        session.flush()
+        for year, score in [(2016, 6.0), (2021, 7.0), (2025, 9.0)]:
+            session.add(
+                Signal(
+                    airport=airport,
+                    title=f"Chicago Executive replacement after incident ({year})",
+                    category="replacement_after_incident",
+                    confidence="high",
+                    probability_score=score,
+                )
+            )
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    list_html = (output / "signals" / "index.html").read_text(encoding="utf-8")
+    # Headline shows the top (highest-score) member's real title, styled
+    # like a normal signal link, plus a muted count tag - not generic text.
+    assert '<span class="grouptitle">Chicago Executive replacement after incident (2025)</span>' in list_html
+    assert "+2 till" in list_html
+    assert "Efter incident" in list_html
+    # All three underlying signals are still present (grouping is presentation-only) -
+    # as strips inside one inset detail panel, not more table rows.
+    assert list_html.count('class="strip"') == 3
+    assert '(2016)' in list_html
+    assert '(2021)' in list_html
+    assert 'class="detail-panel"' in list_html
+    assert list_html.count('class="grouprow"') == 1
+
+    # data.json is untouched by the grouping - still one entry per Signal row.
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    assert len(data["signals"]) == 3
+
+
+def test_build_site_does_not_group_a_lone_signal(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        _seed(session)
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    list_html = (output / "signals" / "index.html").read_text(encoding="utf-8")
+    assert 'class="grouprow"' not in list_html
+    assert 'class="detail-panel"' not in list_html
+    assert "Runway 15/33 future EMAS" in list_html
+
+
+def test_build_site_shows_completed_pill_and_installation_link_for_graduated_signal(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Wellington International Airport", iata_code="WLG", country="New Zealand")
+        session.add(airport)
+        session.flush()
+        installation = Installation(airport=airport, type="EMAS", install_year=2026, status="active")
+        session.add(installation)
+        session.flush()
+        signal = Signal(
+            airport=airport,
+            title="Wellington EMAS-order",
+            category="new_installation",
+            confidence="high",
+            status="completed",
+            installation_id=installation.id,
+        )
+        session.add(signal)
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
+    assert "Färdigställd" in signal_html
+    assert "pill done" in signal_html
+    assert f"airports/{airport.id}.html#installation-{installation.id}" in signal_html
+
+    airport_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert f'id="installation-{installation.id}"' in airport_html
+
+
 def test_build_site_is_idempotent_and_replaces_stale_output(tmp_path):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

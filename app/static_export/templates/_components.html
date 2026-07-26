@@ -16,3 +16,35 @@
 {% macro cat(label, css_class) -%}
 <span class="cat {{ css_class }}">{{ label }}</span>
 {%- endmacro %}
+
+{# One standalone signal table row (signals_list.html's ungrouped rows).
+   `root` is passed explicitly (not via context) to keep this macro usable
+   from a plain, non-"with context" import. #}
+{% macro signal_row(signal, root) -%}
+<tr
+    data-search="{{ (signal.title ~ ' ' ~ signal.airport_name ~ ' ' ~ signal.airport_code)|lower }}"
+    data-status="{{ signal.status or '' }}"
+    data-country="{{ signal.country }}"
+>
+  <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }}</a></td>
+  <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
+  <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
+  <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label) }}</td>
+  <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
+  <td data-label="Källa" class="src">{{ signal.source_type or "–" }}</td>
+  <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
+</tr>
+{%- endmacro %}
+
+{# One signal, rendered as a compact "strip" inside a group's expanded
+   detail panel (grouping_mockup.html) - not a table row. Flygplats/Kategori
+   are omitted since they're implied by the parent group. #}
+{% macro signal_strip(signal, root) -%}
+<div class="strip">
+  <div class="title"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></div>
+  {{ gauge(signal.confidence_level, signal.confidence_label) }}
+  <div class="meta mono">{{ signal.planning_year or "–" }}</div>
+  <div class="src">{{ signal.source_type or "–" }}</div>
+  <div class="score mono">{% if signal.probability_score is not none %}{{ "%.1f"|format(signal.probability_score) }}{% else %}–{% endif %}</div>
+</div>
+{%- endmacro %}

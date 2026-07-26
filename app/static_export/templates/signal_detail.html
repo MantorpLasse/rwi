@@ -9,11 +9,14 @@
       <a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }} {{ signal.airport_name }}</a>
     </p>
     <h1>{{ signal.title }}</h1>
-    <span class="pill status">{{ signal.status or signal.category_label }}</span>
+    <span class="pill {{ 'done' if signal.is_completed else 'status' }}">{{ signal.status_label or signal.category_label }}</span>
     {{ cat(signal.category_label, signal.category_class) }}
     {{ gauge(signal.confidence_level, signal.confidence_label) }}
     {% if signal.confirmed_vendor %}
     <span class="pill vendor">Bekräftad leverantör: {{ signal.confirmed_vendor }}</span>
+    {% endif %}
+    {% if signal.installation_id %}
+    <a href="{{ root }}/airports/{{ signal.airport_id }}.html#installation-{{ signal.installation_id }}">→ Se installation</a>
     {% endif %}
   </div>
   {% if signal.probability_score is not none %}
@@ -28,7 +31,7 @@
       <div class="card-body">
         <dl class="meta">
           <dt>Kategori</dt><dd>{{ cat(signal.category_label, signal.category_class) }}</dd>
-          <dt>Status</dt><dd>{{ signal.status or "–" }}</dd>
+          <dt>Status</dt><dd>{{ signal.status_label or "–" }}</dd>
           <dt>Confidence</dt><dd>{{ gauge(signal.confidence_level, signal.confidence_label) }}</dd>
           <dt>Planeringsår</dt><dd class="mono">{{ signal.planning_year or "–" }}</dd>
           <dt>Upphandlingsår</dt><dd class="mono">{{ signal.procurement_year or "–" }}</dd>

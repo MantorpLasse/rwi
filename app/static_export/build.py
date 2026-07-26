@@ -35,6 +35,10 @@ _CONFIDENCE_LEVEL = {
 
 _CONFIDENCE_LABEL = {"high": "Hög", "med": "Medel", "low": "Låg"}
 
+# scripts/graduate_signal_to_installation.py sets this - a distinct label so
+# a graduated signal reads as "done", not as a broken/unrecognized status.
+_STATUS_LABEL = {"completed": "Färdigställd"}
+
 # Category text mapping — the single place the rest of the site imports from,
 # per DESIGN_BRIEF.md's "Bygg denna mappning på ett ställe". Never show a raw
 # database category value in a template. new_installation/replacement/
@@ -75,6 +79,9 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         confidence_level=confidence_level,
         confidence_label=_CONFIDENCE_LABEL[confidence_level],
         status=signal.status,
+        status_label=_STATUS_LABEL.get(signal.status, signal.status),
+        is_completed=signal.status == "completed",
+        installation_id=signal.installation_id,
         planning_year=signal.planning_year,
         procurement_year=signal.procurement_year,
         probability_score=signal.probability_score,
@@ -103,6 +110,7 @@ _RUNWAY_TRACKED_INSTALLATION_TYPES = ("EMASMAX", "greenEMAS")
 def _installation_view(installation: Installation) -> SimpleNamespace:
     source = installation.source
     return SimpleNamespace(
+        id=installation.id,
         type=installation.type,
         runway_end=installation.runway_end,
         # True only when no runway link exists at all (genuinely ambiguous
@@ -125,6 +133,62 @@ def _installation_view(installation: Installation) -> SimpleNamespace:
         source_url=source.url if source else None,
         source_published_date=source.published_date if source else None,
     )
+
+
+def _group_signal_views(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
+    """Group signal_views by (airport_id, category) into single rows or
+    expandable groups for signals_list.html - purely a presentation grouping,
+    the underlying Signal rows/data are untouched.
+
+    A group of 1 renders exactly like a normal row always has (kind="single").
+    A group of >1 (e.g. three replacement_after_incident signals at the same
+    airport, one per Incident - see app/models/incident.py) becomes one
+    headline row plus its members, so the list doesn't repeat the same
+    airport+category story once per incident/grant/etc. Per
+    grouping_mockup.html: the headline shows the top member's own title
+    (styled like a normal signal link) plus a muted "+N till" count - not
+    generic "N signaler" text.
+
+    Groups appear at the position of their first member in signal_views'
+    incoming order, which callers sort by probability_score descending - so
+    a group surfaces at its best member's rank, and members[0] (used as the
+    headline) is that best member, since a subsequence of a sorted list is
+    itself sorted.
+    """
+    order: list[tuple[int, str]] = []
+    members_by_key: dict[tuple[int, str], list[SimpleNamespace]] = {}
+    for view in signal_views:
+        key = (view.airport_id, view.category)
+        if key not in members_by_key:
+            order.append(key)
+        members_by_key.setdefault(key, []).append(view)
+
+    rows: list[SimpleNamespace] = []
+    for key in order:
+        members = members_by_key[key]
+        if len(members) == 1:
+            rows.append(SimpleNamespace(kind="single", signal=members[0]))
+            continue
+
+        top = members[0]
+        rows.append(
+            SimpleNamespace(
+                kind="group",
+                group_id=f"{key[0]}-{key[1]}",
+                airport_id=top.airport_id,
+                airport_name=top.airport_name,
+                airport_code=top.airport_code,
+                country=top.country,
+                category_label=top.category_label,
+                category_class=top.category_class,
+                confidence_level=top.confidence_level,
+                confidence_label=top.confidence_label,
+                top_signal=top,
+                more_count=len(members) - 1,
+                members=members,
+            )
+        )
+    return rows
 
 
 def _airport_view(airport: Airport) -> SimpleNamespace:
@@ -253,6 +317,7 @@ def _build(output_dir: Path, session: Session) -> None:
         output_dir / "signals" / "index.html",
         root="..",
         signals=signal_views,
+        signal_rows=_group_signal_views(signal_views),
         statuses=sorted({s.status for s in signal_views if s.status}),
         countries=sorted({s.country for s in signal_views if s.country}),
     )

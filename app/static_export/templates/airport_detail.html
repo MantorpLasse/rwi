@@ -36,7 +36,7 @@
       {% if airport.installations %}
       <div class="card-body" style="display:flex; flex-direction:column; gap:22px">
         {% for installation in airport.installations %}
-        <div{% if not loop.last %} style="padding-bottom:22px; border-bottom:1px solid var(--border)"{% endif %}>
+        <div id="installation-{{ installation.id }}"{% if not loop.last %} style="padding-bottom:22px; border-bottom:1px solid var(--border)"{% endif %}>
           <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px">
             <strong>{{ installation.type or "Okänd typ" }}</strong>
             {% if installation.runway_end %}<span class="pill status">Bana {{ installation.runway_end }}</span>

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<title>RWI — grupperingsmockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B1220; --panel:#131B2C; --panel2:#0F1729; --border:#263349;
+    --text:#EDE6D6; --text-dim:#8B96AC; --text-faint:#5A6580;
+    --accent:#F2B705; --accent-ink:#3B2B00;
+    --high:#D4507A; --high-bg:#3A1A28; --high-ink:#F6C3D4;
+    --med:#E8871E; --med-bg:#3A2812; --med-ink:#F7CE9C;
+    --low:#4A5A78; --low-bg:#1B2436; --low-ink:#AEB9CE;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;padding:32px;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  .note{font-family:'IBM Plex Sans';font-size:13px;color:var(--text-dim);margin-bottom:20px;max-width:640px;line-height:1.5;}
+  .note b{color:var(--text);}
+
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+  thead th{text-align:left;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);font-weight:500;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel2);}
+  tbody td{padding:11px 14px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle;}
+
+  .sign{display:inline-block;background:var(--accent);color:var(--accent-ink);font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12px;padding:3px 8px;border-radius:4px;}
+  .cat{font-size:11px;padding:3px 8px;border-radius:3px;display:inline-block;}
+  .cat.new{background:#0F3A30;color:#6FD9B8;}
+  .cat.replace{background:var(--med-bg);color:var(--med-ink);}
+
+  .grouprow{cursor:pointer;user-select:none;}
+  .grouprow:hover{background:rgba(255,255,255,.02);}
+  .caret{display:inline-block;transition:transform .15s ease;margin-right:6px;color:var(--text-faint);font-size:11px;width:10px;}
+  .grouprow.open .caret{transform:rotate(90deg);}
+  /* Group headline now reads exactly like a normal signal title link —
+     same color/weight as every ungrouped row — instead of plain white
+     generic text. Only the muted "+N fler" tag hints it's a group. */
+  .grouptitle{color:var(--accent);font-size:13px;}
+  .more-tag{color:var(--text-faint);font-size:11px;margin-left:8px;}
+
+  /* The key change: expanded content is NOT more <tr>s in the same table.
+     It's a single row whose cell holds a visually distinct inset panel —
+     like a strip sliding out of an ATC board — clearly separated from
+     the table's own row grammar. */
+  .detail-row td{padding:0;border-bottom:1px solid var(--border);}
+  .detail-wrap{max-height:0;overflow:hidden;transition:max-height .2s ease;}
+  .detail-wrap.open{max-height:400px;}
+  .detail-panel{margin:0 14px 14px 34px;background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;padding:4px 0;}
+
+  .strip{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border);}
+  .strip:last-child{border-bottom:none;}
+  .strip:hover{background:rgba(255,255,255,.02);}
+  .strip .title{flex:1;font-size:13px;color:var(--text);}
+  .strip .title a{color:var(--text);text-decoration:none;}
+  .strip .title a:hover{color:var(--accent);}
+  .strip .meta{font-size:11px;color:var(--text-faint);white-space:nowrap;}
+  .strip .src{font-size:11px;color:var(--text-dim);width:120px;}
+  .strip .score{font-family:'IBM Plex Mono',monospace;font-weight:500;width:36px;text-align:right;}
+
+  .gauge{display:flex;gap:2px;align-items:center;width:44px;}
+  .gauge span{width:5px;height:12px;border-radius:1px;background:var(--border);}
+  .gauge.high span:nth-child(-n+3){background:var(--high);}
+</style>
+</head>
+<body>
+
+<div class="note">
+  Två ändringar mot förra versionen: (1) grupprubriken visar nu den mest
+  relevanta signalens <b>riktiga titel</b>, stylad exakt som en vanlig
+  signal-länk (samma gula färg/vikt) — bara den dämpade "+N till"-taggen
+  avslöjar att det är en grupp, ingen udda generisk text som sticker ut.
+  (2) Klicka på MHT eller BOS för att se expansionen: en <b>enda inset-panel</b>
+  med vänsterkant, inte fler bord-rader.
+</div>
+
+<table>
+  <thead>
+    <tr><th>Flygplats</th><th>Signal</th><th>Kategori</th><th>Confidence</th><th>Score</th></tr>
+  </thead>
+  <tbody>
+
+    <tr class="grouprow" onclick="toggle('mht')">
+      <td><span class="sign">MHT</span></td>
+      <td><span class="caret" id="caret-mht">▶</span><span class="grouptitle">Runway 6 departure-end EMAS replacement</span><span class="more-tag">+1 till</span></td>
+      <td><span class="cat replace">Ersättning</span></td>
+      <td><div class="gauge high"><span></span><span></span><span></span></div></td>
+      <td class="mono">10.0</td>
+    </tr>
+    <tr class="detail-row">
+      <td colspan="5">
+        <div class="detail-wrap" id="wrap-mht">
+          <div class="detail-panel">
+            <div class="strip">
+              <div class="title"><a href="#">Runway 6 departure-end EMAS replacement</a></div>
+              <div class="gauge high"><span></span><span></span><span></span></div>
+              <div class="meta mono">2026</div>
+              <div class="src">Procurement</div>
+              <div class="score mono">10.0</div>
+            </div>
+            <div class="strip">
+              <div class="title"><a href="#">USAspending grant — City of Manchester</a></div>
+              <div class="gauge high"><span></span><span></span><span></span></div>
+              <div class="meta mono">2026</div>
+              <div class="src">usaspending_grant</div>
+              <div class="score mono">8.0</div>
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>
+
+    <tr class="grouprow" onclick="toggle('bos')">
+      <td><span class="sign">BOS</span></td>
+      <td><span class="caret" id="caret-bos">▶</span><span class="grouptitle">Runway 9/27 RSA and EMAS phase 2</span><span class="more-tag">+3 till</span></td>
+      <td><span class="cat new">Ny installation</span></td>
+      <td><div class="gauge high"><span></span><span></span><span></span></div></td>
+      <td class="mono">10.0</td>
+    </tr>
+    <tr class="detail-row">
+      <td colspan="5">
+        <div class="detail-wrap" id="wrap-bos">
+          <div class="detail-panel">
+            <div class="strip">
+              <div class="title"><a href="#">Runway 9/27 RSA and EMAS phase 2</a></div>
+              <div class="gauge high"><span></span><span></span><span></span></div>
+              <div class="meta mono">2026</div>
+              <div class="src">FAA</div>
+              <div class="score mono">10.0</div>
+            </div>
+            <div class="strip">
+              <div class="title"><a href="#">USAspending grant — $4.1M, FY2023</a></div>
+              <div class="gauge high"><span></span><span></span><span></span></div>
+              <div class="meta mono">2023</div>
+              <div class="src">usaspending_grant</div>
+              <div class="score mono">8.0</div>
+            </div>
+            <div class="strip">
+              <div class="title"><a href="#">USAspending grant — $9.6M, FY2025</a></div>
+              <div class="gauge high"><span></span><span></span><span></span></div>
+              <div class="meta mono">2025</div>
+              <div class="src">usaspending_grant</div>
+              <div class="score mono">8.0</div>
+            </div>
+            <div class="strip">
+              <div class="title"><a href="#">USAspending grant — $3.8M, FY2026</a></div>
+              <div class="gauge high"><span></span><span></span><span></span></div>
+              <div class="meta mono">2026</div>
+              <div class="src">usaspending_grant</div>
+              <div class="score mono">8.0</div>
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>
+
+  </tbody>
+</table>
+
+<script>
+function toggle(id){
+  document.getElementById('wrap-'+id).classList.toggle('open');
+  document.getElementById('caret-'+id).parentElement.classList.toggle('open');
+}
+</script>
+</body>
+</html>

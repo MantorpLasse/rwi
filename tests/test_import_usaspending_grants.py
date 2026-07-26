@@ -10,10 +10,12 @@ from app.acquisition.usaspending_grants import UsaspendingGrant
 from app.database import Base
 from app.models import Airport, Signal, Source
 from scripts.import_usaspending_grants import (
+    _format_amount,
     classify_category,
     ensure_source_external_id_column,
     import_all,
     resolve_airport,
+    signal_title,
 )
 
 GEORGIA_DOT_DESCRIPTION = (
@@ -62,6 +64,31 @@ def session_factory():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
+
+
+def test_format_amount_scales_to_millions_thousands_or_raw():
+    assert _format_amount(Decimal("56187750")) == "$56.2M"
+    assert _format_amount(Decimal("9360499")) == "$9.4M"
+    assert _format_amount(Decimal("60311.22")) == "$60K"
+    assert _format_amount(Decimal("500")) == "$500"
+    assert _format_amount(None) == "okänt belopp"
+
+
+def test_signal_title_is_unique_per_grant_not_per_recipient():
+    grant_a = make_grant(BGM_DESCRIPTION, recipient_name="Massachusetts Port Authority", amount="4100000", start="2023-05-01")
+    grant_b = make_grant(BGM_DESCRIPTION, recipient_name="Massachusetts Port Authority", amount="9600000", start="2025-03-01")
+
+    title_a = signal_title(grant_a)
+    title_b = signal_title(grant_b)
+
+    assert title_a == "USAspending grant — $4.1M, FY2023"
+    assert title_b == "USAspending grant — $9.6M, FY2025"
+    assert title_a != title_b  # same recipient, different grants - titles must differ
+
+
+def test_signal_title_without_start_date_omits_fiscal_year():
+    grant = make_grant(BGM_DESCRIPTION, amount="1000000", start=None)
+    assert signal_title(grant) == "USAspending grant — $1.0M"
 
 
 def test_classify_category_detects_replacement_keywords():
