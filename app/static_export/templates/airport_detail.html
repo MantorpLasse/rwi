@@ -2,12 +2,68 @@
 {% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill %}
 {% block title %}{{ airport.name }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
-<div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a></div>
+<div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a> <button type="button" id="back-link" class="link-button">← Tillbaka</button></div>
 <h1><span style="margin-right:10px; display:inline-block">{{ sign(airport.iata_code or airport.icao_code or airport.faa_code or "–", airport.name) }}</span>{{ airport.name }}</h1>
 <p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
 
 <div class="grid-2">
   <div>
+    <div class="card">
+      <div class="card-header">Tidslinje</div>
+      {% if airport.timeline_dated %}
+      <div class="card-body">
+        <div class="timeline">
+          {% for item in airport.timeline_dated %}
+          <div class="timeline-item">
+            <div class="timeline-year mono">{{ item.year }}</div>
+            <div class="timeline-rail"><span class="timeline-dot {{ item.category_class }}"></span></div>
+            <div class="timeline-body">
+              <div class="timeline-title">
+                {% if item.kind == "signal" %}
+                <a href="{{ root }}/signals/{{ item.id }}.html">{{ item.title }}</a>
+                {% elif item.kind == "installation" %}
+                <a href="#installation-{{ item.id }}">{{ item.title }}</a>
+                {% else %}
+                <a href="#incident-{{ item.id }}">{{ item.title }}</a>
+                {% endif %}
+                {{ cat(item.category_label, item.category_class) }}
+              </div>
+              {% if item.subtitle %}<div class="timeline-meta">{{ item.subtitle }}</div>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty-state">Inga daterade händelser registrerade.</div>
+      {% endif %}
+      {% if airport.timeline_undated %}
+      <div class="card-header" style="border-top:1px solid var(--border)">Odaterat</div>
+      <div class="card-body">
+        <div class="timeline timeline-undated">
+          {% for item in airport.timeline_undated %}
+          <div class="timeline-item timeline-item-undated">
+            <div class="timeline-rail"><span class="timeline-dot {{ item.category_class }}"></span></div>
+            <div class="timeline-body">
+              <div class="timeline-title">
+                {% if item.kind == "signal" %}
+                <a href="{{ root }}/signals/{{ item.id }}.html">{{ item.title }}</a>
+                {% elif item.kind == "installation" %}
+                <a href="#installation-{{ item.id }}">{{ item.title }}</a>
+                {% else %}
+                <a href="#incident-{{ item.id }}">{{ item.title }}</a>
+                {% endif %}
+                {{ cat(item.category_label, item.category_class) }}
+              </div>
+              {% if item.subtitle %}<div class="timeline-meta">{{ item.subtitle }}</div>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
     <div class="card">
       <div class="card-header">Signaler</div>
       {% if airport.signals %}
@@ -89,7 +145,7 @@
         <thead><tr><th>Datum</th><th>Typ</th><th>EMAS</th></tr></thead>
         <tbody>
           {% for incident in airport.incidents %}
-          <tr>
+          <tr id="incident-{{ incident.id }}">
             <td data-label="Datum" class="mono">{{ incident.incident_date }}</td>
             <td data-label="Typ">{{ incident.incident_type }}</td>
             <td data-label="EMAS">{{ "Ja" if incident.emas_engaged else "Nej" }}</td>
@@ -124,4 +180,13 @@
     {% endif %}
   </div>
 </div>
+
+<script>
+(function () {
+  var back = document.getElementById("back-link");
+  back.addEventListener("click", function () {
+    history.back();
+  });
+})();
+</script>
 {% endblock %}

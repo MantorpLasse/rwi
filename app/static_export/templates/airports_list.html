@@ -5,14 +5,18 @@
 <h1>Flygplatser</h1>
 <p class="subtitle">{{ airports|length }} flygplatser bevakas.</p>
 
+<div class="filters">
+  <input id="q" type="search" placeholder="Sök namn, kod eller land...">
+</div>
+
 <div class="card">
-  <table>
+  <table id="airports-table">
     <thead>
       <tr><th>Kod</th><th>Namn</th><th>Land</th><th>Signaler</th></tr>
     </thead>
     <tbody>
       {% for airport in airports %}
-      <tr>
+      <tr data-search="{{ (airport.name ~ ' ' ~ (airport.iata_code or '') ~ ' ' ~ (airport.icao_code or '') ~ ' ' ~ airport.country)|lower }}">
         <td data-label="Kod"><a href="{{ root }}/airports/{{ airport.id }}.html">{{ sign(airport.iata_code or airport.icao_code or "–", airport.name) }}</a></td>
         <td class="title" data-label="Namn"><a href="{{ root }}/airports/{{ airport.id }}.html">{{ airport.name }}</a></td>
         <td data-label="Land">{{ airport.country }}</td>
@@ -21,5 +25,28 @@
       {% endfor %}
     </tbody>
   </table>
+  <div id="no-match" class="empty-state" hidden>Inga flygplatser matchade sökningen.</div>
 </div>
+
+<script>
+(function () {
+  var q = document.getElementById("q");
+  var table = document.getElementById("airports-table");
+  var rows = Array.prototype.slice.call(table.querySelectorAll("tbody tr[data-search]"));
+  var noMatch = document.getElementById("no-match");
+
+  function apply() {
+    var term = q.value.trim().toLowerCase();
+    var visible = 0;
+    rows.forEach(function (row) {
+      var matches = !term || row.getAttribute("data-search").indexOf(term) !== -1;
+      row.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    noMatch.hidden = visible !== 0 || rows.length === 0;
+  }
+
+  q.addEventListener("input", apply);
+})();
+</script>
 {% endblock %}

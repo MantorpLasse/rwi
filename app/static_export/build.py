@@ -155,6 +155,7 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         status_label=_STATUS_LABEL.get(signal.status, signal.status),
         is_completed=signal.status == "completed",
         installation_id=signal.installation_id,
+        target_year=signal.target_year,
         planning_year=signal.planning_year,
         procurement_year=signal.procurement_year,
         probability_score=signal.probability_score,
@@ -217,6 +218,95 @@ def _installation_view(installation: Installation) -> SimpleNamespace:
     )
 
 
+def _timeline_event(
+    *, kind: str, id: int, year: int | None, day: date | None,
+    category_class: str, category_label: str, title: str, subtitle: str | None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        kind=kind,
+        id=id,
+        year=year,
+        day=day,
+        category_class=category_class,
+        category_label=category_label,
+        title=title,
+        subtitle=subtitle,
+    )
+
+
+def _timeline_view(
+    installations: list[SimpleNamespace],
+    incidents: list[SimpleNamespace],
+    signals: list[SimpleNamespace],
+) -> tuple[list[SimpleNamespace], list[SimpleNamespace]]:
+    """Merge Installations/Incidents/Signals into one chronological timeline
+    for airport_detail.html, alongside (not instead of) the existing
+    per-entity tables. Year source per entity: Installation.install_year,
+    Incident.incident_date, and for Signal a fallback chain
+    (target_year -> planning_year -> manual_year_estimate) since target_year
+    is populated on only a handful of signals database-wide while
+    planning_year is what the Signals table already displays - a strict
+    target_year-only reading would dump almost every signal into "Odaterat"
+    even when a year is in fact known.
+
+    Events without a resolvable year go to a separate `undated` list instead
+    of the chronological one, per the "Odaterat" section requirement -
+    Incident.incident_date is a required (non-nullable) column, so incidents
+    always land in the chronological list.
+    """
+    dated: list[SimpleNamespace] = []
+    undated: list[SimpleNamespace] = []
+
+    for installation in installations:
+        subtitle = " · ".join(
+            p for p in (
+                installation.status,
+                f"Bana {installation.runway_end}" if installation.runway_end else None,
+            ) if p
+        ) or None
+        event = _timeline_event(
+            kind="installation",
+            id=installation.id,
+            year=installation.install_year,
+            day=None,
+            category_class="new",
+            category_label="Installation",
+            title=installation.type or "Installation",
+            subtitle=subtitle,
+        )
+        (dated if event.year else undated).append(event)
+
+    for incident in incidents:
+        event = _timeline_event(
+            kind="incident",
+            id=incident.id,
+            year=incident.incident_date.year,
+            day=incident.incident_date,
+            category_class="incident",
+            category_label="Incident",
+            title=incident.incident_type,
+            subtitle="EMAS aktiverat" if incident.emas_engaged else "EMAS inte aktiverat",
+        )
+        dated.append(event)
+
+    for signal in signals:
+        year = signal.target_year or signal.planning_year or signal.manual_year_estimate
+        event = _timeline_event(
+            kind="signal",
+            id=signal.id,
+            year=year,
+            day=None,
+            category_class=signal.category_class,
+            category_label=signal.category_label,
+            title=signal.title,
+            subtitle=signal.status,
+        )
+        (dated if event.year else undated).append(event)
+
+    dated.sort(key=lambda e: (e.year, e.day.month, e.day.day, 1) if e.day else (e.year, 1, 1, 0))
+    return dated, undated
+
+
 def _group_signal_views(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
     """Group signal_views by (airport_id, category) into single rows or
     expandable groups for signals_list.html - purely a presentation grouping,
@@ -274,6 +364,24 @@ def _group_signal_views(signal_views: list[SimpleNamespace]) -> list[SimpleNames
 
 
 def _airport_view(airport: Airport) -> SimpleNamespace:
+    signal_views = [
+        _signal_view(s)
+        for s in sorted(
+            airport.signals,
+            key=lambda s: (s.probability_score is None, -(s.probability_score or 0)),
+        )
+    ]
+    installation_views = [_installation_view(i) for i in airport.installations]
+    incident_views = [
+        SimpleNamespace(
+            id=i.id,
+            incident_date=i.incident_date,
+            incident_type=i.incident_type,
+            emas_engaged=i.emas_engaged,
+        )
+        for i in airport.incidents
+    ]
+    timeline_dated, timeline_undated = _timeline_view(installation_views, incident_views, signal_views)
     return SimpleNamespace(
         id=airport.id,
         name=airport.name,
@@ -290,22 +398,11 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
             SimpleNamespace(designation=r.designation, length_m=r.length_m, width_m=r.width_m)
             for r in airport.runways
         ],
-        signals=[
-            _signal_view(s)
-            for s in sorted(
-                airport.signals,
-                key=lambda s: (s.probability_score is None, -(s.probability_score or 0)),
-            )
-        ],
-        installations=[_installation_view(i) for i in airport.installations],
-        incidents=[
-            SimpleNamespace(
-                incident_date=i.incident_date,
-                incident_type=i.incident_type,
-                emas_engaged=i.emas_engaged,
-            )
-            for i in airport.incidents
-        ],
+        signals=signal_views,
+        installations=installation_views,
+        incidents=incident_views,
+        timeline_dated=timeline_dated,
+        timeline_undated=timeline_undated,
     )
 
 

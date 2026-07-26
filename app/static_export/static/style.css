@@ -384,6 +384,20 @@ td.title {
   cursor: default;
 }
 
+/* Hover affordance when the sign badge is a link's payload (airport-code
+   cells in list/table rows) - airport_detail.html's own badge in the page
+   <h1> isn't wrapped in <a>, so it's unaffected and keeps cursor:default.
+   Rows with no code render the plain "–" fallback span instead (see
+   _components.html's sign() macro), which never carries .sign, so it's
+   untouched by these rules too. */
+a .sign {
+  cursor: pointer;
+}
+
+a:hover .sign {
+  filter: brightness(1.15);
+}
+
 /* Kategori-badge — text kommer alltid från den centrala mappningen, aldrig
    ett råt databasvärde. */
 .cat {
@@ -576,6 +590,24 @@ dl.meta dd {
   margin-bottom: 8px;
 }
 
+/* "← Tillbaka" (history.back()) next to the "← Flygplatser" breadcrumb link -
+   a <button>, not an <a>, since it has no real href (see airport_detail.html) -
+   styled to read as a plain inline link like its neighbor. */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 14px;
+  color: var(--accent);
+  font: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 .grid-2 {
   display: grid;
   grid-template-columns: 2fr 1fr;
@@ -625,6 +657,111 @@ dl.meta dd {
 .money {
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
+}
+
+/* airport_detail.html's "Tidslinje" — a chronological complement to the
+   separate Installations/Signals/Incidents tables, not a replacement.
+   Reuses the same .cat category coloring (new/replace/incident/study) as
+   the Signals table so a category means the same thing everywhere. */
+.timeline-item {
+  display: grid;
+  grid-template-columns: 56px 20px 1fr;
+  column-gap: 12px;
+  position: relative;
+}
+
+.timeline-item.timeline-item-undated {
+  grid-template-columns: 20px 1fr;
+}
+
+.timeline-item:not(:last-child) {
+  padding-bottom: 16px;
+}
+
+.timeline-year {
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  padding-top: 2px;
+}
+
+.timeline-rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.timeline-item:not(:last-child) .timeline-rail::before {
+  content: "";
+  position: absolute;
+  top: 16px;
+  bottom: -16px;
+  width: 2px;
+  background: var(--border);
+}
+
+.timeline-undated .timeline-rail::before {
+  content: none;
+}
+
+.timeline-dot {
+  display: block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  margin-top: 3px;
+  position: relative;
+  z-index: 1;
+  border: 2px solid var(--panel);
+}
+
+.timeline-dot.new { background: var(--new); }
+.timeline-dot.replace { background: var(--med); }
+.timeline-dot.incident { background: var(--high); }
+.timeline-dot.study { background: var(--low-ink); }
+
+.timeline-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.timeline-title a {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.timeline-title a:hover {
+  color: var(--accent);
+}
+
+.timeline-meta {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-top: 2px;
+}
+
+@media (max-width: 480px) {
+  .timeline-item {
+    grid-template-columns: 40px 16px 1fr;
+    column-gap: 8px;
+  }
+  .timeline-year {
+    font-size: 0.76rem;
+  }
+}
+
+/* Landing spot for a Tidslinje click into the Installationer/Incidenter
+   tables below - .card:target (above) already covers /ordlista.html
+   anchors, but these two targets aren't .card elements. */
+[id^="installation-"]:target {
+  background: rgba(242, 183, 5, 0.1);
+  border-radius: var(--radius-sm);
+}
+
+tbody tr:target td {
+  background: rgba(242, 183, 5, 0.1);
 }
 
 footer.site {
