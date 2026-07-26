@@ -387,6 +387,12 @@ def _build(output_dir: Path, session: Session) -> None:
     )
 
     render(
+        "om.html",
+        output_dir / "om.html",
+        root=".",
+    )
+
+    render(
         "airports_list.html",
         output_dir / "airports" / "index.html",
         root="..",

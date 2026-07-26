@@ -305,3 +305,36 @@ def test_build_site_links_confirmed_vendor_pill_to_glossary(tmp_path):
 
     signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
     assert 'href="../ordlista.html#bekraftad-leverantor"' in signal_html
+
+
+def test_build_site_writes_om_page_linked_from_every_page_footer(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        _seed(session)
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    assert (output / "om.html").exists()
+    om_html = (output / "om.html").read_text(encoding="utf-8")
+    for heading in [
+        "OM DEN HÄR SIDAN",
+        "Varifrån datan kommer",
+        "Ingen garanti för korrekthet",
+        "Inte investeringsrådgivning",
+        "Varumärken",
+    ]:
+        assert heading in om_html
+    assert "Runway Safe Group" in om_html
+
+    # Footer link present on a root-level page, an airports/ page and a signals/ page.
+    index_html = (output / "index.html").read_text(encoding="utf-8")
+    assert 'href="./om.html">Om sidan &amp; ansvarsfriskrivning →</a>' in index_html
+
+    airport = session.query(Airport).one()
+    airport_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert 'href="../om.html">Om sidan &amp; ansvarsfriskrivning →</a>' in airport_html
+
+    signal = session.query(Signal).one()
+    signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
+    assert 'href="../om.html">Om sidan &amp; ansvarsfriskrivning →</a>' in signal_html
