@@ -38,14 +38,14 @@ EMAS row carries a "****" marker that isn't defined anywhere in that
 sheet's footnote legend (which only defines (), *, **, ***, +) - flagged in
 this script's docstring and in the report rather than guessed at.
 
-One identity note: the airport this database has stored as "Sandiford"
-(Louisville, KY) is, per independent web search, almost certainly a
-misreading of "Standiford" (Standiford Field, the historic name of
-Louisville Muhammad Ali International, IATA/ICAO/FAA SDF) - both fact
-sheets print "Sandiford" too, so this isn't a transcription error made
-here, but the underlying source's own apparent typo. Not renamed (out of
-scope for a data-only import) - flagged in this row's notes and the report
-for a future correction.
+One identity note: at the time this script was written, the airport this
+database had stored as "Sandiford" (Louisville, KY) was, per independent
+web search, almost certainly a misreading of "Standiford" (Standiford
+Field, the historic name of Louisville Muhammad Ali International,
+IATA/ICAO/FAA SDF) - both fact sheets print "Sandiford" too, so this wasn't
+a transcription error made here, but the underlying source's own apparent
+typo. Left unrenamed at the time (out of scope for a data-only import) -
+since fixed by scripts/rename_sandiford_to_standiford.py.
 
 Safe to re-run: new Installation rows are guarded by (airport_id, type,
 install_year), and each note-only append is guarded by checking whether the
@@ -295,15 +295,14 @@ AIRPORT_UPDATES = [
     )),
     ("SDF", 2015, (
         "1 system, hosten 2015, enligt 2016 Fact Sheet ('Sandiford, Louisville, "
-        "KY, 1, fall 2015'). IDENTITETSANMARKNING: bade fact sheet och var egen "
-        "databas stavar namnet 'Sandiford', men detta ar med mycket stor "
+        "KY, 1, fall 2015'). IDENTITETSANMARKNING (RATTAD): FAA:s kalldokument "
+        "stavar fortfarande namnet 'Sandiford', men det ar med mycket stor "
         "sannolikhet en felstavning av 'Standiford' (Standiford Field, det "
         "historiska namnet pa Louisville Muhammad Ali International, IATA/ICAO/FAA "
         "SDF) - oberoende sokning bekraftar ett $18,8M Runway 11-29 Safety Area "
         "Improvement-projekt med EMAS, fardigstallt 'by late 2015', vilket matchar "
-        "'fall 2015' nastan exakt. Flygplatsnamnet ar INTE andrat i denna "
-        "korning (utanfor omfanget for en dataimport) - flaggat for framtida "
-        "rattelse."
+        "'fall 2015' nastan exakt. Flygplatsnamnet i var databas ar rattat till "
+        "'Standiford' (scripts/rename_sandiford_to_standiford.py)."
     )),
 ]
 
