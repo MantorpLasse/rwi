@@ -806,6 +806,125 @@ tbody tr:target td {
   background: rgba(242, 183, 5, 0.1);
 }
 
+/* index.html's install-trend chart - pure SVG, no chart library. Two
+   stacked panels (per-year bars, cumulative line) share the same x mapping
+   (see build.py's _trend_view) so their gridlines line up vertically. */
+.trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-bottom: 12px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.trend-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+
+.trend-swatch-install {
+  background: var(--accent);
+}
+
+.trend-swatch-signal {
+  background-image: repeating-linear-gradient(45deg, var(--low-ink), var(--low-ink) 1.5px, transparent 1.5px, transparent 4px);
+  border: 1px dashed var(--low-ink);
+}
+
+/* SVG text scales with the viewBox like everything else in it - on a
+   narrow phone that shrinks the 9-unit tick labels into illegible dust.
+   Rather than hide labels to compensate, give the chart a min-width and
+   let it scroll horizontally (same idea as the table->card breakpoint
+   elsewhere, applied to a chart instead: adapt, don't render illegibly). */
+.trend-scroll {
+  overflow-x: auto;
+}
+
+.trend-chart {
+  display: block;
+  width: 100%;
+  min-width: 700px;
+  height: auto;
+}
+
+.trend-chart-cumulative {
+  margin-top: 2px;
+}
+
+.trend-gridline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.trend-baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.trend-bar-install {
+  fill: var(--accent);
+}
+
+.trend-bar-install:hover {
+  opacity: 0.82;
+}
+
+/* Forecast/planned - deliberately muted + hatched + dashed, never solid
+   gold, so it never reads as confirmed fact next to the installation bars. */
+.trend-bar-signal {
+  fill: url(#trend-hatch);
+  stroke: var(--low-ink);
+  stroke-width: 1;
+  stroke-dasharray: 2 1;
+}
+
+.trend-bar-signal:hover {
+  opacity: 0.82;
+}
+
+.trend-area {
+  fill: var(--accent);
+  opacity: 0.12;
+  stroke: none;
+}
+
+.trend-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.trend-point {
+  fill: var(--bg);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.trend-point:hover {
+  fill: var(--accent);
+}
+
+.trend-tick-label {
+  fill: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.trend-caption {
+  color: var(--text-faint);
+  font-size: 0.8rem;
+  margin: 10px 0 0;
+}
+
 footer.site {
   color: var(--text-faint);
   font-size: 0.85rem;

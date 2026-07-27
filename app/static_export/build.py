@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections import Counter
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, UTC
 from decimal import Decimal
@@ -307,6 +308,122 @@ def _timeline_view(
     return dated, undated
 
 
+# Pure SVG (no chart library) for index.html's install-trend card. Geometry
+# is computed here, once, in real user units - the template only loops over
+# ready-made coordinates, same division of labour as _timeline_view above.
+_TREND_WIDTH = 700
+_TREND_BAR_HEIGHT = 180
+_TREND_BAR_MARGIN = {"top": 8, "right": 8, "bottom": 6, "left": 8}
+_TREND_LINE_HEIGHT = 120
+_TREND_LINE_MARGIN = {"top": 10, "right": 8, "bottom": 22, "left": 8}
+_TREND_MAX_SPAN_YEARS = 40  # only a backstop against a bad outlier row; real data (1996-2030ish) sits well under this
+
+
+def _trend_view(
+    installations: list[SimpleNamespace],
+    signals: list[SimpleNamespace],
+) -> SimpleNamespace | None:
+    """Installations-per-year (bar) + cumulative installations (line), plus
+    a second, visually-muted bar series for planned signals per year - using
+    the same year fallback chain as the airport timeline (target_year ->
+    planning_year -> manual_year_estimate). Returns None when there's no
+    dateable data at all, so the template can show an empty-state instead.
+    """
+    install_years = [i.install_year for i in installations if i.install_year]
+    signal_years = [
+        y
+        for y in (
+            (s.target_year or s.planning_year or s.manual_year_estimate) for s in signals
+        )
+        if y
+    ]
+
+    all_years = install_years + signal_years
+    if not all_years:
+        return None
+
+    end_year = max(all_years)
+    end_year += (5 - end_year % 5) % 5  # round up to the next 5-year mark, e.g. 2028 -> 2030
+    start_year = min(all_years)
+    if end_year - start_year > _TREND_MAX_SPAN_YEARS:
+        start_year = end_year - _TREND_MAX_SPAN_YEARS
+
+    years = list(range(start_year, end_year + 1))
+    install_counts = Counter(install_years)
+    signal_counts = Counter(signal_years)
+    max_per_year = max([install_counts.get(y, 0) for y in years] + [signal_counts.get(y, 0) for y in years] + [1])
+
+    slot_w = (_TREND_WIDTH - _TREND_BAR_MARGIN["left"] - _TREND_BAR_MARGIN["right"]) / len(years)
+    bar_w = max(slot_w * 0.34, 1.5)
+    gap = slot_w * 0.08
+    plot_h_bar = _TREND_BAR_HEIGHT - _TREND_BAR_MARGIN["top"] - _TREND_BAR_MARGIN["bottom"]
+    bar_baseline_y = _TREND_BAR_MARGIN["top"] + plot_h_bar
+
+    bars = []
+    for idx, year in enumerate(years):
+        slot_x = _TREND_BAR_MARGIN["left"] + idx * slot_w
+        n_install = install_counts.get(year, 0)
+        n_signal = signal_counts.get(year, 0)
+        install_h = (n_install / max_per_year) * plot_h_bar
+        signal_h = (n_signal / max_per_year) * plot_h_bar
+        bars.append(
+            SimpleNamespace(
+                year=year,
+                install_count=n_install,
+                signal_count=n_signal,
+                install_x=round(slot_x + gap, 2),
+                install_y=round(bar_baseline_y - install_h, 2),
+                install_h=round(install_h, 2),
+                signal_x=round(slot_x + gap + bar_w + gap, 2),
+                signal_y=round(bar_baseline_y - signal_h, 2),
+                signal_h=round(signal_h, 2),
+                bar_w=round(bar_w, 2),
+            )
+        )
+
+    plot_h_line = _TREND_LINE_HEIGHT - _TREND_LINE_MARGIN["top"] - _TREND_LINE_MARGIN["bottom"]
+    line_baseline_y = _TREND_LINE_MARGIN["top"] + plot_h_line
+    max_cumulative = sum(install_counts.get(y, 0) for y in years) or 1
+
+    points = []
+    running = 0
+    for idx, year in enumerate(years):
+        running += install_counts.get(year, 0)
+        x = _TREND_LINE_MARGIN["left"] + idx * slot_w + slot_w / 2
+        y = line_baseline_y - (running / max_cumulative) * plot_h_line
+        points.append(SimpleNamespace(x=round(x, 2), y=round(y, 2), year=year, cumulative=running))
+
+    line_path = "M " + " L ".join(f"{p.x},{p.y}" for p in points)
+    area_path = (
+        line_path
+        + f" L {points[-1].x},{line_baseline_y} L {points[0].x},{line_baseline_y} Z"
+    )
+
+    ticks = [
+        SimpleNamespace(year=year, x=round(_TREND_BAR_MARGIN["left"] + idx * slot_w + slot_w / 2, 2))
+        for idx, year in enumerate(years)
+        if year % 5 == 0
+    ]
+
+    return SimpleNamespace(
+        width=_TREND_WIDTH,
+        bar_height=_TREND_BAR_HEIGHT,
+        line_height=_TREND_LINE_HEIGHT,
+        bar_baseline_y=round(bar_baseline_y, 2),
+        line_baseline_y=round(line_baseline_y, 2),
+        bars=bars,
+        points=points,
+        ticks=ticks,
+        line_path=line_path,
+        area_path=area_path,
+        max_cumulative=max_cumulative,
+        total_installations=max_cumulative,
+        total_signals=sum(signal_counts.get(y, 0) for y in years),
+        start_year=start_year,
+        end_year=end_year,
+    )
+
+
 def _group_signal_views(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
     """Group signal_views by (airport_id, category) into single rows or
     expandable groups for signals_list.html - purely a presentation grouping,
@@ -476,6 +593,7 @@ def _build(output_dir: Path, session: Session) -> None:
         signal_count=len(signal_views),
         high_confidence_count=sum(1 for s in signal_views if s.confidence_level == "high"),
         top_signals=signal_views[:8],
+        trend=_trend_view([i for a in airport_views for i in a.installations], signal_views),
     )
 
     render(

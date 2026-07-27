@@ -13,6 +13,67 @@
 </div>
 
 <div class="card">
+  <div class="card-header">EMAS-installationer över tid</div>
+  {% if trend %}
+  <div class="card-body">
+    <div class="trend-legend">
+      <span class="trend-legend-item"><span class="trend-swatch trend-swatch-install"></span>Installationer (bekräftat)</span>
+      <span class="trend-legend-item"><span class="trend-swatch trend-swatch-signal"></span>Signaler (prognos, planerat år)</span>
+    </div>
+
+    <div class="trend-scroll">
+    <svg class="trend-chart" viewBox="0 0 {{ trend.width }} {{ trend.bar_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Nya installationer och signaler per år">
+      <defs>
+        <pattern id="trend-hatch" width="5" height="5" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="5" stroke="var(--low-ink)" stroke-width="1.5" opacity="0.7" />
+        </pattern>
+      </defs>
+      {% for tick in trend.ticks %}
+      <line x1="{{ tick.x }}" y1="4" x2="{{ tick.x }}" y2="{{ trend.bar_baseline_y }}" class="trend-gridline" />
+      {% endfor %}
+      <line x1="{{ trend.bars[0].install_x - 4 }}" y1="{{ trend.bar_baseline_y }}" x2="{{ trend.width - 8 }}" y2="{{ trend.bar_baseline_y }}" class="trend-baseline" />
+      {% for bar in trend.bars %}
+        {% if bar.install_h > 0 %}
+        <rect x="{{ bar.install_x }}" y="{{ bar.install_y }}" width="{{ bar.bar_w }}" height="{{ bar.install_h }}" rx="1.5" class="trend-bar-install">
+          <title>{{ bar.year }} · Installationer: {{ bar.install_count }}</title>
+        </rect>
+        {% endif %}
+        {% if bar.signal_h > 0 %}
+        <rect x="{{ bar.signal_x }}" y="{{ bar.signal_y }}" width="{{ bar.bar_w }}" height="{{ bar.signal_h }}" rx="1.5" class="trend-bar-signal">
+          <title>{{ bar.year }} · Signaler (prognos): {{ bar.signal_count }}</title>
+        </rect>
+        {% endif %}
+      {% endfor %}
+    </svg>
+
+    <svg class="trend-chart trend-chart-cumulative" viewBox="0 0 {{ trend.width }} {{ trend.line_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Kumulativt antal installationer per år">
+      {% for tick in trend.ticks %}
+      <line x1="{{ tick.x }}" y1="0" x2="{{ tick.x }}" y2="{{ trend.line_baseline_y }}" class="trend-gridline" />
+      <text x="{{ tick.x }}" y="{{ trend.line_height - 4 }}" class="trend-tick-label" text-anchor="middle">{{ tick.year }}</text>
+      {% endfor %}
+      <line x1="{{ trend.points[0].x }}" y1="{{ trend.line_baseline_y }}" x2="{{ trend.points[-1].x }}" y2="{{ trend.line_baseline_y }}" class="trend-baseline" />
+      <path d="{{ trend.area_path }}" class="trend-area"></path>
+      <path d="{{ trend.line_path }}" class="trend-line"></path>
+      {% for p in trend.points %}
+      {% if p.year % 5 == 0 %}
+      <circle cx="{{ p.x }}" cy="{{ p.y }}" r="2.5" class="trend-point">
+        <title>{{ p.year }} · Totalt installerat: {{ p.cumulative }}</title>
+      </circle>
+      {% endif %}
+      {% endfor %}
+    </svg>
+    </div>
+
+    <p class="trend-caption">
+      {{ trend.total_installations }} installationer med känt installationsår (av {{ installation_count }} totalt) och {{ trend.total_signals }} signaler med bedömt år (av {{ signal_count }} totalt), {{ trend.start_year }}–{{ trend.end_year }}. Signaler är planerade/möjliga projekt, inte bekräftade installationer.
+    </p>
+  </div>
+  {% else %}
+  <div class="empty-state">Ingen daterad installations- eller signaldata ännu.</div>
+  {% endif %}
+</div>
+
+<div class="card">
   <div class="card-header">Högst prioriterade signaler</div>
   <table>
     <thead>
