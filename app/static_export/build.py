@@ -436,6 +436,7 @@ def _build(output_dir: Path, session: Session) -> None:
     (output_dir / "airports").mkdir()
     (output_dir / "signals").mkdir()
     shutil.copy2(STATIC_DIR / "style.css", output_dir / "style.css")
+    shutil.copy2(STATIC_DIR / "watch.js", output_dir / "watch.js")
 
     env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")

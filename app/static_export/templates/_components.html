@@ -41,6 +41,14 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# Star toggle for the "bevaka" (watch) feature - purely client-side
+   (localStorage, see static/watch.js), no server state at all. Always
+   server-rendered as unwatched (☆); watch.js repaints on load from
+   whatever's in the visitor's own browser. #}
+{% macro star_toggle(signal_id) -%}
+<button type="button" class="star-toggle" data-signal-id="{{ signal_id }}" aria-pressed="false" aria-label="Bevaka signal">☆</button>
+{%- endmacro %}
+
 {# One standalone signal table row (signals_list.html's ungrouped rows).
    `root` is passed explicitly (not via context) to keep this macro usable
    from a plain, non-"with context" import. #}
@@ -49,7 +57,9 @@
     data-search="{{ (signal.title ~ ' ' ~ signal.airport_name ~ ' ' ~ signal.airport_code)|lower }}"
     data-status="{{ signal.status or '' }}"
     data-country="{{ signal.country }}"
+    data-signal-ids="{{ signal.id }}"
 >
+  <td data-label="Bevaka">{{ star_toggle(signal.id) }}</td>
   <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }}</a></td>
   <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
   <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
@@ -65,6 +75,7 @@
    are omitted since they're implied by the parent group. #}
 {% macro signal_strip(signal, root) -%}
 <div class="strip">
+  {{ star_toggle(signal.id) }}
   <div class="title"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></div>
   {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
   <div class="meta mono">{{ signal.planning_year or "–" }}</div>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill %}
+{% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill, star_toggle %}
 {% block title %}{{ signal.title }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <div class="breadcrumbs"><a href="{{ root }}/signals/index.html">← Signaler</a></div>
@@ -8,7 +8,7 @@
     <p class="subtitle" style="margin-bottom:4px">
       <a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }} {{ signal.airport_name }}</a>
     </p>
-    <h1>{{ signal.title }}</h1>
+    <h1>{{ star_toggle(signal.id) }} <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span> {{ signal.title }}</h1>
     <span class="pill {{ 'done' if signal.is_completed else 'status' }}">{{ signal.status_label or signal.category_label }}</span>
     {{ cat(signal.category_label, signal.category_class) }}
     {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
@@ -92,4 +92,7 @@
     </div>
   </div>
 </div>
+
+<script src="{{ root }}/watch.js"></script>
+<script>RWIWatch.initStars();</script>
 {% endblock %}
