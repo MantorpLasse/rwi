@@ -40,24 +40,6 @@
       </div>
     </div>
 
-    {% if signal.notes or signal.manual_year_estimate %}
-    <div class="card annotation">
-      <div class="card-header">
-        Min bedömning
-        <span class="eyebrow">Manuell anteckning – inte officiell källdata</span>
-      </div>
-      <div class="card-body">
-        {% if signal.manual_year_estimate %}
-        <div style="color:var(--text-dim); font-size:0.85rem">Min årsuppskattning</div>
-        <div class="year-estimate" style="font-size:1.3rem; margin-bottom:14px">{{ signal.manual_year_estimate }}</div>
-        {% endif %}
-        {% if signal.notes %}
-        <p style="white-space:pre-line; margin:0">{{ signal.notes }}</p>
-        {% endif %}
-      </div>
-    </div>
-    {% endif %}
-
     <div class="card">
       <div class="card-header">Källa</div>
       <div class="card-body">

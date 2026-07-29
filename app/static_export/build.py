@@ -156,12 +156,18 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         status_label=_STATUS_LABEL.get(signal.status, signal.status),
         is_completed=signal.status == "completed",
         installation_id=signal.installation_id,
+        updated_at=signal.updated_at,
         target_year=signal.target_year,
         planning_year=signal.planning_year,
         procurement_year=signal.procurement_year,
         probability_score=signal.probability_score,
-        notes=signal.notes,
-        manual_year_estimate=signal.manual_year_estimate,
+        # signal.notes and signal.manual_year_estimate (the "Min bedömning"
+        # card's personal, unverified annotation - see
+        # scripts/annotate_signal.py) are deliberately NOT exposed here.
+        # This view is what feeds signal_detail.html *and* data.json for the
+        # public static export, so anything added to it is published -
+        # unlike app/templates/signals/detail.html, the devserver template,
+        # which reads the ORM Signal directly and still shows it.
         confirmed_vendor=signal.confirmed_vendor,
         likely_supplier=signal.likely_supplier,
         supplier_reason=signal.supplier_reason,
@@ -205,6 +211,7 @@ def _installation_view(installation: Installation) -> SimpleNamespace:
             installation.type in _RUNWAY_TRACKED_INSTALLATION_TYPES and installation.runway_id is None
         ),
         install_year=installation.install_year,
+        updated_at=installation.updated_at,
         status=installation.status,
         confirmed_vendor=installation.confirmed_vendor,
         notes=installation.notes,
@@ -244,11 +251,15 @@ def _timeline_view(
     for airport_detail.html, alongside (not instead of) the existing
     per-entity tables. Year source per entity: Installation.install_year,
     Incident.incident_date, and for Signal a fallback chain
-    (target_year -> planning_year -> manual_year_estimate) since target_year
-    is populated on only a handful of signals database-wide while
-    planning_year is what the Signals table already displays - a strict
-    target_year-only reading would dump almost every signal into "Odaterat"
-    even when a year is in fact known.
+    (target_year -> planning_year) since target_year is populated on only a
+    handful of signals database-wide while planning_year is what the
+    Signals table already displays - a strict target_year-only reading
+    would dump almost every signal into "Odaterat" even when a year is in
+    fact known. manual_year_estimate is deliberately excluded from this
+    chain, even as a last resort: it's a personal, unverified guess (see
+    scripts/annotate_signal.py) and this timeline is part of the public
+    static export - falling back to it would put that guess on the page as
+    if it were a resolved year.
 
     Events without a resolvable year go to a separate `undated` list instead
     of the chronological one, per the "Odaterat" section requirement -
@@ -291,7 +302,7 @@ def _timeline_view(
         dated.append(event)
 
     for signal in signals:
-        year = signal.target_year or signal.planning_year or signal.manual_year_estimate
+        year = signal.target_year or signal.planning_year
         event = _timeline_event(
             kind="signal",
             id=signal.id,
@@ -326,14 +337,15 @@ def _trend_view(
     """Installations-per-year (bar) + cumulative installations (line), plus
     a second, visually-muted bar series for planned signals per year - using
     the same year fallback chain as the airport timeline (target_year ->
-    planning_year -> manual_year_estimate). Returns None when there's no
-    dateable data at all, so the template can show an empty-state instead.
+    planning_year; manual_year_estimate deliberately excluded, see
+    _timeline_view). Returns None when there's no dateable data at all, so
+    the template can show an empty-state instead.
     """
     install_years = [i.install_year for i in installations if i.install_year]
     signal_years = [
         y
         for y in (
-            (s.target_year or s.planning_year or s.manual_year_estimate) for s in signals
+            (s.target_year or s.planning_year) for s in signals
         )
         if y
     ]
@@ -424,6 +436,90 @@ def _trend_view(
     )
 
 
+# The date created_at/updated_at were added to Signal/Installation/Source/
+# Incident (see docs/utredning_senast_uppdaterat.md and
+# scripts/add_created_updated_timestamps.py) - a fixed historical fact used
+# only for the "Senast uppdaterat" empty-state copy below. Deliberately not
+# datetime.now(): that would make the dashboard claim a fresh "log started
+# today" on every rebuild, long after the real migration date.
+_CHANGELOG_START_DATE = date(2026, 7, 27)
+
+
+def _recent_changes_view(
+    airport_views: list[SimpleNamespace],
+    signal_views: list[SimpleNamespace],
+    *,
+    limit: int = 15,
+) -> list[SimpleNamespace]:
+    """index.html's "Senast uppdaterat" feed - Signal/Installation/Incident
+    rows with a real updated_at (see docs/utredning_senast_uppdaterat.md).
+
+    Source is deliberately excluded even though it also got the column: it
+    has no detail page or anchor anywhere on the site, so there's nowhere
+    honest to link a change to. A row with updated_at=None isn't an
+    "unknown change" - it predates the column entirely - so it's left out
+    rather than shown with a missing/fake date.
+    """
+    entries: list[SimpleNamespace] = []
+
+    for airport in airport_views:
+        for installation in airport.installations:
+            if installation.updated_at is None:
+                continue
+            entries.append(
+                SimpleNamespace(
+                    kind="installation",
+                    id=installation.id,
+                    category_label="Installation",
+                    category_class="new",
+                    title=installation.type or "Installation",
+                    airport_id=airport.id,
+                    airport_code=airport.iata_code or airport.icao_code or "–",
+                    airport_name=airport.name,
+                    updated_at=installation.updated_at,
+                )
+            )
+        for incident in airport.incidents:
+            if incident.updated_at is None:
+                continue
+            entries.append(
+                SimpleNamespace(
+                    kind="incident",
+                    id=incident.id,
+                    category_label="Incident",
+                    category_class="incident",
+                    title=incident.incident_type,
+                    airport_id=airport.id,
+                    airport_code=airport.iata_code or airport.icao_code or "–",
+                    airport_name=airport.name,
+                    updated_at=incident.updated_at,
+                )
+            )
+
+    for signal in signal_views:
+        if signal.updated_at is None:
+            continue
+        entries.append(
+            SimpleNamespace(
+                kind="signal",
+                id=signal.id,
+                category_label=signal.category_label,
+                category_class=signal.category_class,
+                title=signal.title,
+                airport_id=signal.airport_id,
+                airport_code=signal.airport_code,
+                airport_name=signal.airport_name,
+                updated_at=signal.updated_at,
+            )
+        )
+
+    entries.sort(key=lambda e: e.updated_at, reverse=True)
+    return [
+        SimpleNamespace(**vars(e), date_label=e.updated_at.strftime("%Y-%m-%d"))
+        for e in entries[:limit]
+    ]
+
+
 def _group_signal_views(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
     """Group signal_views by (airport_id, category) into single rows or
     expandable groups for signals_list.html - purely a presentation grouping,
@@ -495,6 +591,7 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
             incident_date=i.incident_date,
             incident_type=i.incident_type,
             emas_engaged=i.emas_engaged,
+            updated_at=i.updated_at,
         )
         for i in airport.incidents
     ]
@@ -594,6 +691,8 @@ def _build(output_dir: Path, session: Session) -> None:
         high_confidence_count=sum(1 for s in signal_views if s.confidence_level == "high"),
         top_signals=signal_views[:8],
         trend=_trend_view([i for a in airport_views for i in a.installations], signal_views),
+        recent_changes=_recent_changes_view(airport_views, signal_views),
+        changelog_start_date=_CHANGELOG_START_DATE.isoformat(),
     )
 
     render(

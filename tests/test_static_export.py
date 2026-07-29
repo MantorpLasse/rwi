@@ -338,3 +338,63 @@ def test_build_site_writes_om_page_linked_from_every_page_footer(tmp_path):
     signal = session.query(Signal).one()
     signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
     assert 'href="../om.html">Om sidan &amp; ansvarsfriskrivning →</a>' in signal_html
+
+
+def test_build_site_never_exposes_signal_notes_or_manual_year_estimate(tmp_path):
+    """The "Min bedömning" card (Signal.notes / Signal.manual_year_estimate,
+    set via scripts/annotate_signal.py) is a personal, unverified annotation
+    - it must never reach the public static export, only the devserver
+    (app/templates/signals/detail.html, which reads the ORM Signal directly
+    and is unaffected by this test)."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Manchester-Boston Regional Airport", iata_code="MHT", country="USA")
+        session.add(airport)
+        session.flush()
+        signal = Signal(
+            airport=airport,
+            title="Runway 6 departure-end EMAS replacement",
+            category="replacement",
+            confidence="confirmed",
+            planning_year=2027,
+            notes="[2026-07-24] Bekräftat via bidding addendum (flymanchester.com, 2026-06-18).",
+            manual_year_estimate=2027,
+        )
+        session.add(signal)
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
+    assert "Min bedömning" not in signal_html
+    assert "flymanchester.com" not in signal_html
+    assert "bidding addendum" not in signal_html
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    signal_data = next(s for s in data["signals"] if s["id"] == signal.id)
+    assert "notes" not in signal_data
+    assert "manual_year_estimate" not in signal_data
+    assert "flymanchester.com" not in json.dumps(data)
+
+    # Installation.notes ("Detaljer från källan" - source-derived, not a
+    # personal annotation) is a different field and must still be public.
+    with Session(engine) as session:
+        airport = session.query(Airport).one()
+        session.add(
+            Installation(
+                airport=airport,
+                type="EMAS",
+                status="active",
+                notes="Källan anger kostnad och datum i fritext.",
+            )
+        )
+        session.commit()
+
+        output2 = tmp_path / "site2"
+        build_site(output2, session=session)
+
+    airport_html = (output2 / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert "Detaljer från källan" in airport_html
+    assert "Källan anger kostnad och datum i fritext." in airport_html
