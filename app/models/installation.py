@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -37,6 +38,13 @@ class Installation(Base):
     # see app/models/signal.py's confirmed_vendor for why this is kept
     # separate from a mere guess.
     confirmed_vendor: Mapped[Optional[str]] = mapped_column(String(150))
+
+    # See app/models/signal.py's created_at/updated_at for why these are
+    # nullable (added retroactively, existing rows left NULL).
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
 
     airport: Mapped["Airport"] = relationship(back_populates="installations")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="installations")

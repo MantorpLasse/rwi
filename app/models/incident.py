@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, String, Text, event, insert, select
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, event, insert, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -35,6 +35,13 @@ class Incident(Base):
     source_url: Mapped[Optional[str]] = mapped_column(String(1000))
     official_report_url: Mapped[Optional[str]] = mapped_column(String(1000))
     implies_replacement: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # See app/models/signal.py's created_at/updated_at for why these are
+    # nullable (added retroactively, existing rows left NULL).
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
 
     airport: Mapped["Airport"] = relationship(back_populates="incidents")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="incidents")

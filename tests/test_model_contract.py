@@ -105,6 +105,8 @@ EXPECTED_COLUMNS = {
         "summary": ("TEXT", True, None, None),
         "reliability_level": ("VARCHAR(30)", False, ("scalar", "official"), None),
         "external_id": ("VARCHAR(200)", True, None, None),
+        "created_at": ("DATETIME", True, ("callable",), None),
+        "updated_at": ("DATETIME", True, ("callable",), ("callable",)),
     },
     "installations": {
         "id": ("INTEGER", False, None, None),
@@ -123,6 +125,8 @@ EXPECTED_COLUMNS = {
         "faa_accepted": ("BOOLEAN", True, None, None),
         "notes": ("TEXT", True, None, None),
         "confirmed_vendor": ("VARCHAR(150)", True, None, None),
+        "created_at": ("DATETIME", True, ("callable",), None),
+        "updated_at": ("DATETIME", True, ("callable",), ("callable",)),
     },
     "incidents": {
         "id": ("INTEGER", False, None, None),
@@ -140,6 +144,8 @@ EXPECTED_COLUMNS = {
         "source_url": ("VARCHAR(1000)", True, None, None),
         "official_report_url": ("VARCHAR(1000)", True, None, None),
         "implies_replacement": ("BOOLEAN", False, ("scalar", True), None),
+        "created_at": ("DATETIME", True, ("callable",), None),
+        "updated_at": ("DATETIME", True, ("callable",), ("callable",)),
     },
     "signals": {
         "id": ("INTEGER", False, None, None),
@@ -166,6 +172,8 @@ EXPECTED_COLUMNS = {
         "manual_year_estimate": ("INTEGER", True, None, None),
         "confirmed_vendor": ("VARCHAR(150)", True, None, None),
         "installation_id": ("INTEGER", True, None, None),
+        "created_at": ("DATETIME", True, ("callable",), None),
+        "updated_at": ("DATETIME", True, ("callable",), ("callable",)),
     },
 }
 

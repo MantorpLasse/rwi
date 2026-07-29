@@ -13,6 +13,35 @@
 </div>
 
 <div class="card">
+  <div class="card-header">Senast uppdaterat</div>
+  {% if recent_changes %}
+  <table>
+    <thead><tr><th>Typ</th><th>Flygplats</th><th>Beskrivning</th><th>Datum</th></tr></thead>
+    <tbody>
+      {% for entry in recent_changes %}
+      <tr>
+        <td data-label="Typ">{{ cat(entry.category_label, entry.category_class) }}</td>
+        <td data-label="Flygplats"><a href="{{ root }}/airports/{{ entry.airport_id }}.html">{{ sign(entry.airport_code, entry.airport_name) }}</a></td>
+        <td class="title" data-label="Beskrivning">
+          {% if entry.kind == "signal" %}
+          <a href="{{ root }}/signals/{{ entry.id }}.html">{{ entry.title }}</a>
+          {% elif entry.kind == "installation" %}
+          <a href="{{ root }}/airports/{{ entry.airport_id }}.html#installation-{{ entry.id }}">{{ entry.title }}</a>
+          {% else %}
+          <a href="{{ root }}/airports/{{ entry.airport_id }}.html#incident-{{ entry.id }}">{{ entry.title }}</a>
+          {% endif %}
+        </td>
+        <td data-label="Datum" class="mono">{{ entry.date_label }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">Ändringsloggen startade {{ changelog_start_date }}. Ändringar före dess finns inte registrerade.</div>
+  {% endif %}
+</div>
+
+<div class="card">
   <div class="card-header">EMAS-installationer över tid</div>
   {% if trend %}
   <div class="card-body">

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, Index, String, Text
+from sqlalchemy import Date, DateTime, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -42,3 +42,10 @@ class Source(Base):
     # script - or a second script covering the same real-world grant - can
     # detect and skip a row it already created.
     external_id: Mapped[Optional[str]] = mapped_column(String(200))
+
+    # See app/models/signal.py's created_at/updated_at for why these are
+    # nullable (added retroactively, existing rows left NULL).
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )

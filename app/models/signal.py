@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Date, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -68,6 +68,16 @@ class Signal(Base):
     # displayed the same way as an analytical judgment call.
     confirmed_vendor: Mapped[Optional[str]] = mapped_column(String(150))
     last_verified_at: Mapped[Optional[date]] = mapped_column(Date)
+
+    # Added retroactively (see docs/utredning_senast_uppdaterat.md) -
+    # nullable, unlike AcquisitionRun's non-null created_at, because rows
+    # from before this migration have no real creation time to record and
+    # are left NULL rather than falsely stamped with the migration date.
+    # Only rows created/edited from here on get a real value.
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
 
     airport: Mapped["Airport"] = relationship(back_populates="signals")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="signals")
