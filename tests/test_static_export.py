@@ -398,3 +398,40 @@ def test_build_site_never_exposes_signal_notes_or_manual_year_estimate(tmp_path)
     airport_html = (output2 / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
     assert "Detaljer från källan" in airport_html
     assert "Källan anger kostnad och datum i fritext." in airport_html
+
+
+def test_build_site_shows_signal_source_notes_publicly_but_not_private_notes(tmp_path):
+    """Signal.source_notes is the Signal equivalent of Installation.notes -
+    sourced research with a citation, shown publicly as "Detaljer från
+    källan". Signal.notes stays private (personal annotation, see the test
+    above) even on a signal that also has source_notes set."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Fulton County Executive Airport", iata_code="FTY", country="USA")
+        session.add(airport)
+        session.flush()
+        signal = Signal(
+            airport=airport,
+            title="Runway 8/26 EMAS safety improvements",
+            category="new_installation",
+            confidence="programmed",
+            source_notes="Bekräftat via Draft Environmental Assessment (fultoncountyga.gov).",
+            notes="[2026-07-24] Min privata anteckning om detta ärendet.",
+        )
+        session.add(signal)
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
+    assert "Detaljer från källan" in signal_html
+    assert "Bekräftat via Draft Environmental Assessment" in signal_html
+    assert "Min privata anteckning" not in signal_html
+    assert "Min bedömning" not in signal_html
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    signal_data = next(s for s in data["signals"] if s["id"] == signal.id)
+    assert signal_data["source_notes"] == "Bekräftat via Draft Environmental Assessment (fultoncountyga.gov)."
+    assert "notes" not in signal_data

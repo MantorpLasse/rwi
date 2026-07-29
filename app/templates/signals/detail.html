@@ -58,6 +58,18 @@
         </div>
         {% endif %}
 
+        {% if signal.source_notes %}
+        <div class="card mb-4">
+            <div class="card-header bg-white fw-semibold">
+                Detaljer från källan
+                <div class="small text-secondary fw-normal">Fritext (kostnad, datum m.m.) utan egna fält i databasen</div>
+            </div>
+            <div class="card-body">
+                <p class="mb-0" style="white-space: pre-line">{{ signal.source_notes }}</p>
+            </div>
+        </div>
+        {% endif %}
+
         <div class="card">
             <div class="card-header bg-white fw-semibold">Källa</div>
             <div class="card-body">

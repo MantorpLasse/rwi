@@ -174,6 +174,7 @@ EXPECTED_COLUMNS = {
         "installation_id": ("INTEGER", True, None, None),
         "created_at": ("DATETIME", True, ("callable",), None),
         "updated_at": ("DATETIME", True, ("callable",), ("callable",)),
+        "source_notes": ("TEXT", True, None, None),
     },
 }
 

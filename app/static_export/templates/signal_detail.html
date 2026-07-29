@@ -56,6 +56,18 @@
         {% endif %}
       </div>
     </div>
+
+    {% if signal.source_notes %}
+    <div class="card annotation">
+      <div class="card-header">
+        Detaljer från källan
+        <span class="eyebrow">Fritext (kostnad, datum m.m.) utan egna fält i databasen</span>
+      </div>
+      <div class="card-body">
+        <p style="white-space:pre-line; margin:0">{{ signal.source_notes }}</p>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
   <div>

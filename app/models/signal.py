@@ -42,12 +42,28 @@ class Signal(Base):
     category: Mapped[str] = mapped_column(String(50), index=True)
     confidence: Mapped[str] = mapped_column(String(30), index=True)
     target_year: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+
+    # Private. Personal, unverified annotations set via
+    # scripts/annotate_signal.py - never exposed to the public static export
+    # (see app/static_export/build.py's _signal_view), only to the
+    # devserver. Same split as manual_year_estimate below: an outside hunch
+    # is never confused with officially sourced data.
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
     # Personal, unverified year guess set via scripts/annotate_signal.py -
     # deliberately separate from target_year/planning_year/procurement_year
     # so an outside hunch is never confused with an officially sourced date.
     manual_year_estimate: Mapped[Optional[int]] = mapped_column(Integer)
+
+    # Public. Sourced research findings with a citation (document name, URL,
+    # date) - free text that doesn't have its own column, same role as
+    # Installation.notes ("Detaljer från källan" in the UI - see
+    # app/static_export/templates/airport_detail.html). Written by one-off
+    # enrichment scripts (e.g. scripts/update_fty_emas_details.py,
+    # scripts/update_lex_emas_details.py) or by hand when the content is a
+    # verifiable research finding rather than a personal guess. Shown
+    # publicly in the static export, unlike `notes` above.
+    source_notes: Mapped[Optional[str]] = mapped_column(Text)
 
     # Carried over from the old Project model so real research data
     # (financial estimates, pipeline stage, supplier reasoning) isn't lost.

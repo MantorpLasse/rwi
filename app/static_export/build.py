@@ -116,6 +116,8 @@ _SOURCE_TYPE = {
     "news": ("Nyhetskälla", None, None),
     "shareholder_newsletter": ("Aktieägarbrev", None, None),
     "faa_construction_report": ("FAA byggrapport", None, None),
+    "environmental_assessment": ("Miljökonsekvensbeskrivning (EA)", None, None),
+    "state_aviation_system_plan": ("Delstatlig flygplatsplan", None, None),
 }
 
 
@@ -167,7 +169,11 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         # This view is what feeds signal_detail.html *and* data.json for the
         # public static export, so anything added to it is published -
         # unlike app/templates/signals/detail.html, the devserver template,
-        # which reads the ORM Signal directly and still shows it.
+        # which reads the ORM Signal directly and still shows both notes and
+        # source_notes. source_notes itself IS public - sourced research
+        # with a citation, the Signal equivalent of Installation.notes
+        # ("Detaljer från källan").
+        source_notes=signal.source_notes,
         confirmed_vendor=signal.confirmed_vendor,
         likely_supplier=signal.likely_supplier,
         supplier_reason=signal.supplier_reason,
