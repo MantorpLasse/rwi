@@ -10,6 +10,23 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# Same code-badge-with-fallback as sign(), but for the (more common) case
+   where the badge is the *only* visible text in the cell/link - e.g. a
+   "Flygplats" table column. There, falling back to a bare "–" leaves a
+   linked cell with no readable label at all (technically clickable, but
+   nothing about it looks or reads like a link). Falls back to the
+   airport's name instead, which is always present. Only use sign() itself
+   when the name is already shown separately right next to it (see
+   signal_detail.html, airport_detail.html's <h1>), where showing it twice
+   would duplicate the name. #}
+{% macro airport_label(code, name) -%}
+{%- if code and code != "–" -%}
+<span class="sign" title="{{ name }}">{{ code }}</span>
+{%- else -%}
+{{ name }}
+{%- endif -%}
+{%- endmacro %}
+
 {% macro gauge(level, label, root) -%}
 <div class="gauge {{ level }}"><span></span><span></span><span></span><a class="gauge-label gloss-link" href="{{ root }}/ordlista.html#confidence" title="Hur säkra vi är på att informationen stämmer, baserat på hur bra källan är – inte hur säkert det är att projektet blir av.">{{ label }}</a></div>
 {%- endmacro %}
@@ -60,7 +77,7 @@
     data-signal-ids="{{ signal.id }}"
 >
   <td data-label="Bevaka">{{ star_toggle(signal.id) }}</td>
-  <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }}</a></td>
+  <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
   <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
   <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
   <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>

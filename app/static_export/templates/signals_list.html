@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_components.html" import sign, gauge, cat, signal_row, signal_strip, source_badge %}
+{% from "_components.html" import gauge, cat, signal_row, signal_strip, source_badge, airport_label %}
 {% block title %}Signaler · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <h1>Signaler</h1>
@@ -34,7 +34,7 @@
             data-signal-ids="{{ item.members|map(attribute='id')|join(',') }}"
         >
           <td data-label="Bevaka"><button type="button" class="star-toggle" data-signal-id="{{ item.top_signal.id }}" aria-pressed="false" aria-label="Bevaka signal">☆</button></td>
-          <td data-label="Flygplats"><a href="{{ root }}/airports/{{ item.airport_id }}.html">{{ sign(item.airport_code, item.airport_name) }}</a></td>
+          <td data-label="Flygplats"><a href="{{ root }}/airports/{{ item.airport_id }}.html">{{ airport_label(item.airport_code, item.airport_name) }}</a></td>
           <td class="title" data-label="Signal">
             <span class="caret">▶</span><span class="grouptitle">{{ item.top_signal.title }}</span><span class="more-tag">+{{ item.more_count }} till</span>
           </td>
