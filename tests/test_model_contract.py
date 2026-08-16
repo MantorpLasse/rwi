@@ -13,6 +13,7 @@ from app.models import (
     Runway,
     Signal,
     Source,
+    SourceAssertion,
     Snapshot,
 )
 
@@ -108,6 +109,32 @@ EXPECTED_COLUMNS = {
         "created_at": ("DATETIME", True, ("callable",), None),
         "updated_at": ("DATETIME", True, ("callable",), ("callable",)),
     },
+    "source_assertions": {
+        "id": ("INTEGER", False, None, None),
+        "source_id": ("INTEGER", False, None, None),
+        "airport_id": ("INTEGER", True, None, None),
+        "runway_id": ("INTEGER", True, None, None),
+        "assertion_type": ("VARCHAR(30)", False, None, None),
+        "runway_end": ("VARCHAR(20)", True, None, None),
+        "raw_airport_identifier": ("VARCHAR(100)", True, None, None),
+        "raw_airport_name": ("VARCHAR(300)", True, None, None),
+        "raw_runway_value": ("VARCHAR(100)", True, None, None),
+        "raw_runway_end_value": ("VARCHAR(100)", True, None, None),
+        "raw_product_type": ("VARCHAR(200)", True, None, None),
+        "raw_year_date_wording": ("VARCHAR(300)", True, None, None),
+        "raw_vendor_manufacturer_wording": ("VARCHAR(300)", True, None, None),
+        "raw_count": ("VARCHAR(100)", True, None, None),
+        "raw_relevant_text": ("TEXT", True, None, None),
+        "source_record_identifier": ("VARCHAR(300)", True, None, None),
+        "source_locator": ("VARCHAR(500)", True, None, None),
+        "raw_fragment_hash": ("VARCHAR(128)", True, None, None),
+        "artifact_identity": ("VARCHAR(500)", True, None, None),
+        "parser_identifier": ("VARCHAR(200)", True, None, None),
+        "extracted_at": ("DATETIME", True, None, None),
+        "evidence_quality": ("VARCHAR(30)", False, ("scalar", "unverified_candidate"), None),
+        "review_state": ("VARCHAR(20)", False, ("scalar", "unreviewed"), None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+    },
     "installations": {
         "id": ("INTEGER", False, None, None),
         "airport_id": ("INTEGER", False, None, None),
@@ -194,6 +221,11 @@ EXPECTED_FOREIGN_KEYS = {
     "runways": {("airport_id", "airports.id")},
     "publishing_sources": set(),
     "sources": set(),
+    "source_assertions": {
+        ("source_id", "sources.id"),
+        ("airport_id", "airports.id"),
+        ("runway_id", "runways.id"),
+    },
     "installations": {
         ("airport_id", "airports.id"),
         ("runway_id", "runways.id"),
@@ -239,6 +271,11 @@ EXPECTED_INDEXES = {
     "sources": {
         ("ix_sources_source_type", ("source_type",), False),
         ("uq_sources_external_id", ("external_id",), True),
+    },
+    "source_assertions": {
+        ("ix_source_assertions_source_id", ("source_id",), False),
+        ("ix_source_assertions_airport_id", ("airport_id",), False),
+        ("ix_source_assertions_runway_id", ("runway_id",), False),
     },
     "installations": {
         ("ix_installations_airport_id", ("airport_id",), False),
@@ -295,12 +332,14 @@ EXPECTED_RELATIONSHIPS = {
         "signals": ("Signal", "airport", DELETE_ORPHAN_CASCADE),
         "installations": ("Installation", "airport", DELETE_ORPHAN_CASCADE),
         "incidents": ("Incident", "airport", DELETE_ORPHAN_CASCADE),
+        "source_assertions": ("SourceAssertion", "airport", DEFAULT_CASCADE),
     },
     "Runway": {
         "airport": ("Airport", "runways", DEFAULT_CASCADE),
         "signals": ("Signal", "runway", DEFAULT_CASCADE),
         "installations": ("Installation", "runway", DEFAULT_CASCADE),
         "incidents": ("Incident", "runway", DEFAULT_CASCADE),
+        "source_assertions": ("SourceAssertion", "runway", DEFAULT_CASCADE),
     },
     "Signal": {
         "airport": ("Airport", "signals", DEFAULT_CASCADE),
@@ -316,7 +355,12 @@ EXPECTED_RELATIONSHIPS = {
         "runway": ("Runway", "installations", DEFAULT_CASCADE),
         "source": ("Source", None, DEFAULT_CASCADE),
     },
-    "Source": {},
+    "Source": {"assertions": ("SourceAssertion", "source", DEFAULT_CASCADE)},
+    "SourceAssertion": {
+        "source": ("Source", "assertions", DEFAULT_CASCADE),
+        "airport": ("Airport", "source_assertions", DEFAULT_CASCADE),
+        "runway": ("Runway", "source_assertions", DEFAULT_CASCADE),
+    },
     "Incident": {
         "airport": ("Airport", "incidents", DEFAULT_CASCADE),
         "runway": ("Runway", "incidents", DEFAULT_CASCADE),
@@ -346,6 +390,7 @@ def test_all_current_models_are_exported_from_app_models():
         Runway.__name__,
         Signal.__name__,
         Source.__name__,
+        SourceAssertion.__name__,
         Snapshot.__name__,
     ] == [
         "Airport",
@@ -357,6 +402,7 @@ def test_all_current_models_are_exported_from_app_models():
         "Runway",
         "Signal",
         "Source",
+        "SourceAssertion",
         "Snapshot",
     ]
 

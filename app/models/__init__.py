@@ -5,6 +5,7 @@ from app.models.installation import Installation
 from app.models.publishing_source import PublishingSource
 from app.models.signal import Signal
 from app.models.source import Source
+from app.models.source_assertion import SourceAssertion
 
 __all__ = [
     "Airport",
@@ -17,5 +18,6 @@ __all__ = [
     "Runway",
     "Signal",
     "Source",
+    "SourceAssertion",
     "Snapshot",
 ]

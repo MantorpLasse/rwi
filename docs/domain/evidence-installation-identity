@@ -1,0 +1,274 @@
+# RWI implementation impact analysis: evidence and installation identity
+
+**Scope.** This is a read-only comparison of the approved semantic contract in
+`evidence-installation-identity-spec.md` with the repository as inspected on
+2026-08-16. It recommends no code, migration, data rewrite, or replacement
+architecture. The baseline is the existing simplified `Airport`,
+`Installation`, `Incident`, `Signal`, and `Source` model—not the removed
+Observation -> Verification -> Fact -> Intelligence design.
+
+## Executive conclusion
+
+The current application has a good small-core foundation, but its existing
+`Installation` rows do **not** consistently mean a physical installation.
+They presently mix FAA airport/type inventory claims, dated aggregate
+fact-sheet claims, and some genuine physical-system claims. The approved
+contract therefore cannot be met by defining a new uniqueness key or by
+deduplicating the current `installations` table. The necessary future change is
+to preserve each upstream claim as a source assertion and make physical
+installation identity an explicit, reviewed result of reconciliation. It can
+be added alongside the simple architecture; it does not require restoration of
+the former pipeline.
+
+The present model can already represent many physical systems at one airport,
+on one runway, and at both ends because neither `(airport_id, type)`,
+`(runway_id, runway_end)`, nor any equivalent is constrained unique. Its
+importers—not the table shape—are the immediate obstacle: the FAA CSV importer
+deduplicates on `(airport_id, type)`, while several one-off importers use
+`airport + type + year` (and sometimes end) as an idempotency guard. Those are
+not valid physical identity keys under the contract.
+
+## What already satisfies the contract
+
+| Existing concept | What is already useful | Limit |
+|---|---|---|
+| `Airport` | Stable local airport entity; supports FAA/IATA/ICAO codes and international airports. | Codes are nullable and not unique; name/city matching can be approximate. They are airport identity aids, not installation identity. |
+| `Installation` | Has independent rows, an airport FK, optional runway FK/end, type, dates, status, dimensions, source, notes, and confirmed vendor. It permits one airport/runway/end to have many rows. | A row currently has no declared granularity, source-record identity, reconciliation state, or predecessor/successor link. |
+| `Runway` / `runway_end` | Optional runway association plus nullable end directly supports “runway known, end unknown” and “location unknown.” NASR enrichment deliberately avoids choosing an end when multiple ends are possible. | `runway_end` is free text and not a first-class end entity; links must remain evidence-backed. |
+| `Source` | Publisher, URL, document reference, page, publication/retrieval dates, reliability and `external_id` provide a compact provenance starting point. USAspending uses a namespaced external ID and unique index. | It represents a document/link, not one claim/record within a document. A single source can support many things but cannot preserve distinct source rows/marks or multiple assertions. |
+| `Signal` | Correctly models a possible future order/project separately from an existing installation. It has airport/runway/source links, project dates/status, and a one-way optional link to a graduated installation. | It must not become installation evidence merely because it is completed; its lifecycle and supplier fields are project-oriented. |
+| `Incident` | Correctly remains an event separate from installation history and generates a replacement opportunity signal. | An incident does not by itself identify which physical system was activated or replaced. |
+| Static exporter | Uses an explicit public view and excludes `Signal.notes` and `manual_year_estimate`. | Other public free text and inference fields remain a publication risk; see below. |
+
+`created_at`/`updated_at`, source URL, source date, dimensions, product wording,
+and explicit `confirmed_vendor` can all be reused, provided their raw evidence
+and claim-level meaning are preserved. `runway_id = NULL` and `runway_end =
+NULL` are already safe representations of unknowns; they must never be filled
+by airport layout or matching heuristics.
+
+## Fields that currently mix meanings
+
+`Installation` is documented as “what is installed today,” but it contains at
+least three incompatible semantic classes:
+
+1. `import_faa_csv.py` creates/updates one `Installation` per FAA CSV
+   airport/type. The checked-in CSV has no system, runway, end, count, year,
+   vendor, or source-row ID. These are airport-level inventory assertions, not
+   physical installations.
+2. FAA fact-sheet scripts create one dated row from entries that can describe
+   a count, composite years, replacement years, or historical systems. Their
+   notes often retain the distinction, but columns reduce it to a single active
+   row/year.
+3. Curated/manual rows sometimes identify a discrete bed—for example CGF 2018
+   end 06 and end 24—and sometimes remain airport-level or historical claims.
+
+Consequently `type`, `install_year`, `replacement_year`, `status`,
+`manufacturer`, `confirmed_vendor`, dimensions and `notes` presently mean
+either a source claim, a derived current-state attribute, or an assertion about
+a particular bed depending on importer. `notes` is also both explanatory raw
+evidence and editorial/research text. `Source.source_id` is one selected source
+for a row, not a record of all supporting or conflicting claims.
+
+`Signal` intentionally mixes a sourced project fact with an opportunity
+assessment: category/status/dates/value may be source-backed, while
+`likely_supplier`, `supplier_reason`, scores, and private notes include
+analysis. This is acceptable for the simplified Signal purpose, but it must
+not be used as an installation reconciliation store.
+
+## Missing source-assertion and provenance capability
+
+The contract needs a durable unit below `Source`: one **Source Assertion** for
+what one source record says at its own granularity. The current schema lacks:
+
+- assertion type/granularity (airport inventory, runway, runway end, physical,
+  historical, project/construction) and explicit unresolved state;
+- the raw claim values and wording used for matching, including count, years,
+  vendor role, runway/end candidates, dimensions and relevant text;
+- a source-record key, record locator and immutable artifact/version/hash;
+- parser/import version and extraction time;
+- assertion-level evidence quality and review state;
+- an auditable reconciliation decision of same/different/unresolved, its
+  actor/time/reason/evidence, and a reversible mapping to a physical row;
+- a way to preserve several assertions for one source and several sources for
+  one physical installation without choosing a single primary `source_id`.
+
+Yes: `Source` needs an explicit source-record identity/provenance concept, but
+that concept should apply to the assertion/record, not redefine `Source` as a
+document-management system. `Source.external_id` is a promising narrow
+precedent, but it is document-level and globally unique. The required
+idempotency key is namespaced source identity plus stable upstream record ID;
+when no ID exists it must use locator + immutable artifact/version/hash +
+raw-fragment hash. Neither airport/type, airport/year, URL/title, nor fuzzy
+similarity can substitute.
+
+Existing acquisition `Snapshot`/hash support is relevant provenance machinery
+for future automated sources, but it is unused by current production data and
+does not itself create assertions or reconciliation.
+
+## Physical identity, location, lifecycle, and replacement
+
+### Multiple installations and runway/end handling
+
+The ORM allows unlimited installations at one airport, runway, or end, so no
+redesign is necessary merely to model multiple physical systems. It also allows
+an evidence-backed physical installation with unknown runway/end. The useful
+NASR enrichment behavior should be retained: it sets a runway while leaving
+the end blank when multiple official ends occur on the same confirmed runway,
+and records ambiguity rather than guessing across multiple runways.
+
+However, NASR’s `APT_ARS` rows are evidence about arresting-system-equipped
+ends; they do not prove which pre-existing aggregate/fact-sheet installation
+row is the same bed. The present enrichment writes a location directly onto
+every qualifying `Installation` and appends provenance to public notes. Under
+the contract it should be treated as a runway/runway-end source assertion and
+reconciled only with strong or reviewed compatible evidence.
+
+### Lifecycle
+
+The nullable `status`, `install_year`, and `replacement_year` fields could
+display a reviewed lifecycle, but are insufficient to preserve lifecycle
+evidence safely. Values are unconstrained (`active` is commonly written; the
+contract calls for operational/current, under replacement, replaced,
+retired/removed, and historical/unknown). A single `replacement_year` neither
+identifies the successor nor distinguishes an original system, a replacement,
+or a retrofit. Parenthesized/composite source years are currently flattened
+into integers plus notes, which loses claim-level ambiguity.
+
+A replacement must be represented as a separate physical installation only
+when evidence establishes a successor. The predecessor stays historical and a
+reviewed, evidence-backed predecessor/successor relation links them. A
+refurbishment/retrofit remains historical modification evidence unless the
+source explicitly says replacement. No row should be silently overwritten,
+merged, or retired from inference.
+
+The present `graduate_signal_to_installation.py` is correctly manual and
+one-at-a-time, but it creates `status="active"` solely from a completed Signal
+and caller-provided type/year. Future use requires direct completion and
+physical-system evidence; a completed grant/project is not enough. It also
+copies private `Signal.notes` into public `Installation.notes`, which violates
+the intended public/internal boundary unless explicitly reviewed and
+sanitized.
+
+### Vendor
+
+`confirmed_vendor` is the right field to reuse only for a source-explicit role.
+The current comments distinguish it from `likely_supplier`, which is good.
+Nevertheless role is not recorded (supplier, manufacturer, installer,
+licensor, contractor and maintainer are different), source evidence is not
+claim-level, and scripts can assign a single label based on prose. USAspending
+does not identify the EMAS vendor; it must never be used to infer Runway Safe.
+`Signal.likely_supplier` and `supplier_reason` are internal assessments and
+must remain distinct from confirmed vendor facts.
+
+## Classification of present imports and research
+
+| Path | Correct contract classification | Current issue / required future discipline |
+|---|---|---|
+| Checked-in FAA CSV via `import_faa_csv.py` | Airport-level inventory Source Assertion, one source record per CSV row. | It currently creates/updates an Installation using `(airport_id, type)`. It must not establish a physical row or absorb/split records based on other sources. |
+| FAA Tableau acquisition/parser | Acquisition/provenance boundary, not an operational installation importer today. The future parser candidates are source assertions, initially classified at the granularity actually present. | Capture has workbook/view and snapshot concepts, but live data has no snapshots and `FAAEmasSnapshotParser` fails closed because no observed VizQL grammar exists. A future mark must retain workbook/view/sheet/mark, artifact/version/hash, raw values, parser version and record identity before reconciliation. |
+| NASR runway-end importer | Official runway/end source assertion. | Its conservative ambiguity handling is sound, but linking it directly to aggregate Installation rows can overstate identity. |
+| USAspending importer | Project/construction Source Assertion feeding a Signal, not installation/current-state evidence. | Its `usaspending:<generated_internal_id>` source identity is a good idempotency pattern. Airport matching/creation is attribution, not physical identity; description may mention runway/end but still proves funding/project, not completed system. |
+| FAA AIP, IIJA, construction-report importers | Project/construction assertions feeding Signals; potentially historical/completion evidence only when their precise language warrants it. | Do not auto-graduate or merge them into installations. Keep multiple grants/reports rather than treating matching projects as physical identity. |
+| FAA fact-sheet importers | Aggregate and/or historical Source Assertions. A count and composite/replacement-year string must be retained as raw source language. | Current scripts create a single active dated Installation and guard by airport/type/year. This is not a system key and cannot preserve count-to-system uncertainty. |
+| Curated manual/news/research scripts | Source Assertions whose class depends on the cited text: some are physical-system/runway-end claims, others aggregate, historical or project claims. | CGF’s explicitly named 06/24 beds are strong evidence of different physical systems. All other rows require assertion-level classification rather than an assumption from their current Installation row. |
+
+## Signal and Installation interaction
+
+The current relationship is intentionally limited: a Signal can point to one
+Installation after manual graduation; an Installation has no collection of
+signals. This preserves the useful distinction between a prospective project
+and an installed asset. It is sufficient for a simple UI handoff but not a
+replacement-history model. An incident’s automatic replacement Signal is an
+opportunity consequence, not proof of a particular installation’s state or
+successor. A physical installation may eventually have many associated project
+assertions/signals and a project may relate to an unresolved candidate set;
+such associations must not silently establish identity.
+
+## Public-export assessment
+
+The static exporter’s deliberate omission of `Signal.notes` and
+`manual_year_estimate` from HTML and `data.json` satisfies an important part of
+the contract and must remain. It publishes `Installation.notes`,
+`Signal.source_notes`, `likely_supplier`, `supplier_reason`, estimates and
+confirmed vendor. `supplier_reason` is particularly problematic because it is
+explicitly analytical reasoning, not a confirmed fact; public `source_notes`
+and Installation notes are also unstructured text without a required source
+locator. The static output therefore can leak internal/private information if
+those fields receive AI reasoning, candidate matches, raw diagnostics, local
+paths, or private Signal text.
+
+Existing public installation source title/URL/date is useful but inadequate
+for assertion provenance: it cannot show a CSV row, Tableau mark, PDF table
+line, extraction version, or the source-specific claim. Incident export also
+does not expose its source link. The current dynamic development templates
+read private Signal fields directly; that is acceptable only if they remain
+non-public.
+
+## Strictly required changes before claiming conformance
+
+1. Define and preserve source assertions at source-record granularity,
+   including provenance/raw values and an idempotent source-record key.
+2. Separate assertion preservation from reviewed physical Installation
+   identity. Reclassify legacy rows conservatively; do not delete, merge, or
+   recast them as systems without evidence.
+3. Make reconciliation explicit, reversible and auditable: same/different/
+   unresolved, evidence/reason, reviewer/actor and time. Automation/AI/n8n
+   may produce candidates only.
+4. Replace every importer’s use of airport/type, airport/year, title, or
+   similarity as an installation identity/deduplication key. Preserve raw
+   source records first; apply only source-record idempotency automatically.
+5. Preserve raw ambiguous/composite years and vendor wording/role. Model
+   lifecycle and predecessor/successor evidence without overwriting history.
+6. Keep source assertions for FAA CSV/Tableau aggregates and grant/project
+   sources even when no physical installation can be linked.
+7. Enforce the public/private publishing boundary: no private Signal notes or
+   AI/reconciliation reasoning may flow into Installation notes/export; do
+   not publish likely-supplier reasoning as confirmed evidence.
+
+Separately, the inspected repository audit records broken live foreign keys
+from the three entity `source_id` columns to a dropped `sources_old` table
+while enforcement is disabled. That integrity defect is not unique to this
+specification, but source-assertion provenance cannot safely rely on the
+current database until a future, controlled repair process addresses it.
+
+## Optional improvements
+
+- Add controlled vocabulary/validation for assertion granularity, reviewed
+  lifecycle, evidence quality, vendor role, and reconciliation outcome.
+- Normalize and retain source locators/artifacts, raw fragments and hashes;
+  use the existing acquisition snapshot capability where appropriate.
+- Add explicit public citation/locator rendering and export validation; retain
+  the current allow-list approach.
+- Add non-mutating data-quality checks for orphaned sources, invalid location
+  associations, source-record replay, and candidate—not automatic—duplicates.
+- Add a clear review UI/workflow only if it stays lightweight. A simple
+  reviewed decision record is enough; a return to the old multistage pipeline
+  is neither required nor desirable.
+
+## What must explicitly not change
+
+- Do not restore Observation, Verification, Fact, Intelligence, Document, or
+  the former promotion pipeline.
+- Do not use airport/type/year, count, coordinates, source type, generic
+  titles, vendor likelihood, or source agreement at airport level as a
+  physical identity key.
+- Do not split FAA airport/type inventory assertions into arbitrary systems,
+  nor mechanically merge them with fact-sheet/manual records.
+- Do not invent runway/end, vendor, year, lifecycle, replacement, or a
+  physical system from weak evidence or from a Signal/grant completion.
+- Do not overwrite predecessors on replacement, discard raw source wording,
+  silently promote unresolved assertions, or destructively deduplicate legacy
+  data.
+- Do not expose private notes, candidate scores/matches, AI reasoning,
+  operational/debug artifacts, internal IDs/file paths, or likely-supplier
+  reasoning as public confirmed installation evidence.
+
+## Recommended interpretation of existing data until future work is approved
+
+Treat every current Installation row as a **legacy assertion-bearing record**,
+not presumptive proof of one physical EMAS bed. The exceptions are only
+individual claims whose own cited text directly identifies a discrete system;
+CGF’s two 2018 end-specific records are the clearest verified example of two
+different systems. All other same-airport records—including JFK, BOS, MDW and
+ORD examples—remain same/different/unresolved until their source assertions
+and evidence are preserved and reviewed under this contract.
