@@ -3,7 +3,7 @@
 {% block title %}Runway Safe Intelligence{% endblock %}
 {% block content %}
 <section class="hero-intelligence">
-  <div class="hero-copy"><p class="eyebrow">Aviation safety intelligence</p><h1>Runway Safe<br>Intelligence</h1><p class="subtitle">{{ t("hero_statement") }}</p></div>
+  <div class="hero-copy"><p class="eyebrow">Aviation safety intelligence</p><h1>Runway Safe Intelligence</h1><p class="subtitle">{{ t("hero_statement") }}</p></div>
 </section>
 
 <div class="stat-grid">
@@ -17,8 +17,15 @@
   <div class="card-header">Senast uppdaterat</div>
   <div class="card-body" style="padding-bottom:0"><p class="timeline-meta" style="margin:0">Aktuella projekt- och källuppdateringar. Historiska incidenter och rena bevakningsuppgifter visas inte här.</p></div>
   {% if recent_changes %}
-  <div class="intelligence-feed">
+  <div class="intelligence-feed" role="table" aria-label="Senast uppdaterat">
+      <div class="intelligence-head" role="row">
+        <div role="columnheader">TYP</div>
+        <div role="columnheader">FLYGPLATS</div>
+        <div role="columnheader">BESKRIVNING</div>
+        <div role="columnheader">DATUM</div>
+      </div>
       {% for entry in recent_changes %}<article class="intelligence-item">
+        <div class="intelligence-type">{{ cat(entry.category_label, entry.category_class) }}</div>
         <div class="intelligence-place"><a href="{{ root }}/airports/{{ entry.airport_id }}.html">{{ airport_label(entry.airport_code, entry.airport_name) }}</a><span>{{ entry.airport_name }}</span></div>
         <div class="intelligence-story">
           {% if entry.kind == "signal" %}
@@ -29,9 +36,10 @@
           <a href="{{ root }}/airports/{{ entry.airport_id }}.html#incident-{{ entry.id }}">{{ entry.title }}</a>
           {% endif %}
         </div>
-        <div>{{ cat(entry.category_label, entry.category_class) }}<span class="mono intelligence-date">{{ entry.date_label }}</span></div>
+        <time class="mono intelligence-date" datetime="{{ entry.date_label }}">{{ entry.date_label }}</time>
       </article>{% endfor %}
   </div>
+  <div class="card-body" style="padding-top:14px"><a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_updates") }} →</a></div>
   {% else %}
   <div class="empty-state">Ändringsloggen startade {{ changelog_start_date }}. Ändringar före dess finns inte registrerade.</div>
   {% endif %}

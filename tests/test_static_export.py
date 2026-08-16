@@ -83,7 +83,11 @@ def test_build_site_shows_unconfirmed_runway_pill_instead_of_a_pill_with_no_end(
 
     detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
     assert "Ingen bekräftad bankoppling" in detail_html
-    assert "13C/31C" in detail_html  # the airport's real, unrelated runway is still shown in "Banor"
+    # Public runway inventory ("Banor") is intentionally suppressed - see
+    # docs/ui/mdw-runway-diagnosis.md - so the unrelated seeded runway must
+    # not appear anywhere on the page, including via that removed section.
+    assert "13C/31C" not in detail_html
+    assert "Banor" not in detail_html
 
 
 def test_build_site_groups_multiple_signals_at_the_same_airport_and_category(tmp_path):

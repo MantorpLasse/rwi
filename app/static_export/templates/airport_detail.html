@@ -6,7 +6,12 @@
 <h1><span style="margin-right:10px; display:inline-block">{{ sign(airport.iata_code or airport.icao_code or airport.faa_code or "–", airport.name) }}</span>{{ airport.name }}</h1>
 <p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
 
-<div class="grid-2">
+{# grid-2's second column used to hold "Banor" for every airport; now it
+   only ever holds the (rare) website link, so the two-column layout is
+   only used when there's actually something to put in it - otherwise an
+   empty reserved column would leave a large blank sidebar on almost every
+   airport page. See the removed-Banor note further down. #}
+<div class="{{ 'grid-2' if airport.website_url else '' }}">
   <div>
     <div class="card">
       <div class="card-header">{{ t("current_emas") }}</div>
@@ -159,26 +164,19 @@
     </div>{% endif %}{% endif %}
   </div>
 
+  {# "Banor" (public runway inventory) is intentionally suppressed here -
+     see docs/ui/mdw-runway-diagnosis.md and the TODO in
+     docs/ui/public-ui-regression-fix-report.md. The `runways` table is a
+     non-exhaustive, one-row-per-airport placeholder (confirmed DB-wide: no
+     airport has more than one row) and showing it next to the governed
+     "EMAS idag" reviewed-ends list can misleadingly imply a complete
+     runway inventory when it is not one. Restore once RWI has a governed
+     canonical runway/runway-end inventory. #}
+  {% if airport.website_url %}
   <div>
-    <div class="card">
-      <div class="card-header">Banor</div>
-      <div class="card-body">
-        {% if airport.runways %}
-        {% for runway in airport.runways %}
-        <div style="margin-bottom:10px">
-          <strong class="mono">{{ runway.designation }}</strong><br>
-          <span style="color:var(--text-dim); font-size:0.88rem" class="mono">{{ runway.length_m or "–" }} × {{ runway.width_m or "–" }} m</span>
-        </div>
-        {% endfor %}
-        {% else %}
-        <span style="color:var(--text-dim)">Inga banor registrerade.</span>
-        {% endif %}
-      </div>
-    </div>
-    {% if airport.website_url %}
     <a class="pill status" href="{{ airport.website_url }}" target="_blank" rel="noopener">Flygplatsens webbplats →</a>
-    {% endif %}
   </div>
+  {% endif %}
 </div>
 
 {% endblock %}

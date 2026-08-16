@@ -476,7 +476,7 @@ def _recent_changes_view(
     airport_views: list[SimpleNamespace],
     signal_views: list[SimpleNamespace],
     *,
-    limit: int = 8,
+    limit: int = 5,
     as_of: date | None = None,
 ) -> list[SimpleNamespace]:
     """A bounded public-evidence feed, not a raw database change log.
@@ -617,10 +617,14 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
         longitude=airport.longitude,
         website_url=airport.website_url,
         signal_count=len(signal_views),
-        runways=[
-            SimpleNamespace(designation=r.designation, length_m=r.length_m, width_m=r.width_m)
-            for r in airport.runways
-        ],
+        # `runways` (and the "Banor" template section that read it) is
+        # intentionally omitted from the public airport view - see
+        # docs/ui/mdw-runway-diagnosis.md. The `runways` table is a
+        # non-exhaustive, one-row-per-airport placeholder, not a governed
+        # canonical runway/runway-end inventory; publishing it here or in
+        # data.json could misleadingly imply completeness next to the
+        # governed `reviewed_identities` list below. Restore once RWI has
+        # governed canonical runway/runway-end coverage.
         signals=primary_signals,
         funding_signals=funding_signals,
         installations=installation_views,
@@ -672,7 +676,6 @@ def _build(output_dir: Path, session: Session) -> None:
 
     airports = session.scalars(
         select(Airport).options(
-            selectinload(Airport.runways),
             selectinload(Airport.signals).selectinload(Signal.airport),
             selectinload(Airport.signals).selectinload(Signal.runway),
             selectinload(Airport.signals).selectinload(Signal.source),
