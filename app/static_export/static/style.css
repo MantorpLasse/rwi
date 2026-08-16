@@ -980,13 +980,15 @@ header.site { background:transparent; border-color:rgba(139,150,172,.26); }
 .wrap { max-width:1120px; }
 h1 { font-size:clamp(1.9rem,3vw,2.8rem); letter-spacing:-.04em; }
 .hero-intelligence { margin:8px 0 26px; }
-.hero-intelligence h1 { font-size:clamp(3.4rem,5.6vw,5.35rem); line-height:.94; letter-spacing:-.06em; max-width:none; white-space:nowrap; }
+.hero-intelligence h1 { font-size:2.625rem; line-height:.94; letter-spacing:-.06em; max-width:none; white-space:nowrap; }
 .hero-copy { padding-bottom:10px; }
 .hero-copy .subtitle { font-size:1.1rem; max-width:530px; margin-top:24px; margin-bottom:14px; }
 .stat-grid { background:transparent; border:0; border-radius:0; margin:0 0 42px; overflow:visible; gap:24px; }
-.stat { padding:0; border:0!important; }.stat .value { font-size:2.15rem; }
+.stat { padding:0; border:0!important; }.stat .value { font-size:1.8125rem; }
 .card { background:transparent; border:0; border-radius:0; box-shadow:none; margin-bottom:38px; overflow:visible; }
 .card .card-header { padding:0 0 12px; border-bottom:1px solid rgba(139,150,172,.3); background:transparent; font-size:1.1rem; }
+/* Dashboard-only: .stat-grid appears solely on index.html, so this never touches airport/Signals/Signal-detail card headings. */
+.stat-grid ~ .card .card-header { font-size:1rem; }
 .card .card-body { padding:18px 0; }
 .intelligence-feed { padding:0; }.intelligence-head { border-color:rgba(139,150,172,.3); }.intelligence-item { padding:17px 0; border-color:rgba(139,150,172,.26); }
 .intelligence-story a { font-size:1.02rem; }.intelligence-place a { color:var(--accent); }
@@ -1001,4 +1003,4 @@ table { font-size:.9rem; } th,td { padding:13px 8px; } th:first-child,td:first-c
 .filters { background:rgba(19,27,44,.45); border:1px solid rgba(139,150,172,.25); border-radius:0; padding:10px; }
 #signals-table .title a { font-family:var(--font-display); font-weight:600; color:var(--text); }
 #signals-table td:first-child + td a .sign { background:transparent; color:var(--accent); padding:0; }
-@media (max-width:700px) { .hero-intelligence { margin-bottom:30px; } .hero-intelligence h1 { font-size:3.5rem; white-space:normal; } .grid-2 { grid-template-columns:1fr; gap:0; } .grid-2 > div:last-child .card { border-left:0; padding-left:0; } .stat-grid { grid-template-columns:repeat(2,1fr); gap:24px 12px; } }
+@media (max-width:700px) { .hero-intelligence { margin-bottom:30px; } .hero-intelligence h1 { font-size:2.625rem; white-space:normal; } .grid-2 { grid-template-columns:1fr; gap:0; } .grid-2 > div:last-child .card { border-left:0; padding-left:0; } .stat-grid { grid-template-columns:repeat(2,1fr); gap:24px 12px; } }
