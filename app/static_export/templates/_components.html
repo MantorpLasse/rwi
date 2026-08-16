@@ -79,7 +79,8 @@
   <td data-label="Bevaka">{{ star_toggle(signal.id) }}</td>
   <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
   <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-  <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
+  <td data-label="Status"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
+  <td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td>
   <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
   <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
   <td data-label="Källa" class="src">{{ source_badge(signal, root) }}</td>
@@ -94,6 +95,7 @@
 <div class="strip">
   {{ star_toggle(signal.id) }}
   <div class="title"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></div>
+  <span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span>
   {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
   <div class="meta mono">{{ signal.planning_year or "–" }}</div>
   <div class="src">{{ source_badge(signal, root) }}</div>

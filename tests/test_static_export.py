@@ -275,7 +275,7 @@ def test_build_site_falls_back_to_unlinked_badge_for_unmapped_source_type(tmp_pa
         build_site(output, session=session)
 
     signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
-    assert '<span class="pill status" title="Källtyp: Environmental">Environmental</span>' in signal_html
+    assert '<span class="pill status" title="Källtyp: Övrig källa">Övrig källa</span>' in signal_html
     assert "ordlista.html#environmental" not in signal_html.lower()
 
 
@@ -400,11 +400,8 @@ def test_build_site_never_exposes_signal_notes_or_manual_year_estimate(tmp_path)
     assert "Källan anger kostnad och datum i fritext." in airport_html
 
 
-def test_build_site_shows_signal_source_notes_publicly_but_not_private_notes(tmp_path):
-    """Signal.source_notes is the Signal equivalent of Installation.notes -
-    sourced research with a citation, shown publicly as "Detaljer från
-    källan". Signal.notes stays private (personal annotation, see the test
-    above) even on a signal that also has source_notes set."""
+def test_build_site_omits_signal_source_notes_and_private_notes(tmp_path):
+    """Raw signal research notes stay out of public HTML and data.json."""
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
@@ -426,12 +423,11 @@ def test_build_site_shows_signal_source_notes_publicly_but_not_private_notes(tmp
         build_site(output, session=session)
 
     signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
-    assert "Detaljer från källan" in signal_html
-    assert "Bekräftat via Draft Environmental Assessment" in signal_html
+    assert "Bekräftat via Draft Environmental Assessment" not in signal_html
     assert "Min privata anteckning" not in signal_html
     assert "Min bedömning" not in signal_html
 
     data = json.loads((output / "data.json").read_text(encoding="utf-8"))
     signal_data = next(s for s in data["signals"] if s["id"] == signal.id)
-    assert signal_data["source_notes"] == "Bekräftat via Draft Environmental Assessment (fultoncountyga.gov)."
+    assert "source_notes" not in signal_data
     assert "notes" not in signal_data

@@ -2,12 +2,41 @@
 {% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill %}
 {% block title %}{{ airport.name }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
-<div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a> <button type="button" id="back-link" class="link-button">← Tillbaka</button></div>
+<div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a></div>
 <h1><span style="margin-right:10px; display:inline-block">{{ sign(airport.iata_code or airport.icao_code or airport.faa_code or "–", airport.name) }}</span>{{ airport.name }}</h1>
 <p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
 
 <div class="grid-2">
   <div>
+    <div class="card">
+      <div class="card-header">{{ t("current_emas") }}</div>
+      {% if airport.reviewed_identities or airport.nasr_presence %}
+      <div class="card-body">
+        {% if airport.reviewed_identities %}
+        <div class="eyebrow">{{ t("reviewed_emas") }}</div>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px">{% for identity in airport.reviewed_identities %}<span class="pill status">{{ identity.runway_end or "Bana ej angiven" }}</span>{% endfor %}</div>
+        {% endif %}
+        {% if airport.nasr_presence %}
+        <div class="eyebrow" style="margin-top:16px">{{ t("faa_current_presence") }}</div>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px">{% for presence in airport.nasr_presence %}<span class="pill status">{{ presence.runway_end }}</span>{% endfor %}</div>
+        {% if airport.nasr_presence[0].cycle %}<p class="timeline-meta" style="margin:10px 0 0">NASR-cykel {{ airport.nasr_presence[0].cycle }}. Uppgiften beskriver förekomst vid banände, inte projektstatus eller fysisk historik.</p>{% endif %}
+        {% endif %}
+      </div>
+      {% else %}{% if airport.current_status_unverified %}<div class="empty-state"><strong>{{ t("current_status_unverified") }}</strong><br>{{ t("current_status_unverified_detail") }}</div>{% else %}<div class="empty-state">Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens.</div>{% endif %}{% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-header">{{ t("projects") }}</div>
+      {% if airport.signals %}
+      <table><thead><tr><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th></tr></thead><tbody>
+      {% for signal in airport.signals %}<tr>
+        <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a>{% if signal.public_qualification %}<div class="timeline-meta">{{ signal.public_qualification }}</div>{% endif %}</td>
+        <td data-label="Status"><span class="pill status {{ signal.status_role }}">{{ signal.status_label }}</span></td><td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td><td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td><td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
+      </tr>{% endfor %}</tbody></table>
+      {% if airport.funding_signals %}<details class="secondary-disclosure"><summary>Finansiering och bidrag ({{ airport.funding_signals|length }})</summary><div class="disclosure-body">{% for signal in airport.funding_signals %}<p><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a> <span class="timeline-meta">{{ signal.status_label }}</span></p>{% endfor %}</div></details>{% endif %}
+      {% else %}<div class="empty-state">Inga offentliga projekt- eller bevakningsuppgifter registrerade.</div>{% endif %}
+    </div>
+
     <div class="card">
       <div class="card-header">Tidslinje</div>
       {% if airport.timeline_dated %}
@@ -64,31 +93,8 @@
       {% endif %}
     </div>
 
-    <div class="card">
-      <div class="card-header">Signaler</div>
-      {% if airport.signals %}
-      <table>
-        <thead><tr><th>Signal</th><th>Kategori</th><th>Status</th><th>Confidence</th><th>År</th><th>Score</th></tr></thead>
-        <tbody>
-          {% for signal in airport.signals %}
-          <tr>
-            <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-            <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
-            <td data-label="Status"><span class="pill status">{{ signal.status or signal.category_label }}</span></td>
-            <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
-            <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
-            <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <div class="empty-state">Inga signaler registrerade.</div>
-      {% endif %}
-    </div>
-
-    <div class="card">
-      <div class="card-header">Installationer</div>
+    <details class="card secondary-disclosure history-disclosure">
+      <summary class="card-header">{{ t("historical_installations") }} ({{ airport.installations|length }})</summary>
       {% if airport.installations %}
       <div class="card-body" style="display:flex; flex-direction:column; gap:22px">
         {% for installation in airport.installations %}
@@ -120,15 +126,12 @@
           {% endif %}
 
           {% if installation.notes %}
-          <div class="card annotation" style="margin-bottom:0">
-            <div class="card-header">
-              Detaljer från källan
-              <span class="eyebrow">Fritext (kostnad, datum m.m.) utan egna fält i databasen</span>
-            </div>
+          <details class="annotation source-detail">
+            <summary>Detaljer från källan</summary>
             <div class="card-body">
               <p style="white-space:pre-line; margin:0">{{ installation.notes }}</p>
             </div>
-          </div>
+          </details>
           {% endif %}
         </div>
         {% endfor %}
@@ -136,9 +139,9 @@
       {% else %}
       <div class="empty-state">Inga installationer registrerade.</div>
       {% endif %}
-    </div>
+    </details>
 
-    <div class="card">
+    {% if airport.incidents %}<div class="card">
       <div class="card-header">Incidenter</div>
       {% if airport.incidents %}
       <table>
@@ -153,10 +156,7 @@
           {% endfor %}
         </tbody>
       </table>
-      {% else %}
-      <div class="empty-state">Inga incidenter registrerade.</div>
-      {% endif %}
-    </div>
+    </div>{% endif %}{% endif %}
   </div>
 
   <div>
@@ -181,12 +181,4 @@
   </div>
 </div>
 
-<script>
-(function () {
-  var back = document.getElementById("back-link");
-  back.addEventListener("click", function () {
-    history.back();
-  });
-})();
-</script>
 {% endblock %}

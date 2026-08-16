@@ -9,7 +9,7 @@
   <input id="q" type="search" placeholder="Sök signal eller flygplats...">
   <select id="status-filter">
     <option value="">Alla statusar</option>
-    {% for item in statuses %}<option value="{{ item }}">{{ item }}</option>{% endfor %}
+    {% for item in statuses %}<option value="{{ item.value }}">{{ item.label }}</option>{% endfor %}
   </select>
   <select id="country-filter">
     <option value="">Alla länder</option>
@@ -21,7 +21,7 @@
 <div class="card">
   <table id="signals-table">
     <thead>
-      <tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Kategori</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
+      <tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
     </thead>
     <tbody>
       {% for item in signal_rows %}
@@ -30,7 +30,7 @@
         {% else %}
         <tr class="grouprow" data-toggle="{{ item.group_id }}"
             data-search="{{ (item.members|map(attribute='title')|join(' ') ~ ' ' ~ item.airport_name ~ ' ' ~ item.airport_code)|lower }}"
-            data-status="" data-country="{{ item.country }}"
+            data-status="{{ item.top_signal.status or '' }}" data-country="{{ item.country }}"
             data-signal-ids="{{ item.members|map(attribute='id')|join(',') }}"
         >
           <td data-label="Bevaka"><button type="button" class="star-toggle" data-signal-id="{{ item.top_signal.id }}" aria-pressed="false" aria-label="Bevaka signal">☆</button></td>
@@ -38,14 +38,15 @@
           <td class="title" data-label="Signal">
             <span class="caret">▶</span><span class="grouptitle">{{ item.top_signal.title }}</span><span class="more-tag">+{{ item.more_count }} till</span>
           </td>
-          <td data-label="Kategori">{{ cat(item.category_label, item.category_class) }}</td>
+          <td data-label="Status"><span class="pill {{ 'done' if item.top_signal.is_completed else 'status ' ~ item.top_signal.status_role }}">{{ item.top_signal.status_label }}</span></td>
+          <td data-label="Projekttyp">{{ cat(item.category_label, item.category_class) }}</td>
           <td data-label="Confidence">{{ gauge(item.confidence_level, item.confidence_label, root) }}</td>
           <td data-label="År" class="mono">{{ item.top_signal.planning_year or "–" }}</td>
           <td data-label="Källa" class="src">{{ source_badge(item.top_signal, root) }}</td>
           <td data-label="Score">{% if item.top_signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(item.top_signal.probability_score) }}</span>{% else %}–{% endif %}</td>
         </tr>
         <tr class="detail-row" data-detail-for="{{ item.group_id }}">
-          <td colspan="8">
+          <td colspan="9">
             <div class="detail-wrap" data-wrap="{{ item.group_id }}">
               <div class="detail-panel">
                 {% for signal in item.members %}
