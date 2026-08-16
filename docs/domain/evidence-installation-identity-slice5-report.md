@@ -31,6 +31,28 @@ assertion was written. A future apply must create one `sources` row and 112
 `source_assertions` rows only; Airports, Runways, Installations, Incidents and
 Signals are guaranteed unchanged.
 
+## Successful apply and final verification
+
+Backup: `data/backups/runway_safe-pre-evidence-identity-slice5-20260816-064000.db`.
+The first approved attempt failed before commit because SQLite `Date` columns
+require a Python `date` but NASR metadata supplied `retrieved_at` as text; the
+session rolled back and wrote no Source or assertion. After converting that
+field to `date`, the successful command was `$env:DEBUG='false';
+.\.venv\Scripts\python.exe -m scripts.dry_run_nasr_apt_ars --apply`.
+
+It created one Source with external identity
+`faa_nasr:airport_csv:2026-08-06:06_Aug_2026_APT_CSV.zip` and 112 NASR
+runway-end assertions. Final totals are 69 Sources and 221 SourceAssertions.
+JFK (04R/22L), BOS (04L and 15R), MDW (04R/22L and 13L/31R), ORD (04R/22L),
+LGA (04/22 and 13/31), and FLL (both ends of 10L/28R and 10R/28L) preserve raw
+NASR runway-end evidence only. No year/vendor/manufacturer or physical link
+was inferred.
+
+Backup comparison confirms Airports, Runways, Installations, Incidents and
+Signals are row-for-row unchanged; `PRAGMA foreign_key_check` is empty. Repeat
+dry run reports Source present, 112 already present and 0 would create.
+Focused tests: 15 passed; full suite: 349 passed; `git diff --check` passed.
+
 ## Existing implementation
 
 The repository already has the correct FAA-specific discovery/parser boundary

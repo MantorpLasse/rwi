@@ -9,7 +9,10 @@ Z=Path('data/raw/nasr/2026-08-06/06_Aug_2026_APT_CSV.zip');M=Path(str(Z)+'.metad
 def run(session=None,apply=False):
  r=list(rows(Z,M)); by=Counter(x.values['ARPT_ID'] for x in r)
  meta=json.loads(M.read_text(encoding='utf-8-sig')); existing=session.scalar(select(Source).where(Source.external_id==NASR_EXTERNAL_ID)) if session else None
- result={'candidates':len(r),'nasr_source_exists':bool(existing),'source_would_create':0 if existing else 1,'proposed_source':proposed_source(meta),'would_create':len(r),'already_present':0,'skipped':0,'duplicate_identities':len(r)-len({(x.locator(),x.hash()) for x in r}),'malformed_rows':0,'by_airport':dict(by),'multiple_ends':{k:v for k,v in by.items() if v>1}}
+ present=0
+ if existing:
+  present=sum(session.scalar(select(SourceAssertion.id).where(SourceAssertion.source_id==existing.id,SourceAssertion.artifact_identity==x.artifact_sha256,SourceAssertion.source_locator==x.locator(),SourceAssertion.raw_fragment_hash==x.hash())) is not None for x in r)
+ result={'candidates':len(r),'nasr_source_exists':bool(existing),'source_would_create':0 if existing else 1,'proposed_source':proposed_source(meta),'would_create':len(r)-present,'already_present':present,'skipped':0,'duplicate_identities':len(r)-len({(x.locator(),x.hash()) for x in r}),'malformed_rows':0,'by_airport':dict(by),'multiple_ends':{k:v for k,v in by.items() if v>1}}
  if apply:
   if not existing: existing=Source(**proposed_source(meta));session.add(existing);session.flush()
   made=0;present=0
