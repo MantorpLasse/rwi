@@ -32,6 +32,7 @@ class Airport(Base):
     installations: Mapped[list["Installation"]] = relationship(back_populates="airport", cascade="all, delete-orphan")
     incidents: Mapped[list["Incident"]] = relationship(back_populates="airport", cascade="all, delete-orphan")
     source_assertions: Mapped[list["SourceAssertion"]] = relationship(back_populates="airport")
+    physical_installation_identities: Mapped[list["PhysicalInstallationIdentity"]] = relationship(back_populates="airport")
 
 
 class Runway(Base):
@@ -50,3 +51,4 @@ class Runway(Base):
     installations: Mapped[list["Installation"]] = relationship(back_populates="runway")
     incidents: Mapped[list["Incident"]] = relationship(back_populates="runway")
     source_assertions: Mapped[list["SourceAssertion"]] = relationship(back_populates="runway")
+    physical_installation_identities: Mapped[list["PhysicalInstallationIdentity"]] = relationship(back_populates="runway")

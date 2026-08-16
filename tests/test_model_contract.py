@@ -9,6 +9,8 @@ from app.models import (
     Airport,
     Incident,
     Installation,
+    InstallationAssertionLink,
+    PhysicalInstallationIdentity,
     PublishingSource,
     Runway,
     Signal,
@@ -135,6 +137,23 @@ EXPECTED_COLUMNS = {
         "review_state": ("VARCHAR(20)", False, ("scalar", "unreviewed"), None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
+    "physical_installation_identities": {
+        "id": ("INTEGER", False, None, None),
+        "airport_id": ("INTEGER", False, None, None),
+        "runway_id": ("INTEGER", True, None, None),
+        "runway_end": ("VARCHAR(20)", True, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+    },
+    "installation_assertion_links": {
+        "id": ("INTEGER", False, None, None),
+        "assertion_id": ("INTEGER", False, None, None),
+        "physical_installation_id": ("INTEGER", True, None, None),
+        "outcome": ("VARCHAR(40)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "actor": ("VARCHAR(100)", False, None, None),
+        "reviewed_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_link_id": ("INTEGER", True, None, None),
+    },
     "installations": {
         "id": ("INTEGER", False, None, None),
         "airport_id": ("INTEGER", False, None, None),
@@ -226,6 +245,14 @@ EXPECTED_FOREIGN_KEYS = {
         ("airport_id", "airports.id"),
         ("runway_id", "runways.id"),
     },
+    "physical_installation_identities": {
+        ("airport_id", "airports.id"), ("runway_id", "runways.id"),
+    },
+    "installation_assertion_links": {
+        ("assertion_id", "source_assertions.id"),
+        ("physical_installation_id", "physical_installation_identities.id"),
+        ("supersedes_link_id", "installation_assertion_links.id"),
+    },
     "installations": {
         ("airport_id", "airports.id"),
         ("runway_id", "runways.id"),
@@ -276,6 +303,15 @@ EXPECTED_INDEXES = {
         ("ix_source_assertions_source_id", ("source_id",), False),
         ("ix_source_assertions_airport_id", ("airport_id",), False),
         ("ix_source_assertions_runway_id", ("runway_id",), False),
+    },
+    "physical_installation_identities": {
+        ("ix_physical_installation_identities_airport_id", ("airport_id",), False),
+        ("ix_physical_installation_identities_runway_id", ("runway_id",), False),
+    },
+    "installation_assertion_links": {
+        ("ix_installation_assertion_links_assertion_id", ("assertion_id",), False),
+        ("ix_installation_assertion_links_physical_installation_id", ("physical_installation_id",), False),
+        ("ix_installation_assertion_links_supersedes_link_id", ("supersedes_link_id",), False),
     },
     "installations": {
         ("ix_installations_airport_id", ("airport_id",), False),
@@ -333,6 +369,7 @@ EXPECTED_RELATIONSHIPS = {
         "installations": ("Installation", "airport", DELETE_ORPHAN_CASCADE),
         "incidents": ("Incident", "airport", DELETE_ORPHAN_CASCADE),
         "source_assertions": ("SourceAssertion", "airport", DEFAULT_CASCADE),
+        "physical_installation_identities": ("PhysicalInstallationIdentity", "airport", DEFAULT_CASCADE),
     },
     "Runway": {
         "airport": ("Airport", "runways", DEFAULT_CASCADE),
@@ -340,6 +377,7 @@ EXPECTED_RELATIONSHIPS = {
         "installations": ("Installation", "runway", DEFAULT_CASCADE),
         "incidents": ("Incident", "runway", DEFAULT_CASCADE),
         "source_assertions": ("SourceAssertion", "runway", DEFAULT_CASCADE),
+        "physical_installation_identities": ("PhysicalInstallationIdentity", "runway", DEFAULT_CASCADE),
     },
     "Signal": {
         "airport": ("Airport", "signals", DEFAULT_CASCADE),
@@ -360,6 +398,17 @@ EXPECTED_RELATIONSHIPS = {
         "source": ("Source", "assertions", DEFAULT_CASCADE),
         "airport": ("Airport", "source_assertions", DEFAULT_CASCADE),
         "runway": ("Runway", "source_assertions", DEFAULT_CASCADE),
+        "installation_assertion_links": ("InstallationAssertionLink", "assertion", DEFAULT_CASCADE),
+    },
+    "PhysicalInstallationIdentity": {
+        "airport": ("Airport", "physical_installation_identities", DEFAULT_CASCADE),
+        "runway": ("Runway", "physical_installation_identities", DEFAULT_CASCADE),
+        "assertion_links": ("InstallationAssertionLink", "physical_installation", DEFAULT_CASCADE),
+    },
+    "InstallationAssertionLink": {
+        "assertion": ("SourceAssertion", "installation_assertion_links", DEFAULT_CASCADE),
+        "physical_installation": ("PhysicalInstallationIdentity", "assertion_links", DEFAULT_CASCADE),
+        "supersedes": ("InstallationAssertionLink", None, DEFAULT_CASCADE),
     },
     "Incident": {
         "airport": ("Airport", "incidents", DEFAULT_CASCADE),
@@ -386,6 +435,8 @@ def test_all_current_models_are_exported_from_app_models():
         AcquisitionSource.__name__,
         Incident.__name__,
         Installation.__name__,
+        InstallationAssertionLink.__name__,
+        PhysicalInstallationIdentity.__name__,
         PublishingSource.__name__,
         Runway.__name__,
         Signal.__name__,
@@ -398,6 +449,8 @@ def test_all_current_models_are_exported_from_app_models():
         "AcquisitionSource",
         "Incident",
         "Installation",
+        "InstallationAssertionLink",
+        "PhysicalInstallationIdentity",
         "PublishingSource",
         "Runway",
         "Signal",

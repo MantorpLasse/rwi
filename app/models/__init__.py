@@ -6,6 +6,7 @@ from app.models.publishing_source import PublishingSource
 from app.models.signal import Signal
 from app.models.source import Source
 from app.models.source_assertion import SourceAssertion
+from app.models.physical_installation_identity import InstallationAssertionLink, PhysicalInstallationIdentity
 
 __all__ = [
     "Airport",
@@ -14,6 +15,8 @@ __all__ = [
     "AcquisitionSource",
     "Incident",
     "Installation",
+    "InstallationAssertionLink",
+    "PhysicalInstallationIdentity",
     "PublishingSource",
     "Runway",
     "Signal",
