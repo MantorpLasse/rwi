@@ -83,7 +83,11 @@ def test_build_site_shows_unconfirmed_runway_pill_instead_of_a_pill_with_no_end(
 
     detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
     assert "Ingen bekräftad bankoppling" in detail_html
-    assert "13C/31C" in detail_html  # the airport's real, unrelated runway is still shown in "Banor"
+    # Public runway inventory ("Banor") is intentionally suppressed - see
+    # docs/ui/mdw-runway-diagnosis.md - so the unrelated seeded runway must
+    # not appear anywhere on the page, including via that removed section.
+    assert "13C/31C" not in detail_html
+    assert "Banor" not in detail_html
 
 
 def test_build_site_groups_multiple_signals_at_the_same_airport_and_category(tmp_path):
@@ -275,7 +279,7 @@ def test_build_site_falls_back_to_unlinked_badge_for_unmapped_source_type(tmp_pa
         build_site(output, session=session)
 
     signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
-    assert '<span class="pill status" title="Källtyp: Environmental">Environmental</span>' in signal_html
+    assert '<span class="pill status" title="Källtyp: Övrig källa">Övrig källa</span>' in signal_html
     assert "ordlista.html#environmental" not in signal_html.lower()
 
 
@@ -400,11 +404,8 @@ def test_build_site_never_exposes_signal_notes_or_manual_year_estimate(tmp_path)
     assert "Källan anger kostnad och datum i fritext." in airport_html
 
 
-def test_build_site_shows_signal_source_notes_publicly_but_not_private_notes(tmp_path):
-    """Signal.source_notes is the Signal equivalent of Installation.notes -
-    sourced research with a citation, shown publicly as "Detaljer från
-    källan". Signal.notes stays private (personal annotation, see the test
-    above) even on a signal that also has source_notes set."""
+def test_build_site_omits_signal_source_notes_and_private_notes(tmp_path):
+    """Raw signal research notes stay out of public HTML and data.json."""
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
@@ -426,12 +427,11 @@ def test_build_site_shows_signal_source_notes_publicly_but_not_private_notes(tmp
         build_site(output, session=session)
 
     signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
-    assert "Detaljer från källan" in signal_html
-    assert "Bekräftat via Draft Environmental Assessment" in signal_html
+    assert "Bekräftat via Draft Environmental Assessment" not in signal_html
     assert "Min privata anteckning" not in signal_html
     assert "Min bedömning" not in signal_html
 
     data = json.loads((output / "data.json").read_text(encoding="utf-8"))
     signal_data = next(s for s in data["signals"] if s["id"] == signal.id)
-    assert signal_data["source_notes"] == "Bekräftat via Draft Environmental Assessment (fultoncountyga.gov)."
+    assert "source_notes" not in signal_data
     assert "notes" not in signal_data

@@ -2,27 +2,32 @@
 {% from "_components.html" import gauge, cat, airport_label %}
 {% block title %}Runway Safe Intelligence{% endblock %}
 {% block content %}
-<h1>Runway Safe Intelligence</h1>
-<p class="subtitle">EMAS-installationer, incidenter, källor och affärssignaler.</p>
+<section class="hero-intelligence">
+  <div class="hero-copy"><p class="eyebrow">Aviation safety intelligence</p><h1>Runway Safe Intelligence</h1><p class="subtitle">{{ t("hero_statement") }}</p></div>
+</section>
 
 <div class="stat-grid">
   <div class="stat"><div class="label">Flygplatser</div><div class="value">{{ airport_count }}</div></div>
-  <div class="stat"><div class="label">Installationer</div><div class="value">{{ installation_count }}</div></div>
-  <div class="stat"><div class="label">Aktiva signaler</div><div class="value">{{ signal_count }}</div></div>
-  <div class="stat"><div class="label">Hög confidence</div><div class="value" style="color:var(--high)">{{ high_confidence_count }}</div></div>
+  <div class="stat"><div class="label">Historiska installationsposter</div><div class="value">{{ installation_count }}</div></div>
+  <div class="stat"><div class="label">Projekt och bevakning</div><div class="value">{{ signal_count }}</div></div>
+  <div class="stat"><div class="label">Starkt källstöd</div><div class="value" style="color:var(--high)">{{ high_confidence_count }}</div></div>
 </div>
 
 <div class="card">
   <div class="card-header">Senast uppdaterat</div>
+  <div class="card-body" style="padding-bottom:0"><p class="timeline-meta" style="margin:0">Aktuella projekt- och källuppdateringar. Historiska incidenter och rena bevakningsuppgifter visas inte här.</p></div>
   {% if recent_changes %}
-  <table>
-    <thead><tr><th>Typ</th><th>Flygplats</th><th>Beskrivning</th><th>Datum</th></tr></thead>
-    <tbody>
-      {% for entry in recent_changes %}
-      <tr>
-        <td data-label="Typ">{{ cat(entry.category_label, entry.category_class) }}</td>
-        <td data-label="Flygplats"><a href="{{ root }}/airports/{{ entry.airport_id }}.html">{{ airport_label(entry.airport_code, entry.airport_name) }}</a></td>
-        <td class="title" data-label="Beskrivning">
+  <div class="intelligence-feed" role="table" aria-label="Senast uppdaterat">
+      <div class="intelligence-head" role="row">
+        <div role="columnheader">TYP</div>
+        <div role="columnheader">FLYGPLATS</div>
+        <div role="columnheader">BESKRIVNING</div>
+        <div role="columnheader">DATUM</div>
+      </div>
+      {% for entry in recent_changes %}<article class="intelligence-item">
+        <div class="intelligence-type">{{ cat(entry.category_label, entry.category_class) }}</div>
+        <div class="intelligence-place"><a href="{{ root }}/airports/{{ entry.airport_id }}.html">{{ airport_label(entry.airport_code, entry.airport_name) }}</a><span>{{ entry.airport_name }}</span></div>
+        <div class="intelligence-story">
           {% if entry.kind == "signal" %}
           <a href="{{ root }}/signals/{{ entry.id }}.html">{{ entry.title }}</a>
           {% elif entry.kind == "installation" %}
@@ -30,12 +35,11 @@
           {% else %}
           <a href="{{ root }}/airports/{{ entry.airport_id }}.html#incident-{{ entry.id }}">{{ entry.title }}</a>
           {% endif %}
-        </td>
-        <td data-label="Datum" class="mono">{{ entry.date_label }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+        </div>
+        <time class="mono intelligence-date" datetime="{{ entry.date_label }}">{{ entry.date_label }}</time>
+      </article>{% endfor %}
+  </div>
+  <div class="card-body" style="padding-top:14px"><a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_updates") }} →</a></div>
   {% else %}
   <div class="empty-state">Ändringsloggen startade {{ changelog_start_date }}. Ändringar före dess finns inte registrerade.</div>
   {% endif %}
@@ -103,20 +107,19 @@
 </div>
 
 <div class="card">
-  <div class="card-header">Högst prioriterade signaler</div>
+  <div class="card-header">Utvalda signaler <a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_signals") }} →</a></div>
   <table>
     <thead>
-      <tr><th>Flygplats</th><th>Signal</th><th>Kategori</th><th>Confidence</th><th>År</th><th>Score</th></tr>
+      <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>Projekttyp</th><th>År</th></tr>
     </thead>
     <tbody>
       {% for signal in top_signals %}
       <tr>
         <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
         <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-        <td data-label="Kategori">{{ cat(signal.category_label, signal.category_class) }}</td>
-        <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
+        <td data-label="Status"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
+        <td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td>
         <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
-        <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

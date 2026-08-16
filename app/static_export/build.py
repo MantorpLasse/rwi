@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import SessionLocal
-from app.models import Airport, Installation, Signal
+from app.models import Airport, Installation, PhysicalInstallationIdentity, Signal, SourceAssertion
+from app.static_export.presentation import public_signal_state, status_view, text
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -38,7 +39,6 @@ _CONFIDENCE_LABEL = {"high": "Hög", "med": "Medel", "low": "Låg"}
 
 # scripts/graduate_signal_to_installation.py sets this - a distinct label so
 # a graduated signal reads as "done", not as a broken/unrecognized status.
-_STATUS_LABEL = {"completed": "Färdigställd"}
 
 # Category text mapping — the single place the rest of the site imports from,
 # per DESIGN_BRIEF.md's "Bygg denna mappning på ett ställe". Never show a raw
@@ -135,7 +135,7 @@ def _source_type_view(value: str | None) -> tuple[str | None, str | None, str | 
     plain, unlinked badge instead of a dead link."""
     if not value:
         return None, None, None
-    return _SOURCE_TYPE.get(value, (value, None, None))
+    return _SOURCE_TYPE.get(value, ("Övrig källa", None, None))
 
 
 def _signal_view(signal: Signal) -> SimpleNamespace:
@@ -145,6 +145,7 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
     source_type_label, source_type_anchor, source_type_tooltip = _source_type_view(
         source.source_type if source else None
     )
+    public_status_label, public_qualification = public_signal_state(signal.id, signal.status)
     return SimpleNamespace(
         id=signal.id,
         title=signal.title,
@@ -155,7 +156,9 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         confidence_level=confidence_level,
         confidence_label=_CONFIDENCE_LABEL[confidence_level],
         status=signal.status,
-        status_label=_STATUS_LABEL.get(signal.status, signal.status),
+        status_label=public_status_label,
+        status_role=status_view(signal.status)[1],
+        public_qualification=public_qualification,
         is_completed=signal.status == "completed",
         installation_id=signal.installation_id,
         updated_at=signal.updated_at,
@@ -173,7 +176,6 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         # source_notes. source_notes itself IS public - sourced research
         # with a citation, the Signal equivalent of Installation.notes
         # ("Detaljer från källan").
-        source_notes=signal.source_notes,
         confirmed_vendor=signal.confirmed_vendor,
         likely_supplier=signal.likely_supplier,
         supplier_reason=signal.supplier_reason,
@@ -191,6 +193,7 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         source_type_anchor=source_type_anchor,
         source_type_tooltip=source_type_tooltip,
         source_url=source.url if source else None,
+        source_published_date=source.published_date if source else None,
     )
 
 
@@ -230,6 +233,24 @@ def _installation_view(installation: Installation) -> SimpleNamespace:
         source_url=source.url if source else None,
         source_published_date=source.published_date if source else None,
     )
+
+
+def _public_identity_view(identity: PhysicalInstallationIdentity) -> SimpleNamespace:
+    """Minimal public projection; never leak reconciliation metadata."""
+    return SimpleNamespace(runway_end=identity.runway_end)
+
+
+def _nasr_presence_view(assertion: SourceAssertion) -> SimpleNamespace:
+    source = assertion.source
+    cycle = None
+    if source and source.external_id and source.external_id.startswith("faa_nasr:airport_csv:"):
+        cycle = source.external_id.split(":")[2]
+    return SimpleNamespace(runway_end=assertion.runway_end, cycle=cycle)
+
+
+def _is_public_signal(signal: Signal) -> bool:
+    """Quarantine the two baseline-identified unnormalized airport Signals."""
+    return signal.id not in (52, 54)
 
 
 def _timeline_event(
@@ -455,75 +476,43 @@ def _recent_changes_view(
     airport_views: list[SimpleNamespace],
     signal_views: list[SimpleNamespace],
     *,
-    limit: int = 15,
+    limit: int = 5,
+    as_of: date | None = None,
 ) -> list[SimpleNamespace]:
-    """index.html's "Senast uppdaterat" feed - Signal/Installation/Incident
-    rows with a real updated_at (see docs/utredning_senast_uppdaterat.md).
+    """A bounded public-evidence feed, not a raw database change log.
 
-    Source is deliberately excluded even though it also got the column: it
-    has no detail page or anchor anywhere on the site, so there's nowhere
-    honest to link a change to. A row with updated_at=None isn't an
-    "unknown change" - it predates the column entirely - so it's left out
-    rather than shown with a missing/fake date.
+    Only governed-source Signals can qualify. Historical Incident rows and
+    ``identified`` watch items are excluded. Active project states require a
+    source published within 365 days or a current/upcoming planning year;
+    completed work requires a recent source. The displayed date is always the
+    governed source date, never a row-touch timestamp.
     """
+    del airport_views
+    as_of = as_of or date.today()
+    recent_cutoff = date(as_of.year - 1, as_of.month, as_of.day)
+    active_statuses = {
+        "funded", "design", "procurement", "under construction",
+        "environmental_review", "master_plan", "alp", "cip",
+    }
     entries: list[SimpleNamespace] = []
-
-    for airport in airport_views:
-        for installation in airport.installations:
-            if installation.updated_at is None:
-                continue
-            entries.append(
-                SimpleNamespace(
-                    kind="installation",
-                    id=installation.id,
-                    category_label="Installation",
-                    category_class="new",
-                    title=installation.type or "Installation",
-                    airport_id=airport.id,
-                    airport_code=airport.iata_code or airport.icao_code or "–",
-                    airport_name=airport.name,
-                    updated_at=installation.updated_at,
-                )
-            )
-        for incident in airport.incidents:
-            if incident.updated_at is None:
-                continue
-            entries.append(
-                SimpleNamespace(
-                    kind="incident",
-                    id=incident.id,
-                    category_label="Incident",
-                    category_class="incident",
-                    title=incident.incident_type,
-                    airport_id=airport.id,
-                    airport_code=airport.iata_code or airport.icao_code or "–",
-                    airport_name=airport.name,
-                    updated_at=incident.updated_at,
-                )
-            )
-
     for signal in signal_views:
-        if signal.updated_at is None:
+        source_date = signal.source_published_date
+        if source_date is None or signal.status == "identified":
             continue
-        entries.append(
-            SimpleNamespace(
-                kind="signal",
-                id=signal.id,
-                category_label=signal.category_label,
-                category_class=signal.category_class,
-                title=signal.title,
-                airport_id=signal.airport_id,
-                airport_code=signal.airport_code,
-                airport_name=signal.airport_name,
-                updated_at=signal.updated_at,
-            )
-        )
-
-    entries.sort(key=lambda e: e.updated_at, reverse=True)
-    return [
-        SimpleNamespace(**vars(e), date_label=e.updated_at.strftime("%Y-%m-%d"))
-        for e in entries[:limit]
-    ]
+        upcoming = (signal.target_year or signal.planning_year or 0) >= as_of.year
+        recent_source = source_date >= recent_cutoff
+        active = signal.status in active_statuses and (recent_source or upcoming)
+        completion = signal.status == "completed" and recent_source
+        if not (active or completion):
+            continue
+        entries.append(SimpleNamespace(
+            kind="signal", id=signal.id, category_label=signal.category_label,
+            category_class=signal.category_class, title=signal.title,
+            airport_id=signal.airport_id, airport_code=signal.airport_code,
+            airport_name=signal.airport_name, evidence_date=source_date,
+        ))
+    entries.sort(key=lambda e: (e.evidence_date, e.id), reverse=True)
+    return [SimpleNamespace(**vars(e), date_label=e.evidence_date.isoformat()) for e in entries[:limit]]
 
 
 def _group_signal_views(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
@@ -586,11 +575,23 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
     signal_views = [
         _signal_view(s)
         for s in sorted(
-            airport.signals,
+            (s for s in airport.signals if _is_public_signal(s)),
             key=lambda s: (s.probability_score is None, -(s.probability_score or 0)),
         )
     ]
     installation_views = [_installation_view(i) for i in airport.installations]
+    reviewed_identities = [
+        _public_identity_view(identity)
+        for identity in airport.physical_installation_identities
+        if any(link.outcome == "SAME_PHYSICAL_INSTALLATION" for link in identity.assertion_links)
+    ]
+    nasr_presence = [
+        _nasr_presence_view(assertion)
+        for assertion in airport.source_assertions
+        if assertion.source and assertion.source.external_id
+        and assertion.source.external_id.startswith("faa_nasr:airport_csv:")
+        and assertion.assertion_type == "runway_end" and assertion.runway_end
+    ]
     incident_views = [
         SimpleNamespace(
             id=i.id,
@@ -601,6 +602,8 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
         )
         for i in airport.incidents
     ]
+    primary_signals = [s for s in signal_views if s.source_type not in {"usaspending_grant", "aip_grant", "iija_grant"}]
+    funding_signals = [s for s in signal_views if s not in primary_signals]
     timeline_dated, timeline_undated = _timeline_view(installation_views, incident_views, signal_views)
     return SimpleNamespace(
         id=airport.id,
@@ -613,13 +616,21 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
         latitude=airport.latitude,
         longitude=airport.longitude,
         website_url=airport.website_url,
-        signal_count=len(airport.signals),
-        runways=[
-            SimpleNamespace(designation=r.designation, length_m=r.length_m, width_m=r.width_m)
-            for r in airport.runways
-        ],
-        signals=signal_views,
+        signal_count=len(signal_views),
+        # `runways` (and the "Banor" template section that read it) is
+        # intentionally omitted from the public airport view - see
+        # docs/ui/mdw-runway-diagnosis.md. The `runways` table is a
+        # non-exhaustive, one-row-per-airport placeholder, not a governed
+        # canonical runway/runway-end inventory; publishing it here or in
+        # data.json could misleadingly imply completeness next to the
+        # governed `reviewed_identities` list below. Restore once RWI has
+        # governed canonical runway/runway-end coverage.
+        signals=primary_signals,
+        funding_signals=funding_signals,
         installations=installation_views,
+        reviewed_identities=sorted(reviewed_identities, key=lambda item: item.runway_end or ""),
+        nasr_presence=sorted(nasr_presence, key=lambda item: item.runway_end or ""),
+        current_status_unverified=(airport.id == 6 and not reviewed_identities and not nasr_presence),
         incidents=incident_views,
         timeline_dated=timeline_dated,
         timeline_undated=timeline_undated,
@@ -657,18 +668,21 @@ def _build(output_dir: Path, session: Session) -> None:
     (output_dir / "signals").mkdir()
     shutil.copy2(STATIC_DIR / "style.css", output_dir / "style.css")
     shutil.copy2(STATIC_DIR / "watch.js", output_dir / "watch.js")
+    shutil.copytree(STATIC_DIR / "images", output_dir / "images")
 
     env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
+    env.globals["t"] = text
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     airports = session.scalars(
         select(Airport).options(
-            selectinload(Airport.runways),
             selectinload(Airport.signals).selectinload(Signal.airport),
             selectinload(Airport.signals).selectinload(Signal.runway),
             selectinload(Airport.signals).selectinload(Signal.source),
             selectinload(Airport.installations).selectinload(Installation.source),
             selectinload(Airport.incidents),
+            selectinload(Airport.physical_installation_identities).selectinload(PhysicalInstallationIdentity.assertion_links),
+            selectinload(Airport.source_assertions).selectinload(SourceAssertion.source),
         ).order_by(Airport.name)
     ).all()
     airport_views = [_airport_view(a) for a in airports]
@@ -680,7 +694,7 @@ def _build(output_dir: Path, session: Session) -> None:
             selectinload(Signal.source),
         )
     ).all()
-    signal_views = [_signal_view(s) for s in all_signals]
+    signal_views = [_signal_view(s) for s in all_signals if _is_public_signal(s)]
     signal_views.sort(key=lambda s: (s.probability_score is None, -(s.probability_score or 0)))
 
     def render(name: str, path: Path, **context) -> None:
@@ -695,7 +709,7 @@ def _build(output_dir: Path, session: Session) -> None:
         installation_count=sum(len(a.installations) for a in airport_views),
         signal_count=len(signal_views),
         high_confidence_count=sum(1 for s in signal_views if s.confidence_level == "high"),
-        top_signals=signal_views[:8],
+        top_signals=signal_views[:5],
         trend=_trend_view([i for a in airport_views for i in a.installations], signal_views),
         recent_changes=_recent_changes_view(airport_views, signal_views),
         changelog_start_date=_CHANGELOG_START_DATE.isoformat(),
@@ -733,7 +747,10 @@ def _build(output_dir: Path, session: Session) -> None:
         root="..",
         signals=signal_views,
         signal_rows=_group_signal_views(signal_views),
-        statuses=sorted({s.status for s in signal_views if s.status}),
+        statuses=[
+            SimpleNamespace(value=status, label=status_view(status)[0])
+            for status in sorted({s.status for s in signal_views if s.status})
+        ],
         countries=sorted({s.country for s in signal_views if s.country}),
     )
     for signal in signal_views:

@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from typing import Optional
 
 from sqlalchemy import Date, DateTime, Index, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -49,3 +49,5 @@ class Source(Base):
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
+
+    assertions: Mapped[list["SourceAssertion"]] = relationship(back_populates="source")

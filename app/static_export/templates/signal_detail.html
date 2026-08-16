@@ -10,7 +10,8 @@
     </p>
     <h1>{{ star_toggle(signal.id) }} <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span> {{ signal.title }}</h1>
     <span class="pill {{ 'done' if signal.is_completed else 'status' }}">{{ signal.status_label or signal.category_label }}</span>
-    {{ cat(signal.category_label, signal.category_class) }}
+    {% if signal.public_qualification %}<p class="timeline-meta">{{ signal.public_qualification }}</p>{% endif %}
+    <span class="project-type">{{ t("project_type") }}: {{ cat(signal.category_label, signal.category_class) }}</span>
     {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
     {{ vendor_pill(signal.confirmed_vendor, root) }}
     {% if signal.installation_id %}
@@ -18,7 +19,7 @@
     {% endif %}
   </div>
   {% if signal.probability_score is not none %}
-  <span class="score" style="font-size:1.5rem">{{ "%.1f"|format(signal.probability_score) }}</span>
+  <span class="score score-secondary" title="Analytisk score">{{ "%.1f"|format(signal.probability_score) }}</span>
   {% endif %}
 </div>
 
@@ -28,8 +29,8 @@
       <div class="card-header">Detaljer</div>
       <div class="card-body">
         <dl class="meta">
-          <dt>Kategori</dt><dd>{{ cat(signal.category_label, signal.category_class) }}</dd>
-          <dt>Status</dt><dd>{{ signal.status_label or "–" }}</dd>
+          <dt>Status</dt><dd><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></dd>
+          <dt>Projekttyp</dt><dd>{{ cat(signal.category_label, signal.category_class) }}</dd>
           <dt>Confidence</dt><dd>{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</dd>
           <dt>Planeringsår</dt><dd class="mono">{{ signal.planning_year or "–" }}</dd>
           <dt>Upphandlingsår</dt><dd class="mono">{{ signal.procurement_year or "–" }}</dd>
@@ -47,6 +48,7 @@
         <h2>{{ signal.source_title }}</h2>
         <p style="color:var(--text-dim); margin-top:-6px">{{ signal.source_publisher or "" }}{% if signal.source_publisher and signal.source_type %} · {% endif %}{{ source_badge(signal, root) }}</p>
         {% if signal.source_url %}
+        {% if signal.source_published_date %}<p class="timeline-meta">Senast verifierad källa: {{ signal.source_published_date }}</p>{% endif %}
         <a href="{{ signal.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
         {% else %}
         <span style="color:var(--text-faint)">Ingen offentlig länk (t.ex. internt dokument).</span>

@@ -63,7 +63,7 @@ def test_graduate_creates_installation_and_marks_signal_completed():
         assert installation.install_year == 2026
         assert installation.status == "active"
         assert installation.confirmed_vendor == "Runway Safe"
-        assert installation.notes == "Order signed. Buffer zones +143m/+37m confirmed."
+        assert installation.notes is None  # private Signal.notes must not be published
 
         signal = session.get(Signal, ids["signal_id"])
         assert signal.status == "completed"

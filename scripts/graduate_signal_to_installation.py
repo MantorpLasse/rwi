@@ -14,7 +14,7 @@ confirms completion (vs. "order signed", "planned", "80% complete") is the
 same kind of manual call PLAN_FORENKLING.md's rule 2 already keeps manual
 for keyword-flagged signals.
 
-Copies airport/runway/source/confirmed_vendor/notes onto a new Installation
+    Copies airport/runway/source/confirmed_vendor onto a new Installation
 (status="active"), since --type and --install-year usually aren't
 mechanically derivable from a Signal's existing fields. Sets
 Signal.status="completed" and Signal.installation_id to the new row - the
@@ -74,7 +74,8 @@ def graduate(
         install_year=install_year,
         status="active",
         confirmed_vendor=signal.confirmed_vendor,
-        notes=signal.notes,
+        # Signal.notes is explicitly private analysis. Never promote it into
+        # public Installation.notes without a separate reviewed editorial step.
     )
     session.add(installation)
     session.flush()

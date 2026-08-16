@@ -64,6 +64,11 @@ a:hover {
   text-decoration: underline;
 }
 
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .wrap {
   max-width: 1080px;
   margin: 0 auto;
@@ -512,6 +517,15 @@ a.pill.status:hover {
   color: var(--verified-ink);
 }
 
+.pill.construction, .pill.procurement, .pill.design, .pill.funded, .pill.identified, .pill.planning, .pill.review, .pill.unknown {
+  font-size: 0.78rem;
+}
+.pill.construction { border-color: var(--med); color: var(--med-ink); }
+.pill.funded { border-color: var(--verified); color: var(--verified); }
+.pill.unknown { color: var(--text-dim); }
+.project-type { color: var(--text-dim); font-size: 0.88rem; }
+.score-secondary { font-size: 1rem; color: var(--text-faint); opacity: .8; }
+
 /* Confirmed vendor - a fact the source explicitly named, not a guess -
    distinct green so it never reads like the category/confidence pills. */
 .pill.vendor {
@@ -930,3 +944,63 @@ footer.site {
   font-size: 0.85rem;
   margin-top: 40px;
 }
+
+/* Slice 3: calm overview-first intelligence surfaces. */
+.hero-intelligence { margin:10px 0 30px; }
+.hero-intelligence h1 { font-size:clamp(2.2rem,5vw,4.5rem); max-width:760px; margin:6px 0 12px; letter-spacing:-.045em; }
+.hero-copy { padding:18px 0; }
+.card-header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.card-action { font-size:.82rem; font-weight:400; }
+.intelligence-feed { padding:4px 18px 12px; }
+.intelligence-head,.intelligence-item { display:grid; grid-template-columns:minmax(120px,.45fr) minmax(180px,.7fr) minmax(0,1fr) minmax(88px,max-content); column-gap:24px; }
+.intelligence-head { color:var(--text-faint); font-size:.7rem; letter-spacing:.08em; padding:10px 0; border-bottom:1px solid var(--border); }
+.intelligence-item { align-items:center; padding:14px 0; border-bottom:1px solid var(--border); }
+.intelligence-item:last-child { border-bottom:0; }
+.intelligence-type { display:flex; align-items:center; }
+.intelligence-place { display:grid; gap:3px; font-size:.85rem; color:var(--text-dim); }
+.intelligence-place a,.intelligence-story a { color:var(--text); font-weight:600; }
+.intelligence-date { color:var(--text-faint); font-size:.78rem; text-align:right; white-space:nowrap; }
+.secondary-disclosure { margin:14px 16px; border-top:1px solid var(--border); }
+.secondary-disclosure summary { cursor:pointer; color:var(--text-dim); padding:13px 0; }
+.history-disclosure { margin-top:18px; }
+.history-disclosure > summary { list-style:none; }
+.history-disclosure > summary::-webkit-details-marker { display:none; }
+.history-disclosure > summary::after, .source-detail > summary::after { content:'▸'; margin-left:auto; color:var(--accent); }
+.history-disclosure[open] > summary::after, .source-detail[open] > summary::after { content:'▾'; }
+.source-detail { border-top:1px solid var(--border); padding-top:10px; }
+.source-detail summary { cursor:pointer; display:flex; align-items:center; color:var(--text-dim); font-size:.88rem; }
+summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:3px; }
+.disclosure-body { padding:0 0 4px; color:var(--text-dim); }
+.disclosure-body p { margin:0 0 8px; }
+@media (max-width:700px) { .intelligence-head { display:none; } .intelligence-item { grid-template-columns:minmax(0,1fr) auto; gap:6px 12px; padding:16px 0; } .intelligence-place { grid-column:1; grid-row:1; } .intelligence-type { grid-column:2; grid-row:1; justify-self:end; } .intelligence-story { grid-column:1 / -1; grid-row:2; } .intelligence-date { grid-column:1 / -1; grid-row:3; text-align:left; margin-top:1px; } }
+
+/* Visual redesign: editorial aviation intelligence, not an admin panel. */
+body { background:linear-gradient(180deg, #0d1421 0, var(--bg) 32rem); }
+header.site { background:transparent; border-color:rgba(139,150,172,.26); }
+.wrap { max-width:1120px; }
+h1 { font-size:clamp(1.9rem,3vw,2.8rem); letter-spacing:-.04em; }
+.hero-intelligence { margin:8px 0 26px; }
+.hero-intelligence h1 { font-size:2.625rem; line-height:.94; letter-spacing:-.06em; max-width:none; white-space:nowrap; }
+.hero-copy { padding-bottom:10px; }
+.hero-copy .subtitle { font-size:1.1rem; max-width:530px; margin-top:24px; margin-bottom:14px; }
+.stat-grid { background:transparent; border:0; border-radius:0; margin:0 0 42px; overflow:visible; gap:24px; }
+.stat { padding:0; border:0!important; }.stat .value { font-size:1.8125rem; }
+.card { background:transparent; border:0; border-radius:0; box-shadow:none; margin-bottom:38px; overflow:visible; }
+.card .card-header { padding:0 0 12px; border-bottom:1px solid rgba(139,150,172,.3); background:transparent; font-size:1.1rem; }
+/* Dashboard-only: .stat-grid appears solely on index.html, so this never touches airport/Signals/Signal-detail card headings. */
+.stat-grid ~ .card .card-header { font-size:1rem; }
+.card .card-body { padding:18px 0; }
+.intelligence-feed { padding:0; }.intelligence-head { border-color:rgba(139,150,172,.3); }.intelligence-item { padding:17px 0; border-color:rgba(139,150,172,.26); }
+.intelligence-story a { font-size:1.02rem; }.intelligence-place a { color:var(--accent); }
+.trend-scroll { padding:10px 0; }.trend-caption { max-width:720px; }
+table { font-size:.9rem; } th,td { padding:13px 8px; } th:first-child,td:first-child { padding-left:0; } th:last-child,td:last-child { padding-right:0; }
+.grid-2 { grid-template-columns:minmax(0,1fr) 250px; gap:38px; }
+.grid-2 > div:last-child .card { border-left:1px solid rgba(139,150,172,.3); padding-left:22px; }
+.grid-2 > div:last-child .card .card-header { border:0; }
+.history-disclosure { border-top:1px solid rgba(139,150,172,.3); padding-top:16px; }
+.secondary-disclosure { margin-left:0; margin-right:0; }
+.source-detail { background:rgba(19,27,44,.46); padding:12px; }
+.filters { background:rgba(19,27,44,.45); border:1px solid rgba(139,150,172,.25); border-radius:0; padding:10px; }
+#signals-table .title a { font-family:var(--font-display); font-weight:600; color:var(--text); }
+#signals-table td:first-child + td a .sign { background:transparent; color:var(--accent); padding:0; }
+@media (max-width:700px) { .hero-intelligence { margin-bottom:30px; } .hero-intelligence h1 { font-size:2.625rem; white-space:normal; } .grid-2 { grid-template-columns:1fr; gap:0; } .grid-2 > div:last-child .card { border-left:0; padding-left:0; } .stat-grid { grid-template-columns:repeat(2,1fr); gap:24px 12px; } }
