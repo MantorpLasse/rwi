@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.models import Airport, PhysicalInstallationIdentity, Runway, RunwayEnd
 from app.services.runway_identity import (
     AmbiguousRunwayDesignationError,
+    is_two_ended_pair_shape,
     normalize_end,
     normalize_pair,
     pair_ends,
@@ -327,6 +328,25 @@ class AirportBatchClassification:
     plans: tuple[RunwayPlan, ...] = ()
 
 
+def is_canonical_runway_candidate(rwy_id: str | None) -> bool:
+    """True only when `rwy_id` has the shape of a two-directional
+    fixed-wing runway pair - exactly two non-empty tokens separated by a
+    single "/". This is the NASR-input eligibility gate for canonical
+    Runway/RunwayEnd planning
+    (docs/domain/nasr-special-record-classification-investigation.md):
+    helicopter pads ("H1", "H-A", ...), balloonport pads ("B1"), and
+    empty placeholder records ("00X", "10X", "19X", ...) all fail this
+    check and are excluded from canonical inventory input - not because
+    of their prefix/suffix characters, but because none of them have the
+    two-ended pair shape a real runway must have. Deliberately NOT a
+    prefix/suffix heuristic (no "H"/"B"/"X" check anywhere) - verified
+    against the entire preserved national NASR dataset with zero
+    unexplained exceptions. Reuses the exact same structural check
+    normalize_pair() itself requires before normalizing, via
+    app.services.runway_identity.is_two_ended_pair_shape()."""
+    return is_two_ended_pair_shape(rwy_id)
+
+
 def classify_airport_batch(
     session: Session, airport: Airport, runway_rows, runway_end_rows
 ) -> AirportBatchClassification:
@@ -335,12 +355,18 @@ def classify_airport_batch(
     runway_rows/runway_end_rows must already be filtered to this airport
     (same convention as plan_airport_inventory). An empty runway_rows means
     no NASR match was found for this airport's identifier(s) - UNRESOLVED,
-    not attempted. A malformed source row (e.g. a helipad or other
-    non-two-ended RWY_ID mixed into APT_RWY.csv) surfaces exactly as
+    not attempted. Rows that aren't canonical-runway-shaped (see
+    is_canonical_runway_candidate()) are excluded here, before
+    plan_airport_inventory() ever sees them - this only makes the caller's
+    input more precise, it does not change plan_airport_inventory()'s own
+    fail-closed behavior for any row that does reach it. If every row for
+    this airport turns out non-canonical, that's UNRESOLVED too - nothing
+    to plan. A genuine remaining conflict (the pair heading and
+    APT_RWY_END.csv's actual ends disagree) still surfaces exactly as
     plan_airport_inventory already reports it - AmbiguousRunwayDesignationError
-    - classified here as AMBIGUOUS, or CONFLICT when the pair heading and
-    APT_RWY_END.csv's actual ends disagree. No new normalization rule is
-    applied and no row is silently dropped."""
+    - classified here as AMBIGUOUS or CONFLICT. No row is silently dropped
+    from raw evidence - this filtering only governs what enters canonical
+    inventory planning."""
     existing_runways = session.scalars(select(Runway).where(Runway.airport_id == airport.id)).all()
     existing_count = len(existing_runways)
 
@@ -356,8 +382,23 @@ def classify_airport_batch(
             existing_runway_matches=0,
         )
 
+    canonical_runway_rows = [r for r in runway_rows if is_canonical_runway_candidate(r.values["RWY_ID"])]
+    canonical_runway_end_rows = [r for r in runway_end_rows if is_canonical_runway_candidate(r.values["RWY_ID"])]
+
+    if not canonical_runway_rows:
+        return AirportBatchClassification(
+            airport_id=airport.id,
+            classification=UNRESOLVED,
+            error="no canonical two-ended runway rows for this airport (only special/non-runway NASR records)",
+            existing_runway_count=existing_count,
+            runways_would_create=0,
+            runways_would_enrich=0,
+            runway_ends_would_create=0,
+            existing_runway_matches=0,
+        )
+
     try:
-        plans = plan_airport_inventory(session, airport, runway_rows, runway_end_rows)
+        plans = plan_airport_inventory(session, airport, canonical_runway_rows, canonical_runway_end_rows)
     except AmbiguousRunwayDesignationError as exc:
         message = str(exc)
         classification = CONFLICT if "do not match the pair designation" in message else AMBIGUOUS

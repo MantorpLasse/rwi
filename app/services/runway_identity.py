@@ -35,6 +35,24 @@ def _heading_sort_key(token: str) -> int:
     return int(match.group(1))
 
 
+def is_two_ended_pair_shape(designation: str | None) -> bool:
+    """True only when `designation` splits into exactly two non-empty,
+    whitespace-trimmed tokens on a single "/" - the structural shape a
+    genuine two-directional runway pair must have under FAA's own
+    reciprocal-heading runway-numbering convention
+    (docs/domain/nasr-special-record-classification-investigation.md).
+    Does not validate that either token is itself a real heading (see
+    normalize_end) - only the pair *shape*. normalize_pair() below uses
+    this exact same check as its first, fail-closed gate;
+    app.services.runway_inventory.is_canonical_runway_candidate() reuses
+    it as the NASR-input eligibility gate, applied before a row ever
+    reaches plan_airport_inventory()."""
+    if not designation:
+        return False
+    parts = designation.split("/")
+    return len(parts) == 2 and all(part.strip() for part in parts)
+
+
 def normalize_pair(pair_designation: str) -> str:
     """Normalize a runway-pair designation to a canonical, order-independent
     form: both ends normalized, lower heading number first.
@@ -44,11 +62,11 @@ def normalize_pair(pair_designation: str) -> str:
     heading like "22" has no leading zero to strip). Fails closed - never
     guesses - on anything that isn't exactly two ends.
     """
-    parts = [part.strip() for part in pair_designation.split("/")]
-    if len(parts) != 2 or not all(parts):
+    if not is_two_ended_pair_shape(pair_designation):
         raise AmbiguousRunwayDesignationError(
             f"expected a two-ended runway pair designation, got {pair_designation!r}"
         )
+    parts = [part.strip() for part in pair_designation.split("/")]
     normalized = [normalize_end(part) for part in parts]
     if normalized[0] == normalized[1]:
         raise AmbiguousRunwayDesignationError(f"runway pair has two identical ends: {pair_designation!r}")

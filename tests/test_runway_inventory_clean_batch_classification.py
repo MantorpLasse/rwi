@@ -13,6 +13,8 @@ from app.database import Base
 from app import models  # noqa: F401 - registers all metadata
 from app.evidence.nasr_apt_rwy import RunwayEndRow, RunwayRow
 from app.models import Airport, Runway
+import pytest
+
 from app.services.runway_inventory import (
     ALREADY_COMPLETE,
     AMBIGUOUS,
@@ -24,6 +26,7 @@ from app.services.runway_inventory import (
     apply_plan,
     classify_airport_batch,
     clean_batch_aggregate,
+    is_canonical_runway_candidate,
     plan_airport_inventory,
     resolve_us_clean_batch,
 )
@@ -68,6 +71,27 @@ def engine():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return engine
+
+
+# ---------------------------------------------------------------------------
+# is_canonical_runway_candidate() - the NASR-input eligibility gate applied
+# inside classify_airport_batch() before any row reaches
+# plan_airport_inventory(). Structural only - no "H"/"B"/"X" prefix/suffix
+# check anywhere.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("accepted", ["04R/22L", "13L/31R", "6/24"])
+def test_is_canonical_runway_candidate_accepts_real_runway_pairs(accepted):
+    assert is_canonical_runway_candidate(accepted) is True
+
+
+@pytest.mark.parametrize(
+    "rejected",
+    ["H1", "H-A", "B1", "00X", "10X", "19X", "", "   ", None, "/22L", "04R/", "04R//22L", "04R/22L/XX"],
+)
+def test_is_canonical_runway_candidate_rejects_special_and_malformed_records(rejected):
+    assert is_canonical_runway_candidate(rejected) is False
 
 
 def test_classify_clean_create_when_airport_has_no_existing_runways():
@@ -117,20 +141,51 @@ def test_classify_already_complete_after_apply_then_replan():
         assert result.existing_runway_matches == 1
 
 
-def test_classify_ambiguous_when_a_non_paired_row_is_present():
+def test_classify_skips_a_non_canonical_row_and_still_plans_the_valid_pair():
     """Mirrors the real NASR pattern found in the U.S.-wide dry run: a
-    helipad ("H1") mixed into APT_RWY.csv has no "/" and cannot satisfy
-    normalize_pair()'s two-ended requirement."""
+    helipad ("H1") mixed into APT_RWY.csv has no "/" and is not a
+    canonical-runway candidate - it must be excluded from planning input,
+    not abort the whole airport's plan
+    (docs/domain/nasr-special-record-classification-investigation.md)."""
     with Session(engine()) as session:
         airport = Airport(name="Test", faa_code="TST", country="USA")
         session.add(airport)
         session.commit()
 
-        result = classify_airport_batch(session, airport, [_rwy("4/22"), _rwy("H1")], [_end("4/22", "4"), _end("4/22", "22")])
+        result = classify_airport_batch(session, airport, [_rwy("4/22"), _rwy("H1")], [_end("4/22", "4"), _end("4/22", "22"), _end("H1", "H1")])
+
+        assert result.classification == CLEAN_CREATE
+        assert result.error is None
+        assert len(result.plans) == 1
+        assert result.plans[0].normalized_designation == "4/22"
+
+
+def test_classify_unresolved_when_every_row_is_non_canonical():
+    with Session(engine()) as session:
+        airport = Airport(name="Test", faa_code="TST", country="USA")
+        session.add(airport)
+        session.commit()
+
+        result = classify_airport_batch(session, airport, [_rwy("H1"), _rwy("00X")], [_end("H1", "H1")])
+
+        assert result.classification == UNRESOLVED
+        assert "only special/non-runway NASR records" in result.error
+
+
+def test_classify_ambiguous_still_fires_for_a_genuine_non_numeric_heading():
+    """A row that DOES have the two-ended pair shape (so it's a canonical
+    candidate) but fails deeper normalization - e.g. a non-numeric heading
+    - must still reach plan_airport_inventory() and fail closed there.
+    is_canonical_runway_candidate() only screens shape, not full validity."""
+    with Session(engine()) as session:
+        airport = Airport(name="Test", faa_code="TST", country="USA")
+        session.add(airport)
+        session.commit()
+
+        result = classify_airport_batch(session, airport, [_rwy("AB/CD")], [_end("AB/CD", "AB"), _end("AB/CD", "CD")])
 
         assert result.classification == AMBIGUOUS
-        assert "expected a two-ended runway pair designation" in result.error
-        assert result.plans == ()
+        assert "no numeric heading" in result.error
 
 
 def test_classify_conflict_when_pair_and_end_rows_disagree():
@@ -233,5 +288,5 @@ def test_clean_batch_aggregate_sums_only_clean_classifications():
         assert aggregate["runway_ends_would_create"] == 2
 
         blocked_result = next(r for r in results if r.airport_id == blocked.id)
-        assert blocked_result.classification == AMBIGUOUS
+        assert blocked_result.classification == UNRESOLVED  # BLK's only row (H1) has no canonical candidate
         assert blocked_result.classification not in CLEAN_BATCH_CLASSIFICATIONS
