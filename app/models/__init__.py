@@ -1,4 +1,5 @@
 from app.models.airport import Airport, Runway
+from app.models.runway_end import RunwayEnd
 from app.models.acquisition import AcquisitionRun, AcquisitionRunStatus, AcquisitionSource, Snapshot
 from app.models.incident import Incident
 from app.models.installation import Installation
@@ -19,6 +20,7 @@ __all__ = [
     "PhysicalInstallationIdentity",
     "PublishingSource",
     "Runway",
+    "RunwayEnd",
     "Signal",
     "Source",
     "SourceAssertion",

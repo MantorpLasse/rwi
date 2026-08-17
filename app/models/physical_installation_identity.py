@@ -25,10 +25,17 @@ class PhysicalInstallationIdentity(Base):
     airport_id: Mapped[int] = mapped_column(ForeignKey("airports.id"), index=True)
     runway_id: Mapped[Optional[int]] = mapped_column(ForeignKey("runways.id"), nullable=True, index=True)
     runway_end: Mapped[Optional[str]] = mapped_column(String(20))
+    # Canonical runway-end placement (docs/domain/canonical-runway-runway-end-design.md).
+    # Deliberately separate from the free-text `runway_end` above, which is
+    # never overwritten: this column is only ever set by an explicit,
+    # human-approved linking decision (see design doc S7) - never inferred,
+    # never auto-populated from `runway_end`, however "obvious" a match looks.
+    runway_end_id: Mapped[Optional[int]] = mapped_column(ForeignKey("runway_ends.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     airport: Mapped["Airport"] = relationship(back_populates="physical_installation_identities")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="physical_installation_identities")
+    canonical_runway_end: Mapped[Optional["RunwayEnd"]] = relationship(back_populates="physical_installation_identities")
     assertion_links: Mapped[list["InstallationAssertionLink"]] = relationship(back_populates="physical_installation")
 
 

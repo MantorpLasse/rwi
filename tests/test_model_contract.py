@@ -13,6 +13,7 @@ from app.models import (
     PhysicalInstallationIdentity,
     PublishingSource,
     Runway,
+    RunwayEnd,
     Signal,
     Source,
     SourceAssertion,
@@ -86,6 +87,11 @@ EXPECTED_COLUMNS = {
         "surface": ("VARCHAR(50)", True, None, None),
         "notes": ("TEXT", True, None, None),
     },
+    "runway_ends": {
+        "id": ("INTEGER", False, None, None),
+        "runway_id": ("INTEGER", False, None, None),
+        "designation": ("VARCHAR(10)", False, None, None),
+    },
     "publishing_sources": {
         "id": ("INTEGER", False, None, None),
         "name": ("VARCHAR(200)", False, None, None),
@@ -142,6 +148,7 @@ EXPECTED_COLUMNS = {
         "airport_id": ("INTEGER", False, None, None),
         "runway_id": ("INTEGER", True, None, None),
         "runway_end": ("VARCHAR(20)", True, None, None),
+        "runway_end_id": ("INTEGER", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
     "installation_assertion_links": {
@@ -238,6 +245,7 @@ EXPECTED_FOREIGN_KEYS = {
     },
     "airports": set(),
     "runways": {("airport_id", "airports.id")},
+    "runway_ends": {("runway_id", "runways.id")},
     "publishing_sources": set(),
     "sources": set(),
     "source_assertions": {
@@ -246,7 +254,7 @@ EXPECTED_FOREIGN_KEYS = {
         ("runway_id", "runways.id"),
     },
     "physical_installation_identities": {
-        ("airport_id", "airports.id"), ("runway_id", "runways.id"),
+        ("airport_id", "airports.id"), ("runway_id", "runways.id"), ("runway_end_id", "runway_ends.id"),
     },
     "installation_assertion_links": {
         ("assertion_id", "source_assertions.id"),
@@ -294,6 +302,9 @@ EXPECTED_INDEXES = {
         ("ix_runways_airport_id", ("airport_id",), False),
         ("ix_runways_designation", ("designation",), False),
     },
+    "runway_ends": {
+        ("ix_runway_ends_runway_id", ("runway_id",), False),
+    },
     "publishing_sources": set(),
     "sources": {
         ("ix_sources_source_type", ("source_type",), False),
@@ -307,6 +318,7 @@ EXPECTED_INDEXES = {
     "physical_installation_identities": {
         ("ix_physical_installation_identities_airport_id", ("airport_id",), False),
         ("ix_physical_installation_identities_runway_id", ("runway_id",), False),
+        ("ix_physical_installation_identities_runway_end_id", ("runway_end_id",), False),
     },
     "installation_assertion_links": {
         ("ix_installation_assertion_links_assertion_id", ("assertion_id",), False),
@@ -378,6 +390,11 @@ EXPECTED_RELATIONSHIPS = {
         "incidents": ("Incident", "runway", DEFAULT_CASCADE),
         "source_assertions": ("SourceAssertion", "runway", DEFAULT_CASCADE),
         "physical_installation_identities": ("PhysicalInstallationIdentity", "runway", DEFAULT_CASCADE),
+        "runway_ends": ("RunwayEnd", "runway", DELETE_ORPHAN_CASCADE),
+    },
+    "RunwayEnd": {
+        "runway": ("Runway", "runway_ends", DEFAULT_CASCADE),
+        "physical_installation_identities": ("PhysicalInstallationIdentity", "canonical_runway_end", DEFAULT_CASCADE),
     },
     "Signal": {
         "airport": ("Airport", "signals", DEFAULT_CASCADE),
@@ -403,6 +420,7 @@ EXPECTED_RELATIONSHIPS = {
     "PhysicalInstallationIdentity": {
         "airport": ("Airport", "physical_installation_identities", DEFAULT_CASCADE),
         "runway": ("Runway", "physical_installation_identities", DEFAULT_CASCADE),
+        "canonical_runway_end": ("RunwayEnd", "physical_installation_identities", DEFAULT_CASCADE),
         "assertion_links": ("InstallationAssertionLink", "physical_installation", DEFAULT_CASCADE),
     },
     "InstallationAssertionLink": {
@@ -439,6 +457,7 @@ def test_all_current_models_are_exported_from_app_models():
         PhysicalInstallationIdentity.__name__,
         PublishingSource.__name__,
         Runway.__name__,
+        RunwayEnd.__name__,
         Signal.__name__,
         Source.__name__,
         SourceAssertion.__name__,
@@ -453,6 +472,7 @@ def test_all_current_models_are_exported_from_app_models():
         "PhysicalInstallationIdentity",
         "PublishingSource",
         "Runway",
+        "RunwayEnd",
         "Signal",
         "Source",
         "SourceAssertion",
