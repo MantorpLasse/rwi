@@ -6,14 +6,21 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models import Airport, PhysicalInstallationIdentity, Runway, SourceAssertion
+from app.models import Airport, PhysicalInstallationIdentity, Runway, RunwayEnd, SourceAssertion
 from app.models.physical_installation_identity import InstallationAssertionLink, RECONCILIATION_OUTCOMES
 
 
 def create_physical_installation_identity(
-    session: Session, *, airport_id: int, runway_id: int | None = None, runway_end: str | None = None
+    session: Session,
+    *,
+    airport_id: int,
+    runway_id: int | None = None,
+    runway_end: str | None = None,
+    runway_end_id: int | None = None,
 ) -> PhysicalInstallationIdentity:
-    identity = PhysicalInstallationIdentity(airport_id=airport_id, runway_id=runway_id, runway_end=runway_end)
+    identity = PhysicalInstallationIdentity(
+        airport_id=airport_id, runway_id=runway_id, runway_end=runway_end, runway_end_id=runway_end_id
+    )
     _validate_identity(session, identity)
     session.add(identity)
     return identity
@@ -64,3 +71,7 @@ def _validate_identity(session: Session, identity: PhysicalInstallationIdentity)
         runway = session.get(Runway, identity.runway_id)
         if runway is None or runway.airport_id != identity.airport_id:
             raise ValueError("runway must belong to the physical identity airport")
+    if identity.runway_end_id is not None:
+        runway_end = session.get(RunwayEnd, identity.runway_end_id)
+        if runway_end is None or runway_end.runway.airport_id != identity.airport_id:
+            raise ValueError("runway end must belong to the physical identity airport")

@@ -52,3 +52,4 @@ class Runway(Base):
     incidents: Mapped[list["Incident"]] = relationship(back_populates="runway")
     source_assertions: Mapped[list["SourceAssertion"]] = relationship(back_populates="runway")
     physical_installation_identities: Mapped[list["PhysicalInstallationIdentity"]] = relationship(back_populates="runway")
+    runway_ends: Mapped[list["RunwayEnd"]] = relationship(back_populates="runway", cascade="all, delete-orphan")

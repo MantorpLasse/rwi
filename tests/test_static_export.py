@@ -90,6 +90,43 @@ def test_build_site_shows_unconfirmed_runway_pill_instead_of_a_pill_with_no_end(
     assert "Banor" not in detail_html
 
 
+def test_build_site_does_not_expose_runway_end_or_runway_end_id_anywhere(tmp_path):
+    """Canonical-runway-runway-end-slice1 (docs/domain/canonical-runway-runway-end-slice1-report.md)
+    adds RunwayEnd and PhysicalInstallationIdentity.runway_end_id. Static
+    export behavior must remain byte-for-byte unaffected - these must not
+    leak into any generated HTML page or data.json, even when present and
+    linked in the database."""
+    from app.models import PhysicalInstallationIdentity, RunwayEnd
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        _seed(session)
+        airport = session.query(Airport).one()
+        runway = session.query(Runway).one()
+        runway_end = RunwayEnd(runway=runway, designation="15")
+        session.add(runway_end)
+        session.flush()
+        session.add(
+            PhysicalInstallationIdentity(
+                airport_id=airport.id, runway_id=runway.id, runway_end="15", runway_end_id=runway_end.id
+            )
+        )
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    for html_path in output.rglob("*.html"):
+        text = html_path.read_text(encoding="utf-8")
+        assert "runway_end_id" not in text
+        assert "RunwayEnd" not in text
+
+    data_json = (output / "data.json").read_text(encoding="utf-8")
+    assert "runway_end_id" not in data_json
+    assert "RunwayEnd" not in data_json
+
+
 def test_build_site_groups_multiple_signals_at_the_same_airport_and_category(tmp_path):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
