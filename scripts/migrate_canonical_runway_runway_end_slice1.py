@@ -108,24 +108,121 @@ def upgrade(database: Path) -> None:
         connection.close()
 
 
+def _drop_column_via_rebuild(connection: sqlite3.Connection, table: str, column: str) -> None:
+    """SQLite's native `ALTER TABLE ... DROP COLUMN` leaves a dangling
+    table-level `FOREIGN KEY(...)` clause - and then fails with "unknown
+    column ... in foreign key definition" - when the dropped column's FK
+    constraint was declared as part of the table's original `CREATE
+    TABLE` statement (e.g. a fresh `Base.metadata.create_all()`, which
+    always emits FKs as separate table-level clauses). It works fine when
+    the constraint was instead added later via `ALTER TABLE ADD COLUMN
+    ... REFERENCES ...` (an inline, column-level constraint that is
+    removed along with the column) - which is how upgrade() above
+    actually adds NEW_COLUMN to an already-existing database, and why
+    downgrading the real, already-upgraded development database was
+    never at risk. A brand-new database created after this migration was
+    merged (every test fixture in this repository, and any future fresh
+    deployment) has the first, unsafe shape instead. See
+    docs/domain/canonical-runway-migration-downgrade-fix-report.md.
+
+    This rebuilds the table using SQLite's own documented "12-step"
+    procedure for schema changes `DROP COLUMN` cannot perform safely,
+    which is correct regardless of which of the two shapes above the
+    table has. The caller must already have `PRAGMA foreign_keys=OFF` in
+    effect (set outside the current transaction - SQLite ignores changes
+    to this pragma made inside one) for the duration of the rebuild,
+    since other tables' foreign keys briefly point at a table that
+    doesn't exist between the rename and the final `INSERT`."""
+    info = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    remaining = [row for row in info if row[1] != column]
+    if len(remaining) == len(info):
+        return  # column already absent - nothing to do
+
+    surviving_index_sql = [
+        row[0]
+        for row in connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", (table,)
+        ).fetchall()
+    ]
+    # PRAGMA table_info() says nothing about foreign keys - without this,
+    # every *surviving* column's own FK constraint (e.g. airport_id ->
+    # airports.id) would silently disappear during the rebuild too,
+    # which is exactly as unsafe as the bug this function fixes. Only
+    # keep constraints whose local column is not the one being dropped.
+    # SQLite returns foreign_key_list in reverse declaration order -
+    # reversed back here purely so the rebuilt CREATE TABLE text matches
+    # the original byte-for-byte; has no effect on behavior either way.
+    surviving_fks = [
+        row
+        for row in reversed(connection.execute(f"PRAGMA foreign_key_list({table})").fetchall())
+        if row[3] != column  # row[3] is the local ("from") column name
+    ]
+
+    column_defs: list[str] = []
+    pk_columns: list[str] = []
+    for _cid, name, coltype, notnull, dflt_value, pk in remaining:
+        definition = f"{name} {coltype}"
+        if notnull:
+            definition += " NOT NULL"
+        if dflt_value is not None:
+            definition += f" DEFAULT {dflt_value}"
+        column_defs.append(definition)
+        if pk:
+            pk_columns.append(name)
+    if pk_columns:
+        column_defs.append(f"PRIMARY KEY ({', '.join(pk_columns)})")
+    for _id, _seq, ref_table, from_col, to_col, *_rest in surviving_fks:
+        column_defs.append(f"FOREIGN KEY({from_col}) REFERENCES {ref_table} ({to_col})")
+    column_names = ", ".join(row[1] for row in remaining)
+
+    # Order matters: build the replacement under a temporary name FIRST,
+    # then DROP the original (which still holds the real table's name
+    # right up to that point), and only THEN rename the replacement into
+    # place - exactly SQLite's own documented step order. Doing it the
+    # other way around (rename the original out of the way first, create
+    # the replacement directly under the real name) breaks other tables'
+    # foreign keys: SQLite auto-follows a RENAME for every other table's
+    # FK declarations that pointed at the renamed table, permanently
+    # rebinding them to the new (temporary) name - so a later table that
+    # reclaims the original name is never picked up, and those foreign
+    # keys are left dangling. Confirmed by this exact failure mode during
+    # development of this fix - see
+    # docs/domain/canonical-runway-migration-downgrade-fix-report.md.
+    new_table = f"_{table}_downgrade_new"
+    connection.execute(f"CREATE TABLE {new_table} ({', '.join(column_defs)})")
+    connection.execute(f"INSERT INTO {new_table} ({column_names}) SELECT {column_names} FROM {table}")
+    connection.execute(f"DROP TABLE {table}")
+    connection.execute(f"ALTER TABLE {new_table} RENAME TO {table}")
+    for index_sql in surviving_index_sql:
+        connection.execute(index_sql)
+
+
 def downgrade(database: Path) -> None:
     connection = sqlite3.connect(database.resolve())
     try:
-        connection.execute("PRAGMA foreign_keys=ON")
+        # Must be set before BEGIN - SQLite ignores changes to this
+        # pragma made inside a transaction. Required for the table
+        # rebuild in _drop_column_via_rebuild(); re-enabled and verified
+        # with PRAGMA foreign_key_check before commit, below.
+        connection.execute("PRAGMA foreign_keys=OFF")
         connection.execute("BEGIN IMMEDIATE")
         columns = {row[1] for row in connection.execute(f"PRAGMA table_info({ALTERED_TABLE})")}
         if NEW_COLUMN in columns:
             connection.execute(f"DROP INDEX IF EXISTS ix_{ALTERED_TABLE}_{NEW_COLUMN}")
-            connection.execute(f"ALTER TABLE {ALTERED_TABLE} DROP COLUMN {NEW_COLUMN}")
+            _drop_column_via_rebuild(connection, ALTERED_TABLE, NEW_COLUMN)
         if connection.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", (NEW_TABLE,)
         ).fetchone()[0]:
             connection.execute(f"DROP TABLE {NEW_TABLE}")
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"downgrade() would leave foreign-key violations: {violations}")
         connection.commit()
     except Exception:
         connection.rollback()
         raise
     finally:
+        connection.execute("PRAGMA foreign_keys=ON")
         connection.close()
 
 
