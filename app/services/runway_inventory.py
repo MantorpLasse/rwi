@@ -14,7 +14,7 @@ human-approved application (docs/domain/canonical-runway-runway-end-design.md S7
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
@@ -289,3 +289,192 @@ def evaluate_identity_links_from_raw(
             )
         )
     return proposals
+
+
+# ---------------------------------------------------------------------------
+# Clean-batch classification (docs/domain/canonical-runway-us-wide-dry-run-report.md
+# S6, docs/domain/canonical-runway-us-clean-batch-report.md).
+#
+# Report-only: these labels are never persisted and never change how
+# plan_airport_inventory()/apply_plan() themselves behave. They only decide
+# which airports a *caller* (e.g. an "apply only the deterministic subset"
+# script) considers safe to include. Every classification function here
+# only ever SELECTs, exactly like plan_airport_inventory().
+# ---------------------------------------------------------------------------
+
+ALREADY_COMPLETE = "ALREADY_COMPLETE"
+CLEAN_ENRICH = "CLEAN_ENRICH"
+CLEAN_CREATE = "CLEAN_CREATE"
+PARTIAL_MATCH = "PARTIAL_MATCH"
+AMBIGUOUS = "AMBIGUOUS"
+CONFLICT = "CONFLICT"
+UNRESOLVED = "UNRESOLVED"
+
+# Safe to include in a deterministic clean-batch apply.
+CLEAN_BATCH_CLASSIFICATIONS = frozenset({ALREADY_COMPLETE, CLEAN_ENRICH, CLEAN_CREATE})
+
+
+@dataclass(frozen=True)
+class AirportBatchClassification:
+    airport_id: int
+    classification: str
+    error: str | None
+    existing_runway_count: int
+    runways_would_create: int
+    runways_would_enrich: int
+    runway_ends_would_create: int
+    existing_runway_matches: int
+    plans: tuple[RunwayPlan, ...] = ()
+
+
+def classify_airport_batch(
+    session: Session, airport: Airport, runway_rows, runway_end_rows
+) -> AirportBatchClassification:
+    """Read-only classification of one airport's canonical-inventory plan.
+
+    runway_rows/runway_end_rows must already be filtered to this airport
+    (same convention as plan_airport_inventory). An empty runway_rows means
+    no NASR match was found for this airport's identifier(s) - UNRESOLVED,
+    not attempted. A malformed source row (e.g. a helipad or other
+    non-two-ended RWY_ID mixed into APT_RWY.csv) surfaces exactly as
+    plan_airport_inventory already reports it - AmbiguousRunwayDesignationError
+    - classified here as AMBIGUOUS, or CONFLICT when the pair heading and
+    APT_RWY_END.csv's actual ends disagree. No new normalization rule is
+    applied and no row is silently dropped."""
+    existing_runways = session.scalars(select(Runway).where(Runway.airport_id == airport.id)).all()
+    existing_count = len(existing_runways)
+
+    if not runway_rows:
+        return AirportBatchClassification(
+            airport_id=airport.id,
+            classification=UNRESOLVED,
+            error="no NASR runway rows matched this airport's identifier(s)",
+            existing_runway_count=existing_count,
+            runways_would_create=0,
+            runways_would_enrich=0,
+            runway_ends_would_create=0,
+            existing_runway_matches=0,
+        )
+
+    try:
+        plans = plan_airport_inventory(session, airport, runway_rows, runway_end_rows)
+    except AmbiguousRunwayDesignationError as exc:
+        message = str(exc)
+        classification = CONFLICT if "do not match the pair designation" in message else AMBIGUOUS
+        return AirportBatchClassification(
+            airport_id=airport.id,
+            classification=classification,
+            error=message,
+            existing_runway_count=existing_count,
+            runways_would_create=0,
+            runways_would_enrich=0,
+            runway_ends_would_create=0,
+            existing_runway_matches=0,
+        )
+
+    creates = sum(1 for p in plans if p.existing_id is None)
+    enrich = sum(1 for p in plans if p.existing_id is not None and p.would_enrich)
+    end_creates = sum(1 for p in plans for e in p.ends if e.existing_id is None)
+    matched_existing_ids = {p.existing_id for p in plans if p.existing_id is not None}
+    unmatched_existing = existing_count - len(matched_existing_ids)
+
+    normalized_pairs = [p.normalized_designation for p in plans]
+    has_duplicate_pairs = len(normalized_pairs) != len(set(normalized_pairs))
+
+    if has_duplicate_pairs:
+        classification = CONFLICT
+        error = "two NASR rows for this airport normalize to the same runway pair"
+    elif creates == 0 and enrich == 0 and end_creates == 0 and existing_count > 0:
+        classification = ALREADY_COMPLETE
+        error = None
+    elif unmatched_existing > 0:
+        classification = PARTIAL_MATCH
+        error = f"{unmatched_existing} existing Runway row(s) have no NASR counterpart"
+    elif existing_count == 0:
+        classification = CLEAN_CREATE
+        error = None
+    else:
+        classification = CLEAN_ENRICH
+        error = None
+
+    return AirportBatchClassification(
+        airport_id=airport.id,
+        classification=classification,
+        error=error,
+        existing_runway_count=existing_count,
+        runways_would_create=creates,
+        runways_would_enrich=enrich,
+        runway_ends_would_create=end_creates,
+        existing_runway_matches=len(matched_existing_ids),
+        plans=tuple(plans),
+    )
+
+
+def resolve_us_clean_batch(
+    session: Session, all_runway_rows, all_runway_end_rows, *, country: str = "USA"
+) -> list[AirportBatchClassification]:
+    """Read-only. Classifies every session.country airport (default "USA")
+    against the full, unfiltered NASR row sets, deriving airport-to-NASR
+    matching the same way the existing pilot scripts already do: an
+    airport's candidate codes are {faa_code, iata_code, icao_code} minus
+    None, and a NASR row belongs to it when its ARPT_ID is in that set. No
+    new matching or normalization rule is introduced. An airport with no
+    identifier at all, or whose identifier claims a NASR ARPT_ID also
+    claimed by another airport in this database, is never included in the
+    clean batch."""
+    airports = session.scalars(select(Airport).where(Airport.country == country)).all()
+
+    airport_codes: dict[int, set[str]] = {}
+    code_owners: dict[str, set[int]] = {}
+    for airport in airports:
+        codes = {c for c in (airport.faa_code, airport.iata_code, airport.icao_code) if c}
+        airport_codes[airport.id] = codes
+        for code in codes:
+            code_owners.setdefault(code, set()).add(airport.id)
+    collided_codes = {code for code, owners in code_owners.items() if len(owners) > 1}
+
+    results: list[AirportBatchClassification] = []
+    for airport in airports:
+        candidate_codes = airport_codes[airport.id]
+        if not candidate_codes:
+            existing_count = len(session.scalars(select(Runway).where(Runway.airport_id == airport.id)).all())
+            results.append(
+                AirportBatchClassification(
+                    airport_id=airport.id,
+                    classification=UNRESOLVED,
+                    error="no FAA/IATA/ICAO identifier",
+                    existing_runway_count=existing_count,
+                    runways_would_create=0,
+                    runways_would_enrich=0,
+                    runway_ends_would_create=0,
+                    existing_runway_matches=0,
+                )
+            )
+            continue
+
+        source_rwy = [r for r in all_runway_rows if r.values["ARPT_ID"] in candidate_codes]
+        source_end = [r for r in all_runway_end_rows if r.values["ARPT_ID"] in candidate_codes]
+
+        entry = classify_airport_batch(session, airport, source_rwy, source_end)
+        if entry.classification != UNRESOLVED and candidate_codes & collided_codes:
+            entry = replace(
+                entry,
+                classification=CONFLICT,
+                error="NASR ARPT_ID is also claimed by another airport in this database",
+                plans=(),
+            )
+        results.append(entry)
+    return results
+
+
+def clean_batch_aggregate(classifications: list[AirportBatchClassification]) -> dict:
+    """Read-only aggregate summary of a resolve_us_clean_batch() result."""
+    clean = [c for c in classifications if c.classification in CLEAN_BATCH_CLASSIFICATIONS]
+    return {
+        "airports_processed": len(classifications),
+        "clean_airport_count": len(clean),
+        "excluded_airport_count": len(classifications) - len(clean),
+        "runways_would_create": sum(c.runways_would_create for c in clean),
+        "runways_would_enrich": sum(c.runways_would_enrich for c in clean),
+        "runway_ends_would_create": sum(c.runway_ends_would_create for c in clean),
+    }

@@ -33,6 +33,29 @@ class ArrestingSystemRow:
     arrest_device_code: str
 
 
+def _select_effective_cycle(index_html: str, today: date) -> str:
+    """Pick the latest NASR cycle date (from the index page's own listing)
+    that is already effective as of `today`. Shared with
+    app.acquisition.nasr_apt_csv, which needs the cycle string itself (not
+    just the final archive URL discover_apt_csv_url() below returns)."""
+    cycles = sorted(set(_CYCLE_DATE.findall(index_html)))
+    effective = [c for c in cycles if date.fromisoformat(c) <= today]
+    if not effective:
+        raise RunwayEndsSourceError(
+            f"No effective NASR cycle found on or before {today} among {cycles!r}."
+        )
+    return effective[-1]
+
+
+def _select_apt_csv_url(cycle_html: str, cycle: str) -> str:
+    """Extract the APT CSV package link from one cycle's page. Shared with
+    app.acquisition.nasr_apt_csv - see _select_effective_cycle above."""
+    match = _APT_CSV_HREF.search(cycle_html)
+    if not match:
+        raise RunwayEndsSourceError(f"No APT CSV package link found for NASR cycle {cycle}.")
+    return match.group(1)
+
+
 def discover_apt_csv_url(*, client: httpx.Client, today: date, timeout: float = 30.0) -> str:
     """Find the current 28-day cycle's APT CSV package URL.
 
@@ -43,20 +66,11 @@ def discover_apt_csv_url(*, client: httpx.Client, today: date, timeout: float = 
 
     response = client.get(NASR_INDEX_URL, timeout=timeout)
     response.raise_for_status()
-    cycles = sorted(set(_CYCLE_DATE.findall(response.text)))
-    effective = [c for c in cycles if date.fromisoformat(c) <= today]
-    if not effective:
-        raise RunwayEndsSourceError(
-            f"No effective NASR cycle found on or before {today} among {cycles!r}."
-        )
-    cycle = effective[-1]
+    cycle = _select_effective_cycle(response.text, today)
 
     cycle_response = client.get(NASR_CYCLE_URL_TEMPLATE.format(cycle=cycle), timeout=timeout)
     cycle_response.raise_for_status()
-    match = _APT_CSV_HREF.search(cycle_response.text)
-    if not match:
-        raise RunwayEndsSourceError(f"No APT CSV package link found for NASR cycle {cycle}.")
-    return match.group(1)
+    return _select_apt_csv_url(cycle_response.text, cycle)
 
 
 def fetch_emas_arresting_system_rows(
