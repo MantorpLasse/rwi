@@ -83,11 +83,14 @@ def test_build_site_shows_unconfirmed_runway_pill_instead_of_a_pill_with_no_end(
 
     detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
     assert "Ingen bekräftad bankoppling" in detail_html
-    # Public runway inventory ("Banor") is intentionally suppressed - see
-    # docs/ui/mdw-runway-diagnosis.md - so the unrelated seeded runway must
-    # not appear anywhere on the page, including via that removed section.
-    assert "13C/31C" not in detail_html
-    assert "Banor" not in detail_html
+    # Public runway inventory ("Banor") now publishes every governed Runway
+    # row for this airport (docs/product/public-canonical-runway-inventory-
+    # report.md) - unlike the Installation's ambiguous runway_end text
+    # above, this section is driven entirely by the canonical Runway model,
+    # so both seeded runways legitimately appear here.
+    assert "Banor" in detail_html
+    assert "13C/31C" in detail_html
+    assert "15/33" in detail_html
 
 
 def test_build_site_does_not_expose_runway_end_or_runway_end_id_anywhere(tmp_path):
@@ -125,6 +128,100 @@ def test_build_site_does_not_expose_runway_end_or_runway_end_id_anywhere(tmp_pat
     data_json = (output / "data.json").read_text(encoding="utf-8")
     assert "runway_end_id" not in data_json
     assert "RunwayEnd" not in data_json
+
+
+def _seed_airport_with_runways(session, *, name, iata_code, designations):
+    """Generic airport + N governed canonical Runway rows - no Signal
+    required. Used to prove the public runway section is driven purely by
+    the canonical Runway model and works for any airport, not a BOS/ORH
+    special case (docs/product/public-canonical-runway-inventory-report.md)."""
+    airport = Airport(name=name, iata_code=iata_code, country="USA")
+    session.add(airport)
+    session.flush()
+    for designation in designations:
+        session.add(Runway(airport_id=airport.id, designation=designation, length_m=1500, width_m=45, surface="ASPH"))
+    session.commit()
+    return airport
+
+
+def test_build_site_publishes_full_canonical_runway_inventory_for_a_large_airport(tmp_path):
+    """A 6-runway airport (the BOS shape) - every governed Runway row must
+    appear, including reciprocal-end pairs, under "Banor"."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = _seed_airport_with_runways(
+            session, name="Large Test Airport", iata_code="LTA",
+            designations=["4L/22R", "4R/22L", "9/27", "14/32", "15L/33R", "15R/33L"],
+        )
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert "Banor" in detail_html
+    for designation in ("4L/22R", "4R/22L", "9/27", "14/32", "15L/33R", "15R/33L"):
+        assert designation in detail_html
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    published_runways = next(a["runways"] for a in data["airports"] if a["iata_code"] == "LTA")
+    assert sorted(r["designation"] for r in published_runways) == sorted(
+        ["4L/22R", "4R/22L", "9/27", "14/32", "15L/33R", "15R/33L"]
+    )
+    # Public projection is designation-only - no internal Runway.id, and no
+    # length/surface (populated consistently but styled inconsistently
+    # across the real database - see build.py's _runway_view()).
+    assert all(set(r.keys()) == {"designation"} for r in published_runways)
+
+
+def test_build_site_publishes_minimal_canonical_runway_inventory_for_a_small_airport(tmp_path):
+    """A 2-runway airport (the ORH shape)."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = _seed_airport_with_runways(
+            session, name="Small Test Airport", iata_code="STA", designations=["11/29", "15/33"],
+        )
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert "11/29" in detail_html
+    assert "15/33" in detail_html
+
+
+def test_build_site_shows_empty_runway_state_when_airport_has_no_canonical_runways(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="No Runway Data Airport", iata_code="NRD", country="USA")
+        session.add(airport)
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert "Ingen banuppgift registrerad." in detail_html
+
+
+def test_build_site_runway_publication_does_not_affect_emas_publication_rules(tmp_path):
+    """Publishing "Banor" must not change EMAS idag in any way - an airport
+    with governed runways but no reviewed identity / promoted NASR presence
+    must still show the unresolved-EMAS empty state, exactly as before this
+    change."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = _seed_airport_with_runways(
+            session, name="Runways Only Airport", iata_code="RWO", designations=["9/27", "18/36"],
+        )
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert "Banor" in detail_html
+    assert "9/27" in detail_html
+    assert "Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens." in detail_html
 
 
 def test_build_site_groups_multiple_signals_at_the_same_airport_and_category(tmp_path):

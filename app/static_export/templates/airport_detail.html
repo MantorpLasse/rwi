@@ -6,13 +6,23 @@
 <h1><span style="margin-right:10px; display:inline-block">{{ sign(airport.iata_code or airport.icao_code or airport.faa_code or "–", airport.name) }}</span>{{ airport.name }}</h1>
 <p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
 
-{# grid-2's second column used to hold "Banor" for every airport; now it
-   only ever holds the (rare) website link, so the two-column layout is
-   only used when there's actually something to put in it - otherwise an
-   empty reserved column would leave a large blank sidebar on almost every
-   airport page. See the removed-Banor note further down. #}
+{# grid-2's second column only ever holds the (rare) website link, so the
+   two-column layout is only used when there's actually something to put
+   in it - otherwise an empty reserved column would leave a large blank
+   sidebar on almost every airport page. "Banor" (governed canonical
+   runway inventory) lives in the main column below, not this one - see
+   docs/product/public-canonical-runway-inventory-report.md. #}
 <div class="{{ 'grid-2' if airport.website_url else '' }}">
   <div>
+    <div class="card">
+      <div class="card-header">{{ t("runways") }}</div>
+      {% if airport.runways %}
+      <div class="card-body">
+        <div style="display:flex; flex-wrap:wrap; gap:8px">{% for runway in airport.runways %}<span class="pill status">{{ runway.designation }}</span>{% endfor %}</div>
+      </div>
+      {% else %}<div class="empty-state">Ingen banuppgift registrerad.</div>{% endif %}
+    </div>
+
     <div class="card">
       <div class="card-header">{{ t("current_emas") }}</div>
       {% if airport.reviewed_identities or airport.nasr_presence %}
@@ -164,14 +174,6 @@
     </div>{% endif %}{% endif %}
   </div>
 
-  {# "Banor" (public runway inventory) is intentionally suppressed here -
-     see docs/ui/mdw-runway-diagnosis.md and the TODO in
-     docs/ui/public-ui-regression-fix-report.md. The `runways` table is a
-     non-exhaustive, one-row-per-airport placeholder (confirmed DB-wide: no
-     airport has more than one row) and showing it next to the governed
-     "EMAS idag" reviewed-ends list can misleadingly imply a complete
-     runway inventory when it is not one. Restore once RWI has a governed
-     canonical runway/runway-end inventory. #}
   {% if airport.website_url %}
   <div>
     <a class="pill status" href="{{ airport.website_url }}" target="_blank" rel="noopener">Flygplatsens webbplats →</a>

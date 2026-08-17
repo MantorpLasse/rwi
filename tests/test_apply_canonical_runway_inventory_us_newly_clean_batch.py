@@ -392,7 +392,12 @@ def test_backup_database_copies_file_byte_identical(tmp_path):
     assert destination.parent == backup_dir
 
 
-def test_public_export_after_apply_still_suppresses_banor_and_leaks_nothing(tmp_path):
+def test_public_export_after_apply_publishes_banor_and_leaks_nothing(tmp_path):
+    """Section 8 public-export safety: after a real apply on an isolated
+    database, the static export must publish the newly-created canonical
+    Runway inventory under "Banor" (docs/product/public-canonical-runway-
+    inventory-report.md) while still leaking no RunwayEnd/runway_end_id
+    internals anywhere."""
     zip_path = _synthetic_zip(tmp_path)
     engine = _engine()
     with Session(engine) as session:
@@ -430,8 +435,11 @@ def test_public_export_after_apply_still_suppresses_banor_and_leaks_nothing(tmp_
         text_content = html_path.read_text(encoding="utf-8")
         assert "runway_end_id" not in text_content
         assert "RunwayEnd" not in text_content
-        assert "Banor" not in text_content
 
     data_json = (output / "data.json").read_text(encoding="utf-8")
     assert "runway_end_id" not in data_json
     assert "RunwayEnd" not in data_json
+
+    tst_html = (output / "airports" / f"{tst.id}.html").read_text(encoding="utf-8")
+    assert "Banor" in tst_html
+    assert "9/27" in tst_html  # the runway this apply created, normalized (no leading zero)

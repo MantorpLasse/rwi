@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import SessionLocal
-from app.models import Airport, Installation, PhysicalInstallationIdentity, Signal, SourceAssertion
+from app.models import Airport, Installation, PhysicalInstallationIdentity, Runway, Signal, SourceAssertion
 from app.static_export.presentation import public_signal_state, status_view, text
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -233,6 +233,18 @@ def _installation_view(installation: Installation) -> SimpleNamespace:
         source_url=source.url if source else None,
         source_published_date=source.published_date if source else None,
     )
+
+
+def _runway_view(runway: Runway) -> SimpleNamespace:
+    """Minimal public projection of one governed canonical Runway - the
+    physical runway pair's designation only (docs/product/public-canonical-
+    runway-inventory-report.md). No id, no length/width/surface: `surface`
+    is a mix of human-readable text and raw NASR codes (ASPH/CONC/GRVL/...)
+    across the 180 governed rows - consistent in population, not in style -
+    so it is left unpublished for now rather than shown inconsistently.
+    Deliberately says nothing about EMAS; that remains driven entirely by
+    reviewed_identities/nasr_presence below, unchanged by this."""
+    return SimpleNamespace(designation=runway.designation)
 
 
 def _public_identity_view(identity: PhysicalInstallationIdentity) -> SimpleNamespace:
@@ -617,14 +629,16 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
         longitude=airport.longitude,
         website_url=airport.website_url,
         signal_count=len(signal_views),
-        # `runways` (and the "Banor" template section that read it) is
-        # intentionally omitted from the public airport view - see
-        # docs/ui/mdw-runway-diagnosis.md. The `runways` table is a
-        # non-exhaustive, one-row-per-airport placeholder, not a governed
-        # canonical runway/runway-end inventory; publishing it here or in
-        # data.json could misleadingly imply completeness next to the
-        # governed `reviewed_identities` list below. Restore once RWI has
-        # governed canonical runway/runway-end coverage.
+        # Governed canonical runway inventory (docs/domain/canonical-runway-
+        # runway-end-design.md) - complete for all 76 U.S. airports as of
+        # docs/domain/allegheny-76-of-76-canonical-apply-report.md. The
+        # older `docs/ui/mdw-runway-diagnosis.md` exclusion (the `runways`
+        # table was once a non-exhaustive, one-row-per-airport placeholder)
+        # no longer applies and is superseded by this. Deliberately says
+        # nothing about EMAS presence/current status - that is entirely
+        # separate (reviewed_identities/nasr_presence below), unchanged by
+        # this - see docs/product/public-canonical-runway-inventory-report.md.
+        runways=sorted((_runway_view(r) for r in airport.runways), key=lambda r: r.designation),
         signals=primary_signals,
         funding_signals=funding_signals,
         installations=installation_views,
@@ -679,6 +693,7 @@ def _build(output_dir: Path, session: Session) -> None:
             selectinload(Airport.signals).selectinload(Signal.airport),
             selectinload(Airport.signals).selectinload(Signal.runway),
             selectinload(Airport.signals).selectinload(Signal.source),
+            selectinload(Airport.runways),
             selectinload(Airport.installations).selectinload(Installation.source),
             selectinload(Airport.incidents),
             selectinload(Airport.physical_installation_identities).selectinload(PhysicalInstallationIdentity.assertion_links),
