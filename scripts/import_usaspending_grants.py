@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Callable
+from typing import Callable, Optional
 
 import httpx
 from sqlalchemy import inspect, select, text
@@ -17,7 +18,7 @@ from app.acquisition.usaspending_grants import (
     fetch_all_emas_grants,
 )
 from app.database import SessionLocal, engine
-from app.models import Airport, Signal, Source
+from app.models import Airport, Signal, Source, SourceAssertion
 from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE
 
 # "...CARTERSVILLE-BARTOW COUNTY AIRPORT (VPC), LOCATED IN..." - state block
@@ -30,6 +31,28 @@ BENEFICIARY_PATTERN = re.compile(
     r"FEDERAL FUNDING FOR AIRPORTS ASSOCIATED WITH ([A-Z .'\-]+), ([A-Z ]+)\."
 )
 _REPLACEMENT_WORDS = ("RECONSTRUCT", "REPLACE")
+
+# resolve_airport() outcomes (docs/domain/usaspending-airport-resolution-fail-closed-report.md).
+RESOLVED_EXISTING = "resolved_existing"
+RESOLVED_NEW = "resolved_new"
+UNRESOLVED = "unresolved"
+
+
+@dataclass(frozen=True)
+class AirportResolution:
+    """Result of resolving one USAspending grant to a canonical Airport.
+
+    UNRESOLVED means airport identity could not be established to a
+    deterministic standard - no Airport is created and none is guessed.
+    raw_identifier/raw_name/reason preserve what the grant text actually
+    said, so the grant's evidence stays reviewable even without a
+    canonical Airport link (see import_all() below)."""
+
+    status: str
+    airport: Optional[Airport] = None
+    raw_identifier: Optional[str] = None
+    raw_name: Optional[str] = None
+    reason: Optional[str] = None
 
 
 def ensure_source_external_id_column(bind=engine) -> None:
@@ -103,54 +126,76 @@ def find_airport_by_city_state(session: Session, city: str, state: str) -> tuple
     return None, len(matches) > 1
 
 
-def resolve_airport(session: Session, grant: UsaspendingGrant) -> tuple[Airport | None, bool]:
-    """Find or create the Airport this grant is about.
+def resolve_airport(session: Session, grant: UsaspendingGrant) -> AirportResolution:
+    """Resolve the Airport this grant is about, or fail closed.
 
     Tries the embedded Loc ID first (most precise, e.g. state block grants
-    naming a specific sub-recipient airport), then the standard beneficiary
-    city/state sentence. Returns (None, False) only when neither pattern
-    matches at all - e.g. a pure state block-grant-administration record with
-    no specific airport named, which can't be attributed to anything.
+    naming a specific sub-recipient airport with an actual FAA/ICAO/IATA-
+    shaped code), then the standard beneficiary city/state sentence matched
+    against an EXISTING Airport.
+
+    A new Airport is created ONLY from a real embedded Loc ID - never from
+    a recipient organization name or a city/state match alone. A grant's
+    `recipient_name` is who received the money, not necessarily the
+    airport: it can be an airport AUTHORITY operating more than one
+    facility (see the Allegheny County Airport Authority case in
+    docs/domain/usaspending-airport-resolution-fail-closed-report.md, where
+    this exact fallback fabricated an Airport named after the authority
+    instead of the airport it actually funded). Every other case - no
+    pattern match at all, an ambiguous city/state match, or a city/state
+    match with zero existing Airport - is UNRESOLVED: identity is left
+    unset rather than guessed, per RWI's fail-closed principle.
     """
     loc_id_match = LOC_ID_PATTERN.search(grant.description)
     if loc_id_match:
         code = loc_id_match.group(1)
         airport = find_airport_by_code(session, code)
         if airport is not None:
-            return airport, False
-        # A real Loc ID we don't have yet - safe to create with it.
+            return AirportResolution(RESOLVED_EXISTING, airport=airport, raw_identifier=code)
+        # A real Loc ID we don't have yet - an actual FAA/ICAO/IATA-shaped
+        # identifier is sufficient grounds to create a new Airport.
         airport = Airport(faa_code=code, name=grant.recipient_name.title(), country="USA")
         session.add(airport)
         session.flush()
-        return airport, True
+        return AirportResolution(RESOLVED_NEW, airport=airport, raw_identifier=code)
 
     beneficiary_match = BENEFICIARY_PATTERN.search(grant.description)
     if not beneficiary_match:
-        return None, False
+        return AirportResolution(
+            UNRESOLVED,
+            raw_name=grant.recipient_name.title(),
+            reason="no FAA Loc ID and no beneficiary city/state sentence found in the grant description",
+        )
 
     city, state = beneficiary_match.groups()
     city = city.strip().title()
     state = state.strip().title()
+    raw_identifier = f"{city}, {state}"
     airport, ambiguous = find_airport_by_city_state(session, city, state)
     if airport is not None:
-        return airport, False
+        return AirportResolution(RESOLVED_EXISTING, airport=airport, raw_identifier=raw_identifier)
     if ambiguous:
-        return None, False  # more than one airport shares this city/state - don't guess
+        return AirportResolution(
+            UNRESOLVED,
+            raw_identifier=raw_identifier,
+            raw_name=grant.recipient_name.title(),
+            reason="more than one existing Airport shares this beneficiary city/state - identity is ambiguous",
+        )
 
-    airport = Airport(
-        name=grant.recipient_name.title(),
-        city=city,
-        state_region=state,
-        country="USA",
-        notes=(
-            "Name approximated from the USAspending grant recipient; no FAA "
-            "Loc ID was available in the award description. Verify/correct "
-            "manually if you find the airport's real identifiers."
+    # No FAA/ICAO/IATA identifier, and no existing Airport for this
+    # city/state: the recipient's own name is not sufficient grounds to
+    # create canonical Airport identity (it may be an operating authority,
+    # not the airport itself - see the docstring above). Fail closed
+    # instead of fabricating a row from an organization name.
+    return AirportResolution(
+        UNRESOLVED,
+        raw_identifier=raw_identifier,
+        raw_name=grant.recipient_name.title(),
+        reason=(
+            "no FAA Loc ID and no existing Airport for this beneficiary city/state - "
+            "a recipient organization name alone is not sufficient airport identity"
         ),
     )
-    session.add(airport)
-    session.flush()
-    return airport, True
 
 
 def import_all(
@@ -183,13 +228,15 @@ def import_all(
                     stats["already_imported"] += 1
                     continue
 
-                airport, created = resolve_airport(session, grant)
-                if airport is None:
-                    stats["unattributable"] += 1
-                    continue
-                if created:
+                resolution = resolve_airport(session, grant)
+                if resolution.status == RESOLVED_NEW:
                     stats["airports_created"] += 1
 
+                # The Source is created regardless of resolution outcome -
+                # it needs no Airport link, so a grant whose airport
+                # identity can't be established still keeps its evidence
+                # (title, recipient, description, award reference, URL)
+                # instead of vanishing without a trace.
                 source = Source(
                     title=f"USAspending grant: {grant.recipient_name.title()}",
                     source_type="usaspending_grant",
@@ -205,10 +252,34 @@ def import_all(
                 session.add(source)
                 session.flush()
 
+                if resolution.status == UNRESOLVED:
+                    # No Signal - Signal.airport_id is required. The raw
+                    # values are preserved on a SourceAssertion instead
+                    # (airport_id left NULL), the repository's existing
+                    # mechanism for evidence recorded before identity
+                    # reconciliation - available for later human review,
+                    # never silently discarded and never guessed.
+                    session.add(
+                        SourceAssertion(
+                            source_id=source.id,
+                            airport_id=None,
+                            assertion_type="project_construction",
+                            raw_airport_identifier=resolution.raw_identifier,
+                            raw_airport_name=resolution.raw_name,
+                            raw_relevant_text=grant.description,
+                            source_record_identifier=external_id,
+                            evidence_quality="unverified_candidate",
+                            review_state="unreviewed",
+                        )
+                    )
+                    stats["unattributable"] += 1
+                    session.commit()
+                    continue
+
                 confidence = "high"
                 session.add(
                     Signal(
-                        airport=airport,
+                        airport=resolution.airport,
                         source=source,
                         title=signal_title(grant),
                         category=classify_category(grant.description),
