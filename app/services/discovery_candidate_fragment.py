@@ -161,6 +161,23 @@ class CandidateFragment:
     contradicting_issuers: frozenset[str] = field(default_factory=frozenset)
     contradicting_locations: frozenset[str] = field(default_factory=frozenset)
 
+    # Pre-resolved only, by a caller EXTERNAL to both this module and the
+    # guard (see app.services.candidate_fragment_enrichment - a separate,
+    # optional, deterministic post-extraction step) as the real, known
+    # canonical runway topology of one SPECIFIC other airport this
+    # fragment's own runway_ends/runway_pairs are independently confirmed
+    # to belong to. Mirrors EvidenceBag.alternate_airport_runway_ends/
+    # _pairs field-for-field (docs/architecture/ai-discovery-evidence-
+    # attachment-guard.md S5 rule 3) - this class never computes,
+    # infers, or looks these up itself; extraction (app/acquisition/*
+    # extractors) never populates them either. Empty by default, exactly
+    # like contradicting_* above - a fragment with no enrichment step
+    # applied carries no alternate-airport evidence at all, which is
+    # exactly the pre-enrichment MSP pilot behavior
+    # (docs/product/msp-authoritative-discovery-provider-pilot.md S8).
+    alternate_airport_runway_ends: frozenset[str] = field(default_factory=frozenset)
+    alternate_airport_runway_pairs: frozenset[str] = field(default_factory=frozenset)
+
     # --- OPTIONAL EXTRACTED VALUES: extraction facts, not guard inputs ---
     project_identifiers: frozenset[str] = field(default_factory=frozenset)
     contract_identifiers: frozenset[str] = field(default_factory=frozenset)
@@ -222,9 +239,13 @@ def candidate_fragment_to_evidence_bag(fragment: CandidateFragment) -> EvidenceB
     and NEVER reads `fragment.discovery_context` - proven by test
     (test_search_context_excluded_from_evidence_bag and
     test_evidence_bag_identical_regardless_of_discovery_context). Any
-    contradiction fields present are passed through exactly as supplied;
-    this function never classifies a name/issuer/location as
-    contradictory itself.
+    contradiction fields present, and any alternate_airport_runway_ends/
+    _pairs, are passed through exactly as supplied, one-to-one; this
+    function never classifies a name/issuer/location as contradictory
+    itself and never computes/looks up alternate-airport topology itself
+    (that remains the job of the separate, optional
+    app.services.candidate_fragment_enrichment step, applied - if at all -
+    before this adapter runs).
     """
     return EvidenceBag(
         identifiers=fragment.airport_identifiers,
@@ -236,6 +257,8 @@ def candidate_fragment_to_evidence_bag(fragment: CandidateFragment) -> EvidenceB
         contradicting_names=fragment.contradicting_names,
         contradicting_issuers=fragment.contradicting_issuers,
         contradicting_locations=fragment.contradicting_locations,
+        alternate_airport_runway_ends=fragment.alternate_airport_runway_ends,
+        alternate_airport_runway_pairs=fragment.alternate_airport_runway_pairs,
         document_title=fragment.document_title,
         project_number=_join_or_none(fragment.project_identifiers),
         contract_number=_join_or_none(fragment.contract_identifiers),
