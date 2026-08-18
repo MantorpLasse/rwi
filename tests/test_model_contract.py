@@ -141,6 +141,8 @@ EXPECTED_COLUMNS = {
         "extracted_at": ("DATETIME", True, None, None),
         "evidence_quality": ("VARCHAR(30)", False, ("scalar", "unverified_candidate"), None),
         "review_state": ("VARCHAR(20)", False, ("scalar", "unreviewed"), None),
+        "identity_guard_decision": ("VARCHAR(30)", True, None, None),
+        "identity_guard_reason": ("TEXT", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
     "physical_installation_identities": {

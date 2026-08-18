@@ -73,6 +73,23 @@ class SourceAssertion(Base):
     extracted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     evidence_quality: Mapped[str] = mapped_column(String(30), default="unverified_candidate")
     review_state: Mapped[str] = mapped_column(String(20), default="unreviewed")
+
+    # Additive (docs/architecture/ai-discovery-governed-evidence-persistence-report.md).
+    # Populated ONLY by app/services/discovery_evidence_persistence.py, from
+    # app.services.evidence_attachment_guard.AttachmentDecision - never by
+    # NASR/USAspending/FAA ingestion, which leave both NULL exactly as
+    # before this addition. identity_guard_decision holds one of the five
+    # AttachmentOutcome values verbatim (.value, e.g. "ATTACH_CONFIRMED")
+    # - deliberately NOT DB-CHECK-constrained in this slice (a CHECK would
+    # require a full SQLite table rebuild, not a plain ADD COLUMN - see the
+    # migration script's own docstring); the persistence service is the
+    # sole writer and only ever writes a real AttachmentOutcome.value,
+    # enforced in Python, not the database. identity_guard_reason holds the
+    # guard's own deterministic AttachmentDecision.reason text verbatim -
+    # never AI-regenerated or summarized.
+    identity_guard_decision: Mapped[Optional[str]] = mapped_column(String(30))
+    identity_guard_reason: Mapped[Optional[str]] = mapped_column(Text)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     source: Mapped["Source"] = relationship(back_populates="assertions")
