@@ -4,7 +4,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.database import Base
-from app.models import Airport, Installation, Runway, Signal, Source
+from app.models import (
+    Airport,
+    Installation,
+    InstallationAssertionLink,
+    PhysicalInstallationIdentity,
+    Runway,
+    RunwayEnd,
+    Signal,
+    Source,
+    SourceAssertion,
+)
 from app.static_export import build_site
 
 
@@ -569,3 +579,412 @@ def test_build_site_omits_signal_source_notes_and_private_notes(tmp_path):
     signal_data = next(s for s in data["signals"] if s["id"] == signal.id)
     assert "source_notes" not in signal_data
     assert "notes" not in signal_data
+
+
+# ---------------------------------------------------------------------------
+# Public EMAS protected-direction presentation
+# (docs/product/public-emas-protected-direction-presentation.md).
+# ---------------------------------------------------------------------------
+
+
+def _seed_airport_with_runway_pair(session, *, name, code, pair):
+    airport = Airport(name=name, faa_code=code, country="USA")
+    session.add(airport)
+    session.flush()
+    runway = Runway(airport_id=airport.id, designation=pair)
+    session.add(runway)
+    session.flush()
+    end_a, end_b = pair.split("/")
+    ra = RunwayEnd(runway_id=runway.id, designation=end_a)
+    rb = RunwayEnd(runway_id=runway.id, designation=end_b)
+    session.add_all([ra, rb])
+    session.flush()
+    return airport, runway, ra, rb
+
+
+def _seed_reviewed_identity(session, *, airport, runway, runway_end, physical_designation):
+    identity = PhysicalInstallationIdentity(
+        airport_id=airport.id, runway_id=runway.id, runway_end=physical_designation, runway_end_id=runway_end.id
+    )
+    session.add(identity)
+    session.flush()
+    source = Source(title="FAA NASR", source_type="faa_nasr_apt_ars", url="https://example.test/nasr")
+    session.add(source)
+    session.flush()
+    assertion = SourceAssertion(
+        source_id=source.id, airport_id=airport.id, assertion_type="runway_end",
+        raw_runway_end_value=physical_designation, source_record_identifier=f"reviewed-{identity.id}",
+        evidence_quality="direct_strong", review_state="reviewed",
+    )
+    session.add(assertion)
+    session.flush()
+    session.add(InstallationAssertionLink(
+        assertion_id=assertion.id, physical_installation_id=identity.id,
+        outcome="SAME_PHYSICAL_INSTALLATION", reason="test", actor="human:test",
+    ))
+    session.commit()
+    return identity
+
+
+def _seed_nasr_presence(session, *, airport, physical_designation, cycle="2026-08-06", title="NASR test cycle"):
+    source = Source(
+        title="FAA NASR", source_type="faa_nasr_apt_ars", url="https://example.test/nasr",
+        external_id=f"faa_nasr:airport_csv:{cycle}:{title}",
+    )
+    session.add(source)
+    session.flush()
+    assertion = SourceAssertion(
+        source_id=source.id, airport_id=airport.id, assertion_type="runway_end",
+        raw_runway_end_value=physical_designation, runway_end=physical_designation,
+        source_record_identifier=f"nasr-{source.id}", evidence_quality="direct_strong", review_state="unreviewed",
+    )
+    session.add(assertion)
+    session.commit()
+    return assertion
+
+
+def _current_emas_for(output, airport_id):
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    return next(a for a in data["airports"] if a["id"] == airport_id)["current_emas"]
+
+
+def test_physical_04l_on_canonical_04l_22r_derives_protected_22r(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, runway, end_04l, end_22r = _seed_airport_with_runway_pair(
+            session, name="Test Field", code="TST", pair="4L/22R"
+        )
+        _seed_nasr_presence(session, airport=airport, physical_designation="04L")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert len(items) == 1
+    assert items[0]["physical_runway_end"] == "04L"
+    assert items[0]["protected_runway_direction"] == "22R"
+    assert items[0]["primary_label"] == "Bana 22R"
+
+
+def test_derivation_uses_topology_not_designation_arithmetic(tmp_path):
+    """A non-numeric-heading-arithmetic-friendly pair (L/R suffixes) still
+    resolves correctly, because the lookup is a relationship traversal
+    (runway_end.runway.runway_ends), never string/heading math."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Test Field", code="TST", pair="15L/33R")
+        _seed_nasr_presence(session, airport=airport, physical_designation="15L")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert items[0]["protected_runway_direction"] == "33R"
+
+
+def test_asymmetric_suffix_case_works_through_topology(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Test Field", code="TST", pair="6L/24")
+        _seed_nasr_presence(session, airport=airport, physical_designation="6L")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert items[0]["protected_runway_direction"] == "24"
+
+
+def test_zero_matching_physical_end_fails_closed(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Test Field", code="TST", pair="9/27")
+        # "13" does not exist on this airport at all.
+        _seed_nasr_presence(session, airport=airport, physical_designation="13")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert len(items) == 1
+    assert items[0]["protected_runway_direction"] is None
+    assert items[0]["primary_label"] == "Bana 13"  # physical value shown, never a guessed reciprocal
+    assert items[0]["physical_runway_end"] == "13"
+
+
+def test_multiple_matches_fails_closed(tmp_path):
+    """Two different canonical Runways at the same airport whose ends both
+    normalize to the same token - a deliberately malformed fixture proving
+    the derivation refuses to pick one arbitrarily."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Odd Field", faa_code="ODD", country="USA")
+        session.add(airport)
+        session.flush()
+        runway_a = Runway(airport_id=airport.id, designation="9/27")
+        runway_b = Runway(airport_id=airport.id, designation="9L/27R")
+        session.add_all([runway_a, runway_b])
+        session.flush()
+        session.add_all([
+            RunwayEnd(runway_id=runway_a.id, designation="9"),
+            RunwayEnd(runway_id=runway_a.id, designation="27"),
+            RunwayEnd(runway_id=runway_b.id, designation="9"),  # deliberate duplicate designation
+            RunwayEnd(runway_id=runway_b.id, designation="27R"),
+        ])
+        session.commit()
+        _seed_nasr_presence(session, airport=airport, physical_designation="9")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert items[0]["protected_runway_direction"] is None
+
+
+def test_malformed_parent_topology_fails_closed(tmp_path):
+    """A canonical Runway with only one governed RunwayEnd (malformed -
+    every real governed Runway always has exactly two) must not derive a
+    guessed reciprocal."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Broken Field", faa_code="BRK", country="USA")
+        session.add(airport)
+        session.flush()
+        runway = Runway(airport_id=airport.id, designation="9/27")
+        session.add(runway)
+        session.flush()
+        session.add(RunwayEnd(runway_id=runway.id, designation="9"))  # only one end - malformed
+        session.commit()
+        _seed_nasr_presence(session, airport=airport, physical_designation="9")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert items[0]["protected_runway_direction"] is None
+    assert items[0]["physical_runway_end"] == "9"
+
+
+def test_physical_value_preserved_separately_from_derived_label(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Test Field", code="TST", pair="4L/22R")
+        _seed_nasr_presence(session, airport=airport, physical_designation="04L")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert items[0]["physical_runway_end"] == "04L"  # raw value, never silently normalized away
+    assert items[0]["protected_runway_direction"] == "22R"
+    assert items[0]["primary_label"] != items[0]["physical_runway_end"]
+
+
+def test_primary_label_uses_protected_direction_not_physical_value(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Test Field", code="TST", pair="4L/22R")
+        _seed_nasr_presence(session, airport=airport, physical_designation="04L")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert "22R" in items[0]["primary_label"]
+    assert "04L" not in items[0]["primary_label"]
+
+
+def test_nasr_only_public_item_renders_with_cycle_and_caveat(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Test Field", code="TST", pair="9/27")
+        _seed_nasr_presence(session, airport=airport, physical_designation="09", cycle="2026-08-06")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert items[0]["evidence_basis"] == "nasr"
+    assert "2026-08-06" in items[0]["provenance_text"]
+    assert "projektstatus" in items[0]["provenance_text"]  # the "does not mean install year etc." caveat
+
+
+def test_reviewed_identity_renders_correctly(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, runway, end_9, end_27 = _seed_airport_with_runway_pair(
+            session, name="Test Field", code="TST", pair="9/27"
+        )
+        _seed_reviewed_identity(session, airport=airport, runway=runway, runway_end=end_9, physical_designation="9")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert len(items) == 1
+    assert items[0]["evidence_basis"] == "reviewed"
+    assert items[0]["protected_runway_direction"] == "27"
+
+
+def test_reviewed_and_nasr_same_bed_deduplicates_to_one_item(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, runway, end_9, end_27 = _seed_airport_with_runway_pair(
+            session, name="Test Field", code="TST", pair="9/27"
+        )
+        _seed_reviewed_identity(session, airport=airport, runway=runway, runway_end=end_9, physical_designation="9")
+        _seed_nasr_presence(session, airport=airport, physical_designation="09")  # same physical bed, different pathway
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert len(items) == 1  # deduplicated, not two items for the same physical bed
+
+
+def test_reviewed_identity_wins_presentation_precedence_over_nasr(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, runway, end_9, end_27 = _seed_airport_with_runway_pair(
+            session, name="Test Field", code="TST", pair="9/27"
+        )
+        _seed_reviewed_identity(session, airport=airport, runway=runway, runway_end=end_9, physical_designation="9")
+        _seed_nasr_presence(session, airport=airport, physical_designation="09")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    items = _current_emas_for(output, airport.id)
+    assert items[0]["evidence_basis"] == "reviewed"  # not overwritten by the (unreviewed) NASR duplicate
+
+
+def test_review_required_style_airport_remains_excluded_from_publication(tmp_path):
+    """BOS/ORH-shaped case: an airport with governed runways but no
+    reviewed identity and no promoted (runway_end IS NULL) NASR assertion
+    must show zero current-EMAS items - simulating a REVIEW_REQUIRED
+    assertion that a future promotion writer deliberately left unpromoted."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Boston-Shaped Field", code="BST", pair="4L/22R")
+        source = Source(
+            title="FAA NASR", source_type="faa_nasr_apt_ars", url="https://example.test/nasr",
+            external_id="faa_nasr:airport_csv:2026-08-06:unpromoted",
+        )
+        session.add(source)
+        session.flush()
+        session.add(SourceAssertion(  # runway_end deliberately left NULL - the REVIEW_REQUIRED shape
+            source_id=source.id, airport_id=airport.id, assertion_type="runway_end",
+            raw_runway_end_value="04L", runway_end=None,
+            source_record_identifier="unpromoted-1", evidence_quality="direct_strong", review_state="unreviewed",
+        ))
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    assert _current_emas_for(output, airport.id) == []
+
+
+def test_worcester_shaped_airport_also_remains_excluded(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Worcester-Shaped Field", code="WST", pair="11/29")
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    assert _current_emas_for(output, airport.id) == []
+
+
+def test_current_emas_never_leaks_internal_ids(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, runway, end_9, end_27 = _seed_airport_with_runway_pair(
+            session, name="Test Field", code="TST", pair="9/27"
+        )
+        _seed_reviewed_identity(session, airport=airport, runway=runway, runway_end=end_9, physical_designation="9")
+        _seed_nasr_presence(session, airport=airport, physical_designation="27")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    airport_data = next(a for a in data["airports"] if a["id"] == airport.id)
+    for item in airport_data["current_emas"]:
+        assert set(item.keys()) == {
+            "primary_label", "physical_runway_end", "protected_runway_direction",
+            "evidence_basis", "evidence_basis_label", "provenance_text",
+        }
+    detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
+    assert "runway_end_id" not in detail_html
+    assert "assertion" not in detail_html.lower() or "assertion" not in " ".join(
+        line for line in detail_html.splitlines() if "EMAS" in line
+    )
+
+
+def test_data_json_current_emas_semantics_are_explicit(tmp_path):
+    """The old ambiguous `runway_end`-named fields (reviewed_identities/
+    nasr_presence) are gone; the new field names are self-describing."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Test Field", code="TST", pair="9/27")
+        _seed_nasr_presence(session, airport=airport, physical_designation="09")
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    airport_data = next(a for a in data["airports"] if a["id"] == airport.id)
+    assert "reviewed_identities" not in airport_data
+    assert "nasr_presence" not in airport_data
+    assert "current_emas" in airport_data
+    assert "physical_runway_end" in airport_data["current_emas"][0]
+    assert "protected_runway_direction" in airport_data["current_emas"][0]
+
+
+def test_canonical_runway_inventory_unaffected_by_current_emas_changes(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, *_ = _seed_airport_with_runway_pair(session, name="Test Field", code="TST", pair="9/27")
+        Runway_row = Runway(airport_id=airport.id, designation="18/36")
+        session.add(Runway_row)
+        session.commit()
+        _seed_nasr_presence(session, airport=airport, physical_designation="09")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    airport_data = next(a for a in data["airports"] if a["id"] == airport.id)
+    assert sorted(r["designation"] for r in airport_data["runways"]) == ["18/36", "9/27"]
+
+
+def test_no_database_mutation_occurs_during_build(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport, runway, end_9, end_27 = _seed_airport_with_runway_pair(
+            session, name="Test Field", code="TST", pair="9/27"
+        )
+        _seed_reviewed_identity(session, airport=airport, runway=runway, runway_end=end_9, physical_designation="9")
+        _seed_nasr_presence(session, airport=airport, physical_designation="27")
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+        assert len(session.new) == 0 and len(session.dirty) == 0 and len(session.deleted) == 0

@@ -25,17 +25,15 @@
 
     <div class="card">
       <div class="card-header">{{ t("current_emas") }}</div>
-      {% if airport.reviewed_identities or airport.nasr_presence %}
-      <div class="card-body">
-        {% if airport.reviewed_identities %}
-        <div class="eyebrow">{{ t("reviewed_emas") }}</div>
-        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px">{% for identity in airport.reviewed_identities %}<span class="pill status">{{ identity.runway_end or "Bana ej angiven" }}</span>{% endfor %}</div>
-        {% endif %}
-        {% if airport.nasr_presence %}
-        <div class="eyebrow" style="margin-top:16px">{{ t("faa_current_presence") }}</div>
-        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px">{% for presence in airport.nasr_presence %}<span class="pill status">{{ presence.runway_end }}</span>{% endfor %}</div>
-        {% if airport.nasr_presence[0].cycle %}<p class="timeline-meta" style="margin:10px 0 0">NASR-cykel {{ airport.nasr_presence[0].cycle }}. Uppgiften beskriver förekomst vid banände, inte projektstatus eller fysisk historik.</p>{% endif %}
-        {% endif %}
+      {% if airport.current_emas %}
+      <div class="card-body" style="display:flex; flex-direction:column; gap:12px">
+        {% for item in airport.current_emas %}
+        <div>
+          <span class="pill status">{{ item.primary_label }}</span>
+          <span class="timeline-meta" style="margin-left:8px">{{ item.evidence_basis_label }}</span>
+          <p class="timeline-meta" style="margin:4px 0 0">{{ item.provenance_text }}</p>
+        </div>
+        {% endfor %}
       </div>
       {% else %}{% if airport.current_status_unverified %}<div class="empty-state"><strong>{{ t("current_status_unverified") }}</strong><br>{{ t("current_status_unverified_detail") }}</div>{% else %}<div class="empty-state">Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens.</div>{% endif %}{% endif %}
     </div>

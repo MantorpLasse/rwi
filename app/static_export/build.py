@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import SessionLocal
-from app.models import Airport, Installation, PhysicalInstallationIdentity, Runway, Signal, SourceAssertion
+from app.models import Airport, Installation, PhysicalInstallationIdentity, Runway, RunwayEnd, Signal, SourceAssertion
+from app.services.runway_identity import AmbiguousRunwayDesignationError, normalize_end
 from app.static_export.presentation import public_signal_state, status_view, text
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -247,17 +248,139 @@ def _runway_view(runway: Runway) -> SimpleNamespace:
     return SimpleNamespace(designation=runway.designation)
 
 
-def _public_identity_view(identity: PhysicalInstallationIdentity) -> SimpleNamespace:
-    """Minimal public projection; never leak reconciliation metadata."""
-    return SimpleNamespace(runway_end=identity.runway_end)
+# --- Current-EMAS public presentation ---------------------------------
+# docs/product/public-emas-protected-direction-presentation.md.
+#
+# Every current-EMAS field this project has ever governed
+# (SourceAssertion.runway_end, PhysicalInstallationIdentity.runway_end_id)
+# means the canonical PHYSICAL RunwayEnd an authoritative source reports -
+# never the reciprocal/protected-direction end (docs/domain/emas-runway-
+# end-semantics-and-nasr-promotion-analysis.md S9, confirmed by every
+# real MDW/CGF InstallationAssertionLink.reason, which quotes the NASR
+# value unchanged). BOS's own evidence proved the public/operator-facing
+# name for a bed is usually the *reciprocal* end instead (Massport's own
+# language: a bed NASR reports at 04L is "Runway 22R's EMAS"). The public
+# page should lead with that protected direction while keeping the
+# physical value as visible provenance - never inventing the reciprocal,
+# only deriving it via canonical Runway<->RunwayEnd topology, which is
+# 100% deterministic (every governed Runway has exactly two RunwayEnd
+# rows, verified nationwide with zero exceptions).
+
+_CURRENT_EMAS_BASIS_LABEL = {
+    "reviewed": "Granskad identitet",
+    "nasr": "FAA NASR aktuell förekomst",
+}
+# Separate from _CURRENT_EMAS_BASIS_LABEL (the badge text) because "FAA
+# NASR" reads correctly capitalized in a badge but awkward mid-sentence if
+# naively lowercased for prose ("enligt faa nasr...") - own phrasing per
+# basis keeps both correct instead of deriving one from the other.
+_CURRENT_EMAS_PROVENANCE_PHRASE = {
+    "reviewed": "granskad identitet",
+    "nasr": "FAA NASR",
+}
 
 
-def _nasr_presence_view(assertion: SourceAssertion) -> SimpleNamespace:
-    source = assertion.source
-    cycle = None
-    if source and source.external_id and source.external_id.startswith("faa_nasr:airport_csv:"):
-        cycle = source.external_id.split(":")[2]
-    return SimpleNamespace(runway_end=assertion.runway_end, cycle=cycle)
+def _find_canonical_runway_end(airport: Airport, physical_designation: str | None) -> RunwayEnd | None:
+    """Topology lookup only - the single canonical RunwayEnd on this
+    airport whose normalized designation matches `physical_designation`.
+    None (fail closed) on zero or more than one match; never guesses."""
+    if not physical_designation:
+        return None
+    try:
+        target = normalize_end(physical_designation)
+    except AmbiguousRunwayDesignationError:
+        return None
+    candidates = [
+        end for runway in airport.runways for end in runway.runway_ends
+        if _normalize_end_safe(end.designation) == target
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _normalize_end_safe(designation: str) -> str | None:
+    try:
+        return normalize_end(designation)
+    except AmbiguousRunwayDesignationError:
+        return None
+
+
+def _protected_direction(runway_end: RunwayEnd) -> str | None:
+    """The OTHER RunwayEnd on the same canonical Runway - pure topology,
+    never designation arithmetic or string tricks. Fails closed (None)
+    unless the parent Runway has exactly two governed RunwayEnd rows."""
+    siblings = [e for e in runway_end.runway.runway_ends if e.id != runway_end.id]
+    return siblings[0].designation if len(siblings) == 1 else None
+
+
+def _current_emas_item(
+    *, airport: Airport, physical_designation: str | None, evidence_basis: str, cycle: str | None
+) -> tuple[object, SimpleNamespace] | None:
+    """Builds one public current-EMAS item plus its dedup key (the
+    canonical RunwayEnd.id when resolvable, so a reviewed identity and an
+    unrelated NASR assertion that resolve to the same physical bed
+    collide and dedupe; a raw fallback key otherwise so an unresolvable
+    item still renders standalone rather than being silently dropped).
+    Returns None only when there is no physical designation at all."""
+    if not physical_designation:
+        return None
+    canonical_end = _find_canonical_runway_end(airport, physical_designation)
+    protected = _protected_direction(canonical_end) if canonical_end else None
+    primary_label = f"Bana {protected}" if protected else f"Bana {physical_designation}"
+    provenance = f"Fysisk placering enligt {_CURRENT_EMAS_PROVENANCE_PHRASE[evidence_basis]}: bana {physical_designation}."
+    if evidence_basis == "nasr" and cycle:
+        provenance += f" NASR-cykel {cycle}. Uppgiften beskriver förekomst vid banände, inte projektstatus eller fysisk historik."
+    dedup_key = ("end", canonical_end.id) if canonical_end else ("raw", airport.id, evidence_basis, physical_designation)
+    item = SimpleNamespace(
+        primary_label=primary_label,
+        physical_runway_end=physical_designation,
+        protected_runway_direction=protected,
+        evidence_basis=evidence_basis,
+        evidence_basis_label=_CURRENT_EMAS_BASIS_LABEL[evidence_basis],
+        provenance_text=provenance,
+    )
+    return dedup_key, item
+
+
+def _current_emas_views(airport: Airport) -> list[SimpleNamespace]:
+    """Merges the two governed current-EMAS pathways (reviewed
+    PhysicalInstallationIdentity and raw NASR current-presence
+    SourceAssertion) into one deduplicated, presentation-ready list.
+    Reviewed identity is added first and always wins a dedup collision -
+    it is higher-governance evidence than an unreviewed NASR assertion
+    describing the same physical bed (docs/product/public-emas-protected-
+    direction-presentation.md). Presentation only - does not change which
+    rows are governed or reviewed."""
+    by_key: dict[object, SimpleNamespace] = {}
+
+    reviewed = [
+        identity for identity in airport.physical_installation_identities
+        if any(link.outcome == "SAME_PHYSICAL_INSTALLATION" for link in identity.assertion_links)
+    ]
+    for identity in reviewed:
+        result = _current_emas_item(
+            airport=airport, physical_designation=identity.runway_end, evidence_basis="reviewed", cycle=None
+        )
+        if result:
+            key, item = result
+            by_key[key] = item  # reviewed always wins; nothing has been inserted yet for this key
+
+    nasr = [
+        assertion for assertion in airport.source_assertions
+        if assertion.source and assertion.source.external_id
+        and assertion.source.external_id.startswith("faa_nasr:airport_csv:")
+        and assertion.assertion_type == "runway_end" and assertion.runway_end
+    ]
+    for assertion in nasr:
+        source = assertion.source
+        cycle = source.external_id.split(":")[2] if source and source.external_id else None
+        result = _current_emas_item(
+            airport=airport, physical_designation=assertion.runway_end, evidence_basis="nasr", cycle=cycle
+        )
+        if result:
+            key, item = result
+            by_key.setdefault(key, item)  # reviewed (inserted above) always wins on collision
+
+    return sorted(by_key.values(), key=lambda item: item.primary_label)
 
 
 def _is_public_signal(signal: Signal) -> bool:
@@ -592,18 +715,7 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
         )
     ]
     installation_views = [_installation_view(i) for i in airport.installations]
-    reviewed_identities = [
-        _public_identity_view(identity)
-        for identity in airport.physical_installation_identities
-        if any(link.outcome == "SAME_PHYSICAL_INSTALLATION" for link in identity.assertion_links)
-    ]
-    nasr_presence = [
-        _nasr_presence_view(assertion)
-        for assertion in airport.source_assertions
-        if assertion.source and assertion.source.external_id
-        and assertion.source.external_id.startswith("faa_nasr:airport_csv:")
-        and assertion.assertion_type == "runway_end" and assertion.runway_end
-    ]
+    current_emas = _current_emas_views(airport)
     incident_views = [
         SimpleNamespace(
             id=i.id,
@@ -636,15 +748,20 @@ def _airport_view(airport: Airport) -> SimpleNamespace:
         # table was once a non-exhaustive, one-row-per-airport placeholder)
         # no longer applies and is superseded by this. Deliberately says
         # nothing about EMAS presence/current status - that is entirely
-        # separate (reviewed_identities/nasr_presence below), unchanged by
-        # this - see docs/product/public-canonical-runway-inventory-report.md.
+        # separate (current_emas below), unchanged by this - see
+        # docs/product/public-canonical-runway-inventory-report.md.
         runways=sorted((_runway_view(r) for r in airport.runways), key=lambda r: r.designation),
         signals=primary_signals,
         funding_signals=funding_signals,
         installations=installation_views,
-        reviewed_identities=sorted(reviewed_identities, key=lambda item: item.runway_end or ""),
-        nasr_presence=sorted(nasr_presence, key=lambda item: item.runway_end or ""),
-        current_status_unverified=(airport.id == 6 and not reviewed_identities and not nasr_presence),
+        # Replaces the former separate reviewed_identities/nasr_presence
+        # fields (docs/product/public-emas-protected-direction-presentation.md)
+        # with one deduplicated, protected-direction-led list - both old
+        # fields exposed the raw physical designation under the ambiguous
+        # name `runway_end` with no protected-direction context and no
+        # deduplication between the two pathways.
+        current_emas=current_emas,
+        current_status_unverified=(airport.id == 6 and not current_emas),
         incidents=incident_views,
         timeline_dated=timeline_dated,
         timeline_undated=timeline_undated,
@@ -693,7 +810,7 @@ def _build(output_dir: Path, session: Session) -> None:
             selectinload(Airport.signals).selectinload(Signal.airport),
             selectinload(Airport.signals).selectinload(Signal.runway),
             selectinload(Airport.signals).selectinload(Signal.source),
-            selectinload(Airport.runways),
+            selectinload(Airport.runways).selectinload(Runway.runway_ends),
             selectinload(Airport.installations).selectinload(Installation.source),
             selectinload(Airport.incidents),
             selectinload(Airport.physical_installation_identities).selectinload(PhysicalInstallationIdentity.assertion_links),
