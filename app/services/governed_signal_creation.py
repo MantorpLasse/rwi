@@ -52,6 +52,64 @@ HUMAN-approved route; only `promotion_policy_decision == "HUMAN_REVIEW_REQUIRED"
 qualifies. A future, separate automation path may eventually reuse the
 lower-level Signal-write shape this module establishes, but this slice does
 not build it.
+
+RECONCILIATION GATE (R3 of docs/architecture/existing-signal-reconciliation-
+guard-design.md's own S16 roadmap - see
+docs/architecture/existing-signal-reconciliation-r3-governed-creation-report.md).
+Immediately before any `Signal(...)` construction or
+`source_assertion.signal_id` assignment, this function builds the
+already-reviewed, already-committed R1/R2 reconciliation inputs
+(`app.services.existing_signal_reconciliation_candidates.build_reconciliation_subject`/
+`find_reconciliation_candidates`) and evaluates them through the unmodified
+R1 pure core (`app.services.existing_signal_reconciliation.
+evaluate_existing_signal_reconciliation`). This module never reimplements
+any anchor rule, compatibility rule, latest-link-supersession logic,
+candidate-discovery SQL, or disconfirming-evidence rule - R1/R2 remain the
+only truth sources for reconciliation semantics; this function only ever
+calls them and interprets their three-outcome result:
+
+    ALREADY_LINKED    -> redundant, by construction, with the pre-existing
+                          `source_assertion.signal_id is not None` idempotent-
+                          reuse branch immediately below (R1's own
+                          ALREADY_LINKED short-circuit fires unconditionally
+                          whenever `signal_id` is already set, before it ever
+                          looks at candidates - so this outcome can never
+                          coincide with a fresh-creation attempt; no new
+                          branching is needed to "handle" it).
+    POSSIBLE_EXISTING_SIGNAL_MATCH
+                       -> fails closed: raises before any Signal is
+                          constructed, added, or flushed, and before
+                          `source_assertion.signal_id` is touched. Never
+                          auto-selects a candidate, never records
+                          MARK_DUPLICATE, never links anything itself -
+                          resolving a possible match remains an exclusively
+                          human decision, exercised the same way it always
+                          has been (a later, separate ReviewerAction).
+    CLEAR_TO_CREATE    -> creation proceeds exactly as before. Any
+                          `advisory_candidate_signal_ids`/`advisory_reasons`
+                          the decision carries travel through on
+                          `GovernedSignalCreationResult.reconciliation_decision`
+                          for explainability only - never inspected as a
+                          gating condition by this function, and never
+                          persisted anywhere (no Signal field, no notes
+                          field, no hidden write).
+
+`claims` is an optional, already-structured `tuple[Claim, ...]` this
+function never inspects itself beyond passing it straight through to
+`build_reconciliation_subject()` - no raw text is re-extracted here, no
+source-family-specific extractor is imported, and an empty default (`()`)
+keeps every existing caller's behavior unchanged (empty claims simply means
+no vendor-name/evidence-date compatibility evidence is available, which can
+only ever narrow advisory metadata, never change whether a Signal is
+created). The proposed Signal's own `category` and the same year-priority
+order R2 already established for reading an *existing* Signal are reused,
+verbatim, to enrich the reconciliation subject with the *proposed* Signal's
+own structured fields - never inferred from title/notes/source_notes, never
+"today," and `manual_year_estimate` is excluded from the priority list for
+the same reason R2 excludes it when reading a candidate (design doc S6/S10
+- an unverified personal guess must not become structural reconciliation
+evidence). See `_resolve_reference_year()`'s own docstring for the exact
+priority and how this module guards against it silently drifting from R2's.
 """
 from __future__ import annotations
 
@@ -63,6 +121,16 @@ from sqlalchemy.orm import Session
 
 from app.models import Runway, Signal, SourceAssertion
 from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE
+from app.services.evidence_claim_semantics import Claim
+from app.services.existing_signal_reconciliation import (
+    ExistingSignalReconciliationDecision,
+    ExistingSignalReconciliationOutcome,
+    evaluate_existing_signal_reconciliation,
+)
+from app.services.existing_signal_reconciliation_candidates import (
+    build_reconciliation_subject,
+    find_reconciliation_candidates,
+)
 from app.services.reviewer_action_persistence import get_latest_reviewer_action
 
 __all__ = [
@@ -70,6 +138,7 @@ __all__ = [
     "REQUIRED_INTELLIGENCE_DECISION",
     "REQUIRED_PROMOTION_DECISION",
     "GovernedSignalCreationResult",
+    "ExistingSignalPossibleMatchError",
     "create_signal_from_approved_review",
     "link_source_assertion_to_duplicate_signal",
 ]
@@ -97,11 +166,86 @@ _CompatibilitySignature = tuple
 @dataclass(frozen=True)
 class GovernedSignalCreationResult:
     """created=True only when this call itself inserted a new Signal row;
-    False on an idempotent repeat that reused the existing one."""
+    False on an idempotent repeat that reused the existing one.
+
+    `reconciliation_decision` is the full R1 `ExistingSignalReconciliationDecision`
+    for this call - result-only, explainability metadata, never persisted
+    anywhere. Populated on every successful call from
+    `create_signal_from_approved_review()` (`CLEAR_TO_CREATE`, possibly
+    carrying non-blocking `advisory_candidate_signal_ids`/`advisory_reasons`,
+    or the trivial `ALREADY_LINKED` reached on an idempotent repeat); left
+    `None` for `link_source_assertion_to_duplicate_signal()`, which is a
+    separate, already-human-resolved path the reconciliation guard does not
+    run for (Task 18 of the R3 mission: a human has already recorded
+    MARK_DUPLICATE by the time that function is called - there is nothing
+    left for a pre-creation guard to evaluate)."""
 
     signal: Signal
     created: bool
     source_assertion_id: int
+    reconciliation_decision: Optional[ExistingSignalReconciliationDecision] = None
+
+
+class ExistingSignalPossibleMatchError(ValueError):
+    """Raised by `create_signal_from_approved_review()` when reconciliation
+    finds a genuine structural identity anchor (design doc S5/S6) connecting
+    the proposed evidence to one or more existing Signals - creation fails
+    closed, before any Signal is constructed, added, or flushed, and before
+    `source_assertion.signal_id` is touched.
+
+    Subclasses `ValueError` (matching this module's own existing
+    fail-closed-via-ValueError convention for every other governance-gate
+    failure, so any caller already catching `ValueError` still catches this)
+    but additionally carries the full `ExistingSignalReconciliationDecision`
+    as a structured `.decision` attribute - `candidate_signal_ids` and
+    `reasons` are directly inspectable without a raw DB query or string
+    parsing of the exception message, which a bare `ValueError` could not
+    offer. This is the one new exception type this slice introduces,
+    deliberately narrow in scope: every other failure path in this module
+    still raises a plain `ValueError`, unchanged."""
+
+    def __init__(self, decision: ExistingSignalReconciliationDecision) -> None:
+        self.decision = decision
+        super().__init__(
+            "create_signal_from_approved_review requires human reconciliation before a new "
+            f"Signal may be created: candidate_signal_ids={decision.candidate_signal_ids!r}, "
+            f"reasons={decision.reasons!r}"
+        )
+
+
+# The same year-field priority order app.services.existing_signal_reconciliation_candidates
+# already established for reading an EXISTING Signal candidate
+# (`_YEAR_FIELD_PRIORITY`/`_signal_reference_year` there), reapplied here to
+# the PROPOSED Signal's own structured year/date arguments so both sides of
+# a reconciliation comparison use one consistent, documented convention.
+# Deliberately reimplemented rather than imported: this is a five-line field-
+# precedence convention, not reconciliation decision logic (design doc S3's
+# "do not duplicate anchor/compatibility/latest-link/candidate-discovery/
+# disconfirming logic" is about *those*, not this), and R1/R2 remain
+# unmodified per this slice's own explicit instruction not to touch them
+# without an independently demonstrated defect. `TestReferenceYearPriorityConsistency`
+# in the test suite guards against the two ever silently drifting apart by
+# comparing this function's output directly against R2's own
+# `_signal_reference_year()` for equivalent field values on a real ORM Signal.
+# `manual_year_estimate` is excluded for the identical reason R2 excludes it:
+# a private, unverified personal guess must never become structural
+# reconciliation evidence.
+def _resolve_reference_year(
+    *,
+    target_year: Optional[int],
+    planning_year: Optional[int],
+    procurement_year: Optional[int],
+    construction_start: Optional[date],
+    completion_date: Optional[date],
+) -> Optional[int]:
+    for value in (target_year, planning_year, procurement_year):
+        if value is not None:
+            return value
+    if construction_start is not None:
+        return construction_start.year
+    if completion_date is not None:
+        return completion_date.year
+    return None
 
 
 def _validate_human_selected_fields(
@@ -178,12 +322,22 @@ def create_signal_from_approved_review(
     completion_date: Optional[date] = None,
     manual_year_estimate: Optional[int] = None,
     last_verified_at: Optional[date] = None,
+    claims: "tuple[Claim, ...]" = (),
 ) -> GovernedSignalCreationResult:
-    """Validates every governance gate and human-selected field, then either
-    creates exactly one new internal Signal (published=False) or, on an
-    idempotent repeat, reuses the one already linked via
-    source_assertion.signal_id. Never commits; calls session.flush() so any
-    constraint violation surfaces immediately. Never mutates ReviewerAction.
+    """Validates every governance gate and human-selected field, evaluates
+    the existing-Signal reconciliation guard, then either creates exactly
+    one new internal Signal (published=False) or, on an idempotent repeat,
+    reuses the one already linked via source_assertion.signal_id. Never
+    commits; calls session.flush() so any constraint violation surfaces
+    immediately. Never mutates ReviewerAction.
+
+    `claims` is optional, already-structured evidence (see module docstring)
+    used only to enrich reconciliation's own compatibility metadata - never
+    inspected for any other purpose by this function.
+
+    Raises `ExistingSignalPossibleMatchError` (see its own docstring) before
+    touching any Signal or `source_assertion.signal_id` if reconciliation
+    finds a genuine identity anchor to an existing Signal.
     """
     _validate_human_selected_fields(title=title, category=category, confidence=confidence, status=status)
     _check_governance_gates(session, source_assertion)
@@ -192,6 +346,27 @@ def create_signal_from_approved_review(
         runway = session.get(Runway, runway_id)
         if runway is None or runway.airport_id != source_assertion.airport_id:
             raise ValueError("runway_id, if given, must belong to the same airport as source_assertion")
+
+    reference_year = _resolve_reference_year(
+        target_year=target_year, planning_year=planning_year, procurement_year=procurement_year,
+        construction_start=construction_start, completion_date=completion_date,
+    )
+    reconciliation_subject = build_reconciliation_subject(
+        source_assertion, claims, category=category, reference_year=reference_year,
+    )
+    reconciliation_candidates = find_reconciliation_candidates(session, source_assertion)
+    reconciliation_decision = evaluate_existing_signal_reconciliation(
+        reconciliation_subject, reconciliation_candidates,
+    )
+    if reconciliation_decision.outcome == ExistingSignalReconciliationOutcome.POSSIBLE_EXISTING_SIGNAL_MATCH:
+        # Fails closed before any Signal is constructed, added, or flushed,
+        # and before source_assertion.signal_id is touched. Unreachable when
+        # source_assertion.signal_id is already set - R1's own ALREADY_LINKED
+        # short-circuit fires first in that case, unconditionally, before any
+        # candidate is even inspected (module docstring's own "RECONCILIATION
+        # GATE" section) - so this branch never conflicts with the existing
+        # idempotent-reuse branch immediately below.
+        raise ExistingSignalPossibleMatchError(reconciliation_decision)
 
     requested_signature: _CompatibilitySignature = (title, category, confidence)
 
@@ -209,7 +384,10 @@ def create_signal_from_approved_review(
                 f"core fields (existing={existing_signature!r}, requested={requested_signature!r}) - "
                 "refusing to silently overwrite or create a second Signal"
             )
-        return GovernedSignalCreationResult(signal=existing, created=False, source_assertion_id=source_assertion.id)
+        return GovernedSignalCreationResult(
+            signal=existing, created=False, source_assertion_id=source_assertion.id,
+            reconciliation_decision=reconciliation_decision,
+        )
 
     signal = Signal(
         airport_id=source_assertion.airport_id,
@@ -240,7 +418,10 @@ def create_signal_from_approved_review(
     source_assertion.signal_id = signal.id
     session.flush()
 
-    return GovernedSignalCreationResult(signal=signal, created=True, source_assertion_id=source_assertion.id)
+    return GovernedSignalCreationResult(
+        signal=signal, created=True, source_assertion_id=source_assertion.id,
+        reconciliation_decision=reconciliation_decision,
+    )
 
 
 def link_source_assertion_to_duplicate_signal(
