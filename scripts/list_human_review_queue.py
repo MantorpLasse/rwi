@@ -1,16 +1,30 @@
 """Read-only human review queue report
-(docs/architecture/human-review-queue-slice8-report.md, Slice 8).
+(docs/architecture/human-review-workflow-awareness-slice9d-report.md, Slice
+9D; built on Slice 8's own docs/architecture/human-review-queue-slice8-report.md).
 
     python -m scripts.list_human_review_queue --database data/runway_safe.db --limit 20
+    python -m scripts.list_human_review_queue --state all
+    python -m scripts.list_human_review_queue --state resolved
 
-Prints every SourceAssertion row whose already-persisted
-`promotion_policy_decision` is exactly "HUMAN_REVIEW_REQUIRED" - never
-AUTO_ELIGIBLE, never DO_NOT_PROMOTE, never NULL/unevaluated rows. Performs
-ZERO writes: the database connection is opened in SQLite's own read-only
-URI mode (`mode=ro`), so even a coding mistake that tried to write would be
-refused at the driver level, not merely by convention. Never creates a
-backup, never runs or imports an `upgrade()`/`downgrade()` function from any
-migration script, never fetches network, never touches `Signal`.
+Default (`--state active`): prints only SourceAssertion rows that still need
+a human DECISION right now - promotion_policy_decision ==
+"HUMAN_REVIEW_REQUIRED" AND derived review_workflow_state is ACTIVE_REVIEW
+or NEEDS_MORE_EVIDENCE (see app.services.human_review_queue's own docstring
+for the full state vocabulary and the Slice 9D defect this fixes: a row a
+human already resolved via MARK_DUPLICATE/REJECT_SIGNAL/a linked
+APPROVE_SIGNAL no longer appears here forever, the way it did under Slice
+8's own promotion-policy-only filter). `--state all` shows every
+HUMAN_REVIEW_REQUIRED row regardless of state, annotated with its derived
+state, for audit; `--state resolved` shows only the resolved subset
+(RESOLVED_REJECTED, RESOLVED_DUPLICATE, RESOLVED_SIGNAL_CREATED). Never
+AUTO_ELIGIBLE, never DO_NOT_PROMOTE, never NULL/unevaluated rows, in any
+mode. Performs ZERO writes: the database connection is opened in SQLite's
+own read-only URI mode (`mode=ro`), so even a coding mistake that tried to
+write would be refused at the driver level, not merely by convention. Never
+creates a backup, never runs or imports an `upgrade()`/`downgrade()`
+function from any migration script, never fetches network, never touches
+`Signal` (reads a Signal's own row only insofar as SourceAssertion.signal_id
+is displayed - never creates, updates, or deletes one).
 
 SCHEMA GATE: before running any ORM query, this script inspects the target
 database's raw schema (via the existing migration scripts' own read-only
@@ -19,7 +33,14 @@ database's raw schema (via the existing migration scripts' own read-only
 (`intelligence_review_*`) or Slice 7 (`promotion_policy_*`) columns are
 missing - it does not attempt to migrate, and it does not silently query a
 schema that would raise an ORM-level `OperationalError` instead of a clear,
-typed refusal.
+typed refusal. Slice 9D deliberately does NOT add a third gate for Slice
+9B/9C's own reviewer_actions/signal_id - both are read defensively
+(get_latest_reviewer_action() naturally returns None and signal_id reads as
+missing-attribute-safe None on a schema that predates them), matching this
+script's own existing "refuse only what would otherwise raise, never for
+columns whose absence degrades gracefully" discipline; a real pre-9B/9C
+database simply shows every item as ACTIVE_REVIEW, identical to Slice 8's
+own original behavior.
 
 `run_review_queue()` is the one function that does the work (schema check,
 then query) and returns a single, importable report - `main()` and the
@@ -35,19 +56,34 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.services.human_review_claim_enrichment import enrich_claims
-from app.services.human_review_queue import HumanReviewItem, list_human_review_items
+from app.services.human_review_queue import (
+    HumanReviewItem,
+    ReviewWorkflowState,
+    list_human_review_items,
+    list_review_workflow_items,
+)
 from scripts.migrate_intelligence_review_persistence_slice4 import inspect as inspect_intelligence_review_schema
 from scripts.migrate_promotion_policy_persistence_slice7 import inspect as inspect_promotion_policy_schema
 
 DEFAULT_DATABASE = Path("data/runway_safe.db")
 DEFAULT_LIMIT = 20
+DEFAULT_STATE_FILTER = "active"
 SCHEMA_MIGRATION_REQUIRED_BLOCKER = "REVIEW_QUEUE_SCHEMA_MIGRATION_REQUIRED"
+
+_RESOLVED_STATES = frozenset(
+    {
+        ReviewWorkflowState.RESOLVED_REJECTED.value,
+        ReviewWorkflowState.RESOLVED_DUPLICATE.value,
+        ReviewWorkflowState.RESOLVED_SIGNAL_CREATED.value,
+    }
+)
 
 
 @dataclass(frozen=True)
 class ReviewQueueConfig:
     database: Path
     limit: "int | None" = DEFAULT_LIMIT
+    state: str = DEFAULT_STATE_FILTER
 
 
 @dataclass(frozen=True)
@@ -95,11 +131,37 @@ def check_schema_readiness(database: Path) -> dict:
     }
 
 
+_VALID_STATE_FILTERS = ("active", "all", "resolved")
+
+
 def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
     """Never writes. Refuses (via `blockers`, never an exception) rather
     than querying an unready schema. The ONLY function that does the actual
-    work - `main()` calls this and renders it; tests call this directly."""
+    work - `main()` calls this and renders it; tests call this directly.
+
+    `config.state` selects which slice of the workflow picture to show:
+    "active" (default) - list_human_review_items(), items still needing a
+    human decision now; "all" - list_review_workflow_items() unfiltered,
+    every HUMAN_REVIEW_REQUIRED row annotated with its derived state, SQL
+    `LIMIT` applied directly since no state sub-filtering happens afterward;
+    "resolved" - list_review_workflow_items() filtered to just the
+    RESOLVED_* states, for confirming an item (e.g. real MSP #222) was
+    correctly resolved and why.
+
+    REVIEW-CHECKPOINT FIX: "resolved" must NOT pass `config.limit` into the
+    inner list_review_workflow_items() call - that function's own `limit`
+    bounds the raw HUMAN_REVIEW_REQUIRED SQL query before any state
+    filtering, so if the newest rows (fetched first) all happen to be
+    non-resolved, the SQL-level limit could consume them and leave zero rows
+    for the resolved-state filter to find, even when resolved items exist
+    further down (the identical failure shape
+    app.services.human_review_queue.list_human_review_items() itself
+    already guards against for "active" - this script's own "resolved" path
+    had not received the same fix until now). Fetches everything, filters to
+    resolved states, then applies `limit` in Python instead."""
     database_str = str(config.database.resolve())
+    if config.state not in _VALID_STATE_FILTERS:
+        raise ValueError(f"state must be one of {_VALID_STATE_FILTERS!r}, got {config.state!r}")
     schema = check_schema_readiness(config.database)
     if not schema["ready"]:
         return ReviewQueueReport(
@@ -109,7 +171,14 @@ def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
     engine = build_readonly_engine(config.database)
     try:
         with Session(engine) as session:
-            items = list_human_review_items(session, limit=config.limit)
+            if config.state == "active":
+                items = list_human_review_items(session, limit=config.limit)
+            elif config.state == "all":
+                items = list_review_workflow_items(session, limit=config.limit)
+            else:
+                all_items = list_review_workflow_items(session)
+                resolved = tuple(item for item in all_items if item.review_workflow_state in _RESOLVED_STATES)
+                items = resolved[: config.limit] if config.limit is not None else resolved
             session.rollback()  # defensive - this session never adds/flushes anything
     finally:
         engine.dispose()
@@ -188,6 +257,12 @@ def render_item_report(item: HumanReviewItem) -> str:
     lines.append(f"  promotion_policy_decision={item.promotion_policy_decision}")
     lines.append(f"  promotion_policy_reason={item.promotion_policy_reason}")
 
+    lines.append("")
+    lines.append("Reviewer workflow (Slice 9D, derived - never persisted)")
+    lines.append(f"  review_workflow_state={item.review_workflow_state}")
+    lines.append(f"  latest_reviewer_action={item.latest_reviewer_action}")
+    lines.append(f"  linked_signal_id={item.linked_signal_id}")
+
     if item.invariant_warnings:
         lines.append("")
         lines.append("!! INVARIANT WARNINGS !!")
@@ -232,7 +307,14 @@ def render_item_report(item: HumanReviewItem) -> str:
     return "\n".join(lines)
 
 
-def render_report(report: ReviewQueueReport) -> str:
+_EMPTY_MESSAGE_BY_STATE = {
+    "active": "Human review queue is empty. Nothing currently requires a human decision.",
+    "all": "No governed evidence is currently HUMAN_REVIEW_REQUIRED.",
+    "resolved": "No governed evidence has been resolved (rejected/duplicate/signal-created) yet.",
+}
+
+
+def render_report(report: ReviewQueueReport, *, state: str = DEFAULT_STATE_FILTER) -> str:
     if report.blockers:
         return (
             f"Database: {report.database}\n"
@@ -240,9 +322,10 @@ def render_report(report: ReviewQueueReport) -> str:
             f"schema_readiness: {report.schema_readiness}\n"
         )
     if not report.items:
-        return f"Database: {report.database}\nHuman review queue is empty. Nothing requires review.\n"
+        empty_message = _EMPTY_MESSAGE_BY_STATE.get(state, _EMPTY_MESSAGE_BY_STATE["active"])
+        return f"Database: {report.database}\n{empty_message}\n"
 
-    parts = [f"Database: {report.database}\n{len(report.items)} item(s) in the human review queue:\n"]
+    parts = [f"Database: {report.database}\n{len(report.items)} item(s) in the '{state}' human review view:\n"]
     for item in report.items:
         parts.append(render_item_report(item))
         parts.append("")
@@ -253,14 +336,19 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    parser.add_argument(
+        "--state", choices=_VALID_STATE_FILTERS, default=DEFAULT_STATE_FILTER,
+        help="active (default): needs a human decision now. all: every HUMAN_REVIEW_REQUIRED row, any state. "
+        "resolved: only rejected/duplicate/signal-created items.",
+    )
     return parser
 
 
 def main(argv: "list[str] | None" = None) -> int:
     args = _parser().parse_args(argv)
-    config = ReviewQueueConfig(database=args.database, limit=args.limit)
+    config = ReviewQueueConfig(database=args.database, limit=args.limit, state=args.state)
     report = run_review_queue(config)
-    print(render_report(report))
+    print(render_report(report, state=args.state))
     return 1 if report.blockers else 0
 
 

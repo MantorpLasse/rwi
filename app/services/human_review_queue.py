@@ -1,33 +1,51 @@
-"""Human review queue — read-only governed-evidence query
-(docs/architecture/human-review-queue-slice8-report.md, Slice 8 of
-docs/architecture/evidence-to-signal-semantics-design.md).
+"""Human review queue — read-only, workflow-aware governed-evidence query
+(docs/architecture/human-review-workflow-awareness-slice9d-report.md, Slice
+9D of docs/architecture/reviewer-action-human-signal-promotion-slice9-design.md;
+built on Slice 8's own docs/architecture/human-review-queue-slice8-report.md).
 
     SourceAssertion (already governed: identity + intelligence review +
     promotion policy, all already persisted by Slices 1/4/7)
+        + latest ReviewerAction, if any (Slice 9B) + signal_id, if any
+          (Slice 9C)
         -> list_human_review_items()
-        -> tuple[HumanReviewItem, ...]
+        -> tuple[HumanReviewItem, ...] restricted to items still needing a
+           human DECISION
         -> STOP (no reviewer actions, no Signal write - a future,
            separately-authorized slice)
 
 Answers exactly one question: "which already-governed SourceAssertion rows
-need a human's judgment before anything further happens, and what does a
-reviewer need to see to make that judgment?" It never asks "create/update a
-Signal," never performs a reviewer action, and never writes anything -
-`session.scalars()`/`session.execute()` (SELECT only) are the only session
-calls this module makes. No `session.add()`, no `session.flush()`, no
-`session.commit()` anywhere.
+need a human's judgment RIGHT NOW, and what does a reviewer need to see to
+make that judgment?" - not "which rows were ever promotion_policy_decision
+== HUMAN_REVIEW_REQUIRED" (Slice 8's own, now-superseded question). It never
+asks "create/update a Signal," never performs a reviewer action, and never
+writes anything - `session.scalars()`/`session.execute()`/`session.query()`
+(SELECT only) are the only session calls this module makes. No
+`session.add()`, no `session.flush()`, no `session.commit()` anywhere.
+
+SLICE 9D WORKFLOW-AWARENESS: real SourceAssertion #222 exposed the exact
+defect this slice fixes. #222 was resolved by a human as MARK_DUPLICATE
+(linked to existing Signal #67), yet Slice 8's own queue kept listing it
+forever, because it only ever read promotion_policy_decision - an
+append-only, historical classification that never changes once computed -
+and had no concept of ReviewerAction (Slice 9B) or SourceAssertion.signal_id
+(Slice 9C) at all. `derive_workflow_state()` below closes that gap by
+deriving a small, purely-computed (never persisted) classification from the
+latest ReviewerAction plus signal_id, reusing
+app.services.reviewer_action_persistence.get_latest_reviewer_action()'s own
+ordering semantics rather than duplicating them.
 
 GENERIC, NOT SOURCE-SPECIFIC: this module has no knowledge of MAC/Granicus
 or any other source family - it reads only fields every governed
 SourceAssertion row already carries (identity/intelligence/promotion
-decision-and-reason pairs, raw evidence, Source/Airport metadata). It does
-NOT import app.acquisition.mac_granicus_claims or any other source-specific
-extractor - claim re-derivation, where available, is a deliberately separate
-concern (app.services.human_review_claim_enrichment), composed by the CLI,
-never required by this module to function.
+decision-and-reason pairs, raw evidence, Source/Airport metadata, reviewer
+history, Signal linkage). It does NOT import app.acquisition.mac_granicus_claims
+or any other source-specific extractor - claim re-derivation, where
+available, is a deliberately separate concern
+(app.services.human_review_claim_enrichment), composed by the CLI, never
+required by this module to function.
 
-QUEUE FILTER: `SourceAssertion.promotion_policy_decision ==
-PromotionPolicyOutcome.HUMAN_REVIEW_REQUIRED.value` exactly. No fuzzy
+BASE FILTER (unchanged from Slice 8): `SourceAssertion.promotion_policy_decision
+== PromotionPolicyOutcome.HUMAN_REVIEW_REQUIRED.value` exactly. No fuzzy
 interpretation - AUTO_ELIGIBLE, DO_NOT_PROMOTE, NULL, and any unrecognized
 value are all excluded identically. NULL is never treated as "needs review"
 - an unevaluated row is not a queue item, it is simply not yet evaluated
@@ -38,11 +56,18 @@ ever computed for evidence whose identity is ATTACH_CONFIRMED and whose
 intelligence review is REVIEW_REQUIRED (app.services.promotion_policy_evaluation's
 own outcome mapping) - so a HUMAN_REVIEW_REQUIRED row should always carry
 `identity_guard_decision == "ATTACH_CONFIRMED"` and `intelligence_review_decision
-== "REVIEW_REQUIRED"`. If a real row is ever found violating this (e.g. from
-data corruption, or the two persistence functions having been called at
-different times against evidence that changed in between), this module
-surfaces it as an explicit `HumanReviewItem.invariant_warnings` entry -
-never corrects, never hides, never modifies the row.
+== "REVIEW_REQUIRED"`. Slice 9D adds a second class of invariant check: a
+latest ReviewerAction whose own fields disagree with SourceAssertion.signal_id
+in a way that should never happen given the write paths already committed
+(e.g. MARK_DUPLICATE's own duplicate_of_signal_id disagreeing with the
+actual signal_id link, or a REJECT_SIGNAL/DEFER/NEEDS_MORE_EVIDENCE action
+coexisting with a signal_id that should never have been set for those
+outcomes). Both classes are surfaced as explicit `HumanReviewItem.invariant_warnings`
+entries - never corrected, never hidden, never modified. (An
+"APPROVE_SIGNAL linked to an unrelated/drifted Signal" cannot be checked
+here - there is no second, independent source of truth for which Signal
+*should* be linked; that drift check already lives at Slice 9C's own
+creation-time compatibility-signature comparison.)
 
 SOURCE AUTHORITY: `HumanReviewItem.source_reliability_level_raw` carries
 `Source.reliability_level` verbatim, explicitly named and documented as the
@@ -54,26 +79,73 @@ it, only to avoid conflating the two).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+from typing import Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import SourceAssertion
+from app.models.reviewer_action import ReviewerAction
 from app.services.promotion_policy_evaluation import PromotionPolicyOutcome
 from app.services.signal_candidate_evaluation import SignalCandidateOutcome
 
-__all__ = ["HumanReviewItem", "list_human_review_items"]
+__all__ = [
+    "HumanReviewItem",
+    "ReviewWorkflowState",
+    "list_human_review_items",
+    "list_review_workflow_items",
+]
 
 _EXPECTED_IDENTITY_DECISION = "ATTACH_CONFIRMED"
 _EXPECTED_INTELLIGENCE_DECISION = SignalCandidateOutcome.REVIEW_REQUIRED.value
 _QUEUE_DECISION = PromotionPolicyOutcome.HUMAN_REVIEW_REQUIRED.value
 
 
+class ReviewWorkflowState(str, Enum):
+    """A read-only, purely-derived classification of "what state is this
+    governed SourceAssertion's human review actually in" - never persisted
+    anywhere, recomputed on every read from (promotion_policy_decision
+    already being HUMAN_REVIEW_REQUIRED, latest ReviewerAction, signal_id).
+    Deliberately the smallest vocabulary that distinguishes every reviewer
+    action outcome plus the "never reviewed yet" case - not a workflow
+    engine, no transitions, no persistence, no scheduler."""
+
+    ACTIVE_REVIEW = "ACTIVE_REVIEW"
+    DEFERRED = "DEFERRED"
+    NEEDS_MORE_EVIDENCE = "NEEDS_MORE_EVIDENCE"
+    APPROVED_PENDING_SIGNAL = "APPROVED_PENDING_SIGNAL"
+    RESOLVED_REJECTED = "RESOLVED_REJECTED"
+    RESOLVED_DUPLICATE = "RESOLVED_DUPLICATE"
+    RESOLVED_SIGNAL_CREATED = "RESOLVED_SIGNAL_CREATED"
+
+
+# The states that mean "a human still has a decision to make right now."
+# NEEDS_MORE_EVIDENCE is included deliberately: this slice adds no
+# acquisition trigger and no scheduler, so excluding it would make an item
+# vanish from all visibility the moment a reviewer asks for more evidence,
+# with no committed path back into view. DEFERRED is excluded deliberately
+# (task's own recommendation) - a human already chose to set it aside;
+# resurfacing it automatically would need a scheduler, explicitly out of
+# scope. APPROVED_PENDING_SIGNAL is excluded per this slice's own explicit
+# instruction: the human's decision is already made (APPROVE_SIGNAL); what
+# remains is a separate governed-creation operation, not a second review.
+_ACTIVE_QUEUE_STATES = (ReviewWorkflowState.ACTIVE_REVIEW, ReviewWorkflowState.NEEDS_MORE_EVIDENCE)
+_ACTIVE_QUEUE_STATE_VALUES = frozenset(state.value for state in _ACTIVE_QUEUE_STATES)
+
+# Actions whose own semantics require signal_id to still be NULL - a human
+# who rejected, deferred, or asked for more evidence never authorized any
+# Signal linkage; if signal_id is set anyway, that is a real, surfaced
+# invariant violation, never silently ignored.
+_ACTIONS_EXPECTING_NULL_SIGNAL_ID = ("DEFER", "NEEDS_MORE_EVIDENCE", "REJECT_SIGNAL")
+
+
 @dataclass(frozen=True)
 class HumanReviewItem:
     """One queue entry - an immutable, ORM-free snapshot of one governed
-    SourceAssertion row's already-persisted fields. Never a live ORM
-    instance (safe to hold/compare/serialize after the session closes)."""
+    SourceAssertion row's already-persisted fields, plus its purely-derived
+    reviewer-workflow state. Never a live ORM instance (safe to
+    hold/compare/serialize after the session closes)."""
 
     source_assertion_id: int
     airport_id: "int | None"
@@ -100,6 +172,11 @@ class HumanReviewItem:
     promotion_policy_decision: str
     promotion_policy_reason: str
 
+    # Slice 9D additions - all purely derived/read-only, never persisted.
+    latest_reviewer_action: "str | None"
+    linked_signal_id: "int | None"
+    review_workflow_state: str
+
     invariant_warnings: "tuple[str, ...]" = ()
 
 
@@ -109,7 +186,64 @@ def _airport_code(airport) -> "str | None":
     return airport.iata_code or airport.icao_code or airport.faa_code
 
 
-def _invariant_warnings(assertion: SourceAssertion) -> "tuple[str, ...]":
+def derive_workflow_state(
+    latest_action: Optional[ReviewerAction], signal_id: Optional[int],
+) -> ReviewWorkflowState:
+    """Pure function, no I/O: the one place this module's workflow
+    vocabulary (ReviewWorkflowState) is computed. Assumes the caller already
+    confirmed promotion_policy_decision == HUMAN_REVIEW_REQUIRED (this
+    function does not re-check that - it only classifies what to do given a
+    row already in that base population)."""
+    if latest_action is None:
+        return ReviewWorkflowState.ACTIVE_REVIEW
+    if latest_action.action == "DEFER":
+        return ReviewWorkflowState.DEFERRED
+    if latest_action.action == "NEEDS_MORE_EVIDENCE":
+        return ReviewWorkflowState.NEEDS_MORE_EVIDENCE
+    if latest_action.action == "REJECT_SIGNAL":
+        return ReviewWorkflowState.RESOLVED_REJECTED
+    if latest_action.action == "MARK_DUPLICATE":
+        return ReviewWorkflowState.RESOLVED_DUPLICATE
+    if latest_action.action == "APPROVE_SIGNAL":
+        return (
+            ReviewWorkflowState.RESOLVED_SIGNAL_CREATED
+            if signal_id is not None
+            else ReviewWorkflowState.APPROVED_PENDING_SIGNAL
+        )
+    # Unreachable given ReviewerAction's own DB CHECK constraint (exactly
+    # these five action values) - if it is ever reached anyway (e.g. a
+    # future action value added to the vocabulary without updating this
+    # function), fail toward showing the item to a human rather than
+    # silently hiding it as resolved.
+    return ReviewWorkflowState.ACTIVE_REVIEW
+
+
+def _reviewer_action_invariant_warnings(
+    latest_action: Optional[ReviewerAction], signal_id: Optional[int],
+) -> "tuple[str, ...]":
+    if latest_action is None:
+        return ()
+    warnings: "list[str]" = []
+    if latest_action.action == "MARK_DUPLICATE":
+        if signal_id != latest_action.duplicate_of_signal_id:
+            warnings.append(
+                f"INVARIANT_VIOLATION: latest ReviewerAction is MARK_DUPLICATE "
+                f"(duplicate_of_signal_id={latest_action.duplicate_of_signal_id!r}) but "
+                f"source_assertion.signal_id={signal_id!r} - target and link disagree."
+            )
+    elif latest_action.action in _ACTIONS_EXPECTING_NULL_SIGNAL_ID:
+        if signal_id is not None:
+            warnings.append(
+                f"INVARIANT_VIOLATION: latest ReviewerAction is {latest_action.action} but "
+                f"source_assertion.signal_id={signal_id!r} is already set - these should be "
+                "mutually exclusive."
+            )
+    return tuple(warnings)
+
+
+def _invariant_warnings(
+    assertion: SourceAssertion, latest_action: Optional[ReviewerAction],
+) -> "tuple[str, ...]":
     warnings: "list[str]" = []
     if assertion.identity_guard_decision != _EXPECTED_IDENTITY_DECISION:
         warnings.append(
@@ -124,12 +258,42 @@ def _invariant_warnings(assertion: SourceAssertion) -> "tuple[str, ...]":
             f"intelligence_review_decision={assertion.intelligence_review_decision!r} (expected "
             f"{_EXPECTED_INTELLIGENCE_DECISION!r})."
         )
+    warnings.extend(_reviewer_action_invariant_warnings(latest_action, assertion.signal_id))
     return tuple(warnings)
 
 
-def _to_item(assertion: SourceAssertion) -> HumanReviewItem:
+def _latest_actions_by_assertion(
+    session: Session, source_assertion_ids: Sequence[int],
+) -> "dict[int, ReviewerAction]":
+    """Batched equivalent of calling
+    app.services.reviewer_action_persistence.get_latest_reviewer_action()
+    once per id - avoids N+1 by fetching every candidate row for the whole
+    id set in one query, ordered by the identical (created_at desc, id desc)
+    tiebreak that function uses, then keeping only the first (= latest) row
+    per source_assertion_id. Never mutates reviewer ordering semantics -
+    tested directly against get_latest_reviewer_action() for equivalence."""
+    if not source_assertion_ids:
+        return {}
+    rows = (
+        session.query(ReviewerAction)
+        .filter(ReviewerAction.source_assertion_id.in_(source_assertion_ids))
+        .order_by(
+            ReviewerAction.source_assertion_id,
+            ReviewerAction.created_at.desc(),
+            ReviewerAction.id.desc(),
+        )
+        .all()
+    )
+    latest: "dict[int, ReviewerAction]" = {}
+    for row in rows:
+        latest.setdefault(row.source_assertion_id, row)  # first per group, per the ORDER BY above, is the latest
+    return latest
+
+
+def _to_item(assertion: SourceAssertion, latest_action: Optional[ReviewerAction]) -> HumanReviewItem:
     airport = assertion.airport
     source = assertion.source
+    workflow_state = derive_workflow_state(latest_action, assertion.signal_id)
     return HumanReviewItem(
         source_assertion_id=assertion.id,
         airport_id=assertion.airport_id,
@@ -152,18 +316,26 @@ def _to_item(assertion: SourceAssertion) -> HumanReviewItem:
         intelligence_review_reason=assertion.intelligence_review_reason,
         promotion_policy_decision=assertion.promotion_policy_decision,
         promotion_policy_reason=assertion.promotion_policy_reason,
-        invariant_warnings=_invariant_warnings(assertion),
+        latest_reviewer_action=latest_action.action if latest_action else None,
+        linked_signal_id=assertion.signal_id,
+        review_workflow_state=workflow_state.value,
+        invariant_warnings=_invariant_warnings(assertion, latest_action),
     )
 
 
-def list_human_review_items(session: Session, *, limit: "int | None" = None) -> "tuple[HumanReviewItem, ...]":
-    """Read-only: SELECT only, never add/flush/commit. Ordered by
-    `created_at` descending (newest governed evidence first - `created_at`
-    is the one always-populated, non-nullable timestamp every SourceAssertion
-    carries), with `id` descending as a deterministic tiebreaker for rows
-    sharing the same timestamp - never relies on unordered/implicit DB
-    order. `limit`, if given, bounds the result directly in SQL (never
-    fetches the full table and slices in Python)."""
+def list_review_workflow_items(session: Session, *, limit: "int | None" = None) -> "tuple[HumanReviewItem, ...]":
+    """Every SourceAssertion with promotion_policy_decision ==
+    HUMAN_REVIEW_REQUIRED, regardless of derived workflow state - the full
+    picture (active, deferred, needs-more-evidence, approved-pending,
+    resolved-rejected, resolved-duplicate, resolved-signal-created), each
+    row annotated with its own `review_workflow_state`. This is both Slice
+    8's original raw-policy listing (preserved, not removed - see
+    list_human_review_items() below for the now-narrower default) and the
+    audit/debugging "all workflow states" view; kept as one function rather
+    than two, since the underlying query and row-shaping are identical and
+    only the filtering differs. Read-only: SELECT only, never
+    add/flush/commit. Ordered by `created_at` descending, `id` descending
+    tiebreak. `limit`, if given, bounds the result directly in SQL."""
     stmt = (
         select(SourceAssertion)
         .where(SourceAssertion.promotion_policy_decision == _QUEUE_DECISION)
@@ -173,4 +345,34 @@ def list_human_review_items(session: Session, *, limit: "int | None" = None) -> 
     if limit is not None:
         stmt = stmt.limit(limit)
     rows = session.scalars(stmt).all()
-    return tuple(_to_item(row) for row in rows)
+    latest_by_id = _latest_actions_by_assertion(session, [row.id for row in rows])
+    return tuple(_to_item(row, latest_by_id.get(row.id)) for row in rows)
+
+
+def list_human_review_items(session: Session, *, limit: "int | None" = None) -> "tuple[HumanReviewItem, ...]":
+    """The default human-decision queue. SEMANTIC REFINEMENT (Slice 9D):
+    previously (Slice 8) this returned every row with promotion_policy_decision
+    == HUMAN_REVIEW_REQUIRED, full stop - an append-only classification that
+    never changes once computed, so a row stayed listed forever even after a
+    human fully resolved it via a later ReviewerAction. It now returns only
+    rows whose derived `review_workflow_state` is ACTIVE_REVIEW or
+    NEEDS_MORE_EVIDENCE - i.e. rows that still need a human DECISION right
+    now. DEFERRED, APPROVED_PENDING_SIGNAL, and every RESOLVED_* state are
+    excluded - see list_review_workflow_items() for the complete,
+    unfiltered picture (e.g. for audit, or a future "all/resolved" CLI
+    view).
+
+    Because workflow state depends on ReviewerAction history (not knowable
+    from SQL alone without the same batched lookup list_review_workflow_items()
+    already performs), `limit` here bounds the ACTIVE result after
+    filtering, not the raw SQL query - unlike Slice 8's original version,
+    which could apply `LIMIT` directly in SQL because it never needed to
+    look past promotion_policy_decision. Real-world row counts (single
+    digits to low dozens) make this an acceptable, correctness-preserving
+    trade-off; ordering itself is still fully deterministic (`created_at`
+    desc, `id` desc)."""
+    items = list_review_workflow_items(session)
+    active = tuple(item for item in items if item.review_workflow_state in _ACTIVE_QUEUE_STATE_VALUES)
+    if limit is not None:
+        active = active[:limit]
+    return active

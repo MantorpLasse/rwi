@@ -27,11 +27,18 @@ from app.services import human_review_claim_enrichment as hrce
 from app.services import human_review_queue as hrq
 from app.services.discovery_evidence_persistence import DiscoverySourceMetadata, persist_discovery_fragment
 from app.services.evidence_attachment_guard import CandidateAirport
+from app.services.governed_signal_creation import link_source_assertion_to_duplicate_signal
 from app.services.human_review_claim_enrichment import enrich_claims
-from app.services.human_review_queue import list_human_review_items
+from app.services.human_review_queue import (
+    ReviewWorkflowState,
+    derive_workflow_state,
+    list_human_review_items,
+    list_review_workflow_items,
+)
 from app.services.intelligence_review_persistence import persist_intelligence_review
 from app.services.promotion_policy_evaluation import PromotionPolicyContext, SourceAuthorityTier
 from app.services.promotion_policy_persistence import persist_promotion_policy
+from app.services.reviewer_action_persistence import record_reviewer_action
 from scripts import list_human_review_queue as cli
 from scripts.migrate_intelligence_review_persistence_slice4 import downgrade as downgrade_slice4
 from scripts.migrate_promotion_policy_persistence_slice7 import downgrade as downgrade_slice7
@@ -513,3 +520,490 @@ class TestInternationalAndUnsupportedFamily:
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     assert not alias.name.startswith("app.acquisition")
+
+
+# ---------------------------------------------------------------------------
+# Slice 9D - workflow-aware queue
+# (docs/architecture/human-review-workflow-awareness-slice9d-report.md).
+# All fixtures below build on _bare_assertion() (promotion_policy_decision
+# already HUMAN_REVIEW_REQUIRED) plus zero or more ReviewerAction rows -
+# never touches the real database.
+# ---------------------------------------------------------------------------
+
+
+def _existing_signal(session: Session, *, published: bool = True) -> Signal:
+    airport = Airport(name="Existing-Signal Airport", country="USA")
+    session.add(airport)
+    session.flush()
+    signal = Signal(
+        airport=airport, title="Existing signal", category="replacement", confidence="high", published=published,
+    )
+    session.add(signal)
+    session.flush()
+    return signal
+
+
+class TestWorkflowStateDerivation:
+    """1-7. derive_workflow_state() itself, the pure classifier - covers
+    every action/signal_id combination in isolation before testing the
+    queue-level filtering built on top of it."""
+
+    def test_no_action_is_active_review(self):
+        assert derive_workflow_state(None, None) == ReviewWorkflowState.ACTIVE_REVIEW
+
+    def test_defer_is_deferred(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        action = record_reviewer_action(session, assertion, action="DEFER", reason="x", reviewer="human:t")
+        session.commit()
+        assert derive_workflow_state(action, None) == ReviewWorkflowState.DEFERRED
+
+    def test_needs_more_evidence_state(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        action = record_reviewer_action(session, assertion, action="NEEDS_MORE_EVIDENCE", reason="x", reviewer="human:t")
+        session.commit()
+        assert derive_workflow_state(action, None) == ReviewWorkflowState.NEEDS_MORE_EVIDENCE
+
+    def test_approve_signal_no_signal_is_approved_pending(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        action = record_reviewer_action(session, assertion, action="APPROVE_SIGNAL", reason="x", reviewer="human:t")
+        session.commit()
+        assert derive_workflow_state(action, None) == ReviewWorkflowState.APPROVED_PENDING_SIGNAL
+
+    def test_approve_signal_with_signal_is_resolved_signal_created(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        action = record_reviewer_action(session, assertion, action="APPROVE_SIGNAL", reason="x", reviewer="human:t")
+        session.commit()
+        assert derive_workflow_state(action, 999) == ReviewWorkflowState.RESOLVED_SIGNAL_CREATED
+
+    def test_reject_signal_is_resolved_rejected(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        action = record_reviewer_action(session, assertion, action="REJECT_SIGNAL", reason="x", reviewer="human:t")
+        session.commit()
+        assert derive_workflow_state(action, None) == ReviewWorkflowState.RESOLVED_REJECTED
+
+    def test_mark_duplicate_is_resolved_duplicate(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        target = _existing_signal(session)
+        session.commit()
+        action = record_reviewer_action(
+            session, assertion, action="MARK_DUPLICATE", reason="x", reviewer="human:t",
+            duplicate_of_signal_id=target.id,
+        )
+        session.commit()
+        assert derive_workflow_state(action, target.id) == ReviewWorkflowState.RESOLVED_DUPLICATE
+
+
+class TestMSP222ExactRegression:
+    """8. Exact reproduction of the real production MSP #222 resolution:
+    ReviewerAction #1 APPROVE_SIGNAL, superseded by #2 MARK_DUPLICATE ->
+    Signal #67-shaped target, signal_id linked. This is the specific real
+    workflow defect Slice 9D fixes - before this slice, #222 stayed listed
+    in the active queue forever."""
+
+    def test_resolved_duplicate_msp_222_shape(self, session):
+        assertion, claims = _seed_msp_assertion(session)
+        existing_signal = _existing_signal(session)
+        session.commit()
+
+        approve = record_reviewer_action(
+            session, assertion, action="APPROVE_SIGNAL", reason="initial approval", reviewer="human:rwi-owner",
+        )
+        session.commit()
+        record_reviewer_action(
+            session, assertion, action="MARK_DUPLICATE", reason="resolved as duplicate", reviewer="human:rwi-owner",
+            supersedes_action_id=approve.id, duplicate_of_signal_id=existing_signal.id,
+        )
+        session.commit()
+        link_source_assertion_to_duplicate_signal(session, assertion)
+        session.commit()
+
+        # 9. Default active queue excludes it.
+        active = list_human_review_items(session)
+        assert active == ()
+
+        # Full picture still shows it, correctly classified.
+        all_items = list_review_workflow_items(session)
+        assert len(all_items) == 1
+        item = all_items[0]
+        assert item.review_workflow_state == ReviewWorkflowState.RESOLVED_DUPLICATE.value
+        assert item.latest_reviewer_action == "MARK_DUPLICATE"
+        assert item.linked_signal_id == existing_signal.id
+        assert item.invariant_warnings == ()
+
+        # Evidence remains fully queryable/unmodified - not deleted or hidden.
+        fresh = session.get(SourceAssertion, assertion.id)
+        assert fresh is not None
+        assert fresh.raw_relevant_text == assertion.raw_relevant_text
+        assert fresh.identity_guard_decision == "ATTACH_CONFIRMED"
+
+
+class TestDefaultActiveQueueFiltering:
+    """9-12. Default queue exclusion/inclusion per derived state."""
+
+    def test_excludes_resolved_duplicate(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        target = _existing_signal(session)
+        session.commit()
+        record_reviewer_action(
+            session, assertion, action="MARK_DUPLICATE", reason="x", reviewer="human:t",
+            duplicate_of_signal_id=target.id,
+        )
+        session.commit()
+        assert list_human_review_items(session) == ()
+
+    def test_excludes_resolved_rejected(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        record_reviewer_action(session, assertion, action="REJECT_SIGNAL", reason="x", reviewer="human:t")
+        session.commit()
+        assert list_human_review_items(session) == ()
+
+    def test_excludes_approved_pending_signal(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        record_reviewer_action(session, assertion, action="APPROVE_SIGNAL", reason="x", reviewer="human:t")
+        session.commit()
+        assert list_human_review_items(session) == ()
+
+    def test_excludes_resolved_signal_created(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        target = _existing_signal(session)
+        session.commit()
+        record_reviewer_action(session, assertion, action="APPROVE_SIGNAL", reason="x", reviewer="human:t")
+        session.commit()
+        assertion.signal_id = target.id  # simulate a completed governed creation link
+        session.commit()
+        assert list_human_review_items(session) == ()
+
+    def test_excludes_deferred(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        record_reviewer_action(session, assertion, action="DEFER", reason="x", reviewer="human:t")
+        session.commit()
+        assert list_human_review_items(session) == ()
+
+    def test_includes_needs_more_evidence(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        record_reviewer_action(session, assertion, action="NEEDS_MORE_EVIDENCE", reason="x", reviewer="human:t")
+        session.commit()
+        active = list_human_review_items(session)
+        assert len(active) == 1
+        assert active[0].review_workflow_state == ReviewWorkflowState.NEEDS_MORE_EVIDENCE.value
+
+    def test_fresh_item_with_no_action_remains_active(self, session):
+        _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        active = list_human_review_items(session)
+        assert len(active) == 1
+        assert active[0].review_workflow_state == ReviewWorkflowState.ACTIVE_REVIEW.value
+        assert active[0].latest_reviewer_action is None
+        assert active[0].linked_signal_id is None
+
+    def test_active_item_remains_visible_alongside_resolved_items(self, session):
+        active_assertion = _bare_assertion(
+            session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED", source_locator="loc-active",
+            artifact_identity="artifact-active", raw_fragment_hash="hash-active",
+        )
+        resolved_assertion = _bare_assertion(
+            session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED", source_locator="loc-resolved",
+            artifact_identity="artifact-resolved", raw_fragment_hash="hash-resolved",
+        )
+        session.commit()
+        record_reviewer_action(session, resolved_assertion, action="REJECT_SIGNAL", reason="x", reviewer="human:t")
+        session.commit()
+
+        active = list_human_review_items(session)
+        assert [item.source_assertion_id for item in active] == [active_assertion.id]
+
+
+class TestInvariantWarnings:
+    """13. Reviewer-action-vs-signal_id invariant mismatches are surfaced,
+    never silently repaired."""
+
+    def test_mark_duplicate_target_disagrees_with_signal_id(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        target = _existing_signal(session)
+        session.commit()
+        record_reviewer_action(
+            session, assertion, action="MARK_DUPLICATE", reason="x", reviewer="human:t",
+            duplicate_of_signal_id=target.id,
+        )
+        session.commit()
+        # Deliberately never linked - signal_id stays NULL, disagreeing with duplicate_of_signal_id.
+        item = list_review_workflow_items(session)[0]
+        assert item.review_workflow_state == ReviewWorkflowState.RESOLVED_DUPLICATE.value  # still classified, not repaired
+        assert len(item.invariant_warnings) == 1
+        assert "target and link disagree" in item.invariant_warnings[0]
+
+    def test_reject_signal_with_signal_id_already_set_warns(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        target = _existing_signal(session)
+        session.commit()
+        record_reviewer_action(session, assertion, action="REJECT_SIGNAL", reason="x", reviewer="human:t")
+        assertion.signal_id = target.id  # inconsistent, deliberately, for this test
+        session.commit()
+        item = list_review_workflow_items(session)[0]
+        assert len(item.invariant_warnings) == 1
+        assert "mutually exclusive" in item.invariant_warnings[0]
+
+    def test_consistent_mark_duplicate_has_no_warning(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        target = _existing_signal(session)
+        session.commit()
+        record_reviewer_action(
+            session, assertion, action="MARK_DUPLICATE", reason="x", reviewer="human:t",
+            duplicate_of_signal_id=target.id,
+        )
+        assertion.signal_id = target.id
+        session.commit()
+        item = list_review_workflow_items(session)[0]
+        assert item.invariant_warnings == ()
+
+
+class TestLatestReviewerActionReuse:
+    """14. The batched lookup used by the queue must agree exactly with
+    get_latest_reviewer_action(), row for row - never a second, drifting
+    ordering implementation."""
+
+    def test_batched_lookup_matches_get_latest_reviewer_action_per_row(self, session):
+        from app.services.reviewer_action_persistence import get_latest_reviewer_action
+
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        first = record_reviewer_action(session, assertion, action="DEFER", reason="x", reviewer="human:a")
+        session.commit()
+        second = record_reviewer_action(
+            session, assertion, action="NEEDS_MORE_EVIDENCE", reason="y", reviewer="human:b",
+            supersedes_action_id=first.id,
+        )
+        session.commit()
+
+        expected = get_latest_reviewer_action(session, assertion.id)
+        item = list_review_workflow_items(session)[0]
+        assert item.latest_reviewer_action == expected.action == second.action
+
+
+class TestOrderingLimitAndExclusions:
+    """15-19. Ordering/limit continue to hold for the workflow-aware default
+    queue; malformed/AUTO_ELIGIBLE/DO_NOT_PROMOTE rows remain excluded
+    exactly as under Slice 8."""
+
+    def test_deterministic_ordering_preserved(self, session):
+        older = _bare_assertion(
+            session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED", created_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="loc-older", artifact_identity="artifact-older", raw_fragment_hash="hash-older",
+        )
+        newer = _bare_assertion(
+            session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED", created_at=datetime(2024, 6, 1, tzinfo=UTC),
+            source_locator="loc-newer", artifact_identity="artifact-newer", raw_fragment_hash="hash-newer",
+        )
+        session.commit()
+        active = list_human_review_items(session)
+        assert [item.source_assertion_id for item in active] == [newer.id, older.id]
+
+    def test_optional_limit_applies_after_workflow_filtering(self, session):
+        for i in range(3):
+            _bare_assertion(
+                session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED",
+                source_locator=f"loc-{i}", artifact_identity=f"artifact-{i}", raw_fragment_hash=f"hash-{i}",
+            )
+        session.commit()
+        active = list_human_review_items(session, limit=2)
+        assert len(active) == 2
+
+    def test_limit_does_not_truncate_active_items_when_newer_rows_are_resolved(self, session):
+        """Review-checkpoint regression (H): the exact failure shape a naive
+        SQL-level LIMIT-before-filtering implementation would produce - the
+        newest rows (which SQL ordering would return first) are all already
+        resolved, while older still-active rows exist further down. If
+        `limit` were applied to the raw HUMAN_REVIEW_REQUIRED query before
+        workflow-state filtering, this would incorrectly return 0 active
+        items instead of the 2 that actually need review."""
+        for i in range(3):
+            resolved = _bare_assertion(
+                session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED",
+                created_at=datetime(2024, 6, 1 + i, tzinfo=UTC),
+                source_locator=f"loc-resolved-{i}", artifact_identity=f"artifact-resolved-{i}",
+                raw_fragment_hash=f"hash-resolved-{i}",
+            )
+            session.commit()
+            record_reviewer_action(session, resolved, action="REJECT_SIGNAL", reason="x", reviewer="human:t")
+            session.commit()
+
+        active_ids = []
+        for i in range(2):
+            active_assertion = _bare_assertion(
+                session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED",
+                created_at=datetime(2024, 1, 1 + i, tzinfo=UTC),
+                source_locator=f"loc-active-{i}", artifact_identity=f"artifact-active-{i}",
+                raw_fragment_hash=f"hash-active-{i}",
+            )
+            active_ids.append(active_assertion.id)
+        session.commit()
+
+        result = list_human_review_items(session, limit=2)
+        assert sorted(item.source_assertion_id for item in result) == sorted(active_ids)
+
+    def test_malformed_promotion_policy_excluded_from_active_and_all(self, session):
+        _bare_assertion(session, promotion_policy_decision="NOT_A_REAL_VALUE")
+        session.commit()
+        assert list_human_review_items(session) == ()
+        assert list_review_workflow_items(session) == ()
+
+    def test_auto_eligible_excluded(self, session):
+        _bare_assertion(session, promotion_policy_decision="AUTO_ELIGIBLE")
+        session.commit()
+        assert list_human_review_items(session) == ()
+        assert list_review_workflow_items(session) == ()
+
+    def test_do_not_promote_excluded(self, session):
+        _bare_assertion(session, promotion_policy_decision="DO_NOT_PROMOTE")
+        session.commit()
+        assert list_human_review_items(session) == ()
+        assert list_review_workflow_items(session) == ()
+
+
+class TestNoWrites:
+    """20-21. Strictly read-only: no DB writes, no Signal writes, from any
+    function in this slice."""
+
+    def test_no_db_writes_from_queue_functions(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        target = _existing_signal(session)
+        session.commit()
+        record_reviewer_action(
+            session, assertion, action="MARK_DUPLICATE", reason="x", reviewer="human:t",
+            duplicate_of_signal_id=target.id,
+        )
+        session.commit()
+
+        before_sa = [(a.id, a.signal_id) for a in session.scalars(select(SourceAssertion)).all()]
+        list_human_review_items(session)
+        list_review_workflow_items(session)
+        after_sa = [(a.id, a.signal_id) for a in session.scalars(select(SourceAssertion)).all()]
+        assert before_sa == after_sa
+
+    def test_no_signal_writes_from_queue_functions(self, session):
+        assertion = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        target = _existing_signal(session)
+        session.commit()
+        record_reviewer_action(
+            session, assertion, action="MARK_DUPLICATE", reason="x", reviewer="human:t",
+            duplicate_of_signal_id=target.id,
+        )
+        session.commit()
+
+        before = session.scalars(select(Signal)).all()
+        list_human_review_items(session)
+        list_review_workflow_items(session)
+        after = session.scalars(select(Signal)).all()
+        assert len(before) == len(after) == 1
+
+    def test_queue_module_never_constructs_a_reviewer_action_or_mutates_session(self):
+        tree = ast.parse(inspect.getsource(hrq))
+        forbidden_attrs = {"add", "flush", "commit", "delete", "update"}
+        hits = [
+            node.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs
+        ]
+        assert hits == []
+
+
+class TestCLIReadOnlyAndStateFilter:
+    """22. CLI remains read-only under the new --state option; verifies the
+    active/all/resolved views render distinctly."""
+
+    def test_cli_read_only_with_state_all(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            assertion = _bare_assertion(s, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+            target = _existing_signal(s)
+            s.commit()
+            record_reviewer_action(
+                s, assertion, action="MARK_DUPLICATE", reason="x", reviewer="human:t",
+                duplicate_of_signal_id=target.id,
+            )
+            s.commit()
+        engine.dispose()
+
+        sha_before = _file_sha(db)
+        active_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="active"))
+        all_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="all"))
+        resolved_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="resolved"))
+        sha_after = _file_sha(db)
+
+        assert sha_before == sha_after  # strictly read-only
+        assert active_report.items == ()
+        assert len(all_report.items) == 1
+        assert len(resolved_report.items) == 1
+        assert "RESOLVED_DUPLICATE" in cli.render_report(resolved_report, state="resolved")
+
+    def test_invalid_state_rejected(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        with pytest.raises(ValueError):
+            cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="not-a-real-state"))
+
+    def test_resolved_state_limit_does_not_truncate_when_newer_rows_are_active(self, tmp_path):
+        """Review-checkpoint regression: run_review_queue()'s "resolved"
+        branch used to pass `limit` straight into list_review_workflow_items(),
+        which bounds the raw SQL query before any state filtering - if the
+        newest rows (fetched first) are all still active, a small limit
+        could consume them and leave zero rows for the resolved-state filter
+        to find, even though a resolved item exists further down. Fixed to
+        fetch everything, filter to resolved, then limit in Python."""
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            for i in range(3):
+                _bare_assertion(
+                    s, promotion_policy_decision="HUMAN_REVIEW_REQUIRED",
+                    created_at=datetime(2024, 6, 1 + i, tzinfo=UTC),
+                    source_locator=f"loc-active-{i}", artifact_identity=f"artifact-active-{i}",
+                    raw_fragment_hash=f"hash-active-{i}",
+                )
+            s.commit()
+            resolved = _bare_assertion(
+                s, promotion_policy_decision="HUMAN_REVIEW_REQUIRED",
+                created_at=datetime(2024, 1, 1, tzinfo=UTC),
+                source_locator="loc-resolved-0", artifact_identity="artifact-resolved-0",
+                raw_fragment_hash="hash-resolved-0",
+            )
+            s.commit()
+            record_reviewer_action(s, resolved, action="REJECT_SIGNAL", reason="x", reviewer="human:t")
+            s.commit()
+        engine.dispose()
+
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="resolved", limit=3))
+        assert len(report.items) == 1
+        assert report.items[0].review_workflow_state == ReviewWorkflowState.RESOLVED_REJECTED.value
+
+
+class TestInternationalWorkflowReadiness:
+    """24. Workflow classification is source/airport/currency agnostic - a
+    synthetic non-US, non-MAC item classifies identically to the MSP case."""
+
+    def test_non_us_item_mark_duplicate_classifies_identically(self, session):
+        assertion = _bare_assertion(
+            session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED", parser_identifier="haneda-authority-v1",
+            source_locator="haneda-loc-1", artifact_identity="haneda-artifact-1", raw_fragment_hash="haneda-hash-1",
+        )
+        target = _existing_signal(session)
+        session.commit()
+        record_reviewer_action(
+            session, assertion, action="MARK_DUPLICATE", reason="x", reviewer="human:t",
+            duplicate_of_signal_id=target.id,
+        )
+        assertion.signal_id = target.id
+        session.commit()
+
+        assert list_human_review_items(session) == ()
+        item = list_review_workflow_items(session)[0]
+        assert item.review_workflow_state == ReviewWorkflowState.RESOLVED_DUPLICATE.value
+        assert item.invariant_warnings == ()
