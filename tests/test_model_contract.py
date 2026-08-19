@@ -145,6 +145,8 @@ EXPECTED_COLUMNS = {
         "identity_guard_reason": ("TEXT", True, None, None),
         "intelligence_review_decision": ("VARCHAR(30)", True, None, None),
         "intelligence_review_reason": ("TEXT", True, None, None),
+        "promotion_policy_decision": ("VARCHAR(30)", True, None, None),
+        "promotion_policy_reason": ("TEXT", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
     "physical_installation_identities": {

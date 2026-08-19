@@ -111,6 +111,31 @@ class SourceAssertion(Base):
     intelligence_review_decision: Mapped[Optional[str]] = mapped_column(String(30))
     intelligence_review_reason: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Additive (docs/architecture/promotion-policy-persistence-slice7-report.md).
+    # Populated ONLY by app/services/promotion_policy_persistence.py, from
+    # app.services.promotion_policy_evaluation.PromotionPolicyDecision - never
+    # by NASR/USAspending/FAA ingestion, and never by the identity-guard or
+    # intelligence-review persistence paths above, which leave both NULL
+    # exactly as before this addition. A structurally SEPARATE, third gate:
+    # promotion policy only ever runs after intelligence review would reach
+    # REVIEW_REQUIRED (app.services.promotion_policy_evaluation's own outcome
+    # mapping) - the three field pairs on this row answer three different
+    # questions ("which airport," "is this materially interesting," "could
+    # this ever be automated") and are never merged into one decision/reason.
+    # promotion_policy_decision holds one of the three PromotionPolicyOutcome
+    # values verbatim (.value); deliberately NOT DB-CHECK-constrained in this
+    # slice for the same reason the two pairs above aren't (a CHECK would
+    # require a full SQLite table rebuild, not a plain ADD COLUMN) - the
+    # persistence service is the sole writer and only ever writes a real
+    # PromotionPolicyOutcome.value, enforced in Python. promotion_policy_reason
+    # holds PromotionPolicyDecision.reason verbatim - never AI-regenerated.
+    # AUTO_ELIGIBLE recorded here is an eligibility classification only - it
+    # never creates, updates, or publishes a Signal, and no code path in this
+    # repository yet acts on it automatically (a future, separately-authorized
+    # slice, explicitly not this one).
+    promotion_policy_decision: Mapped[Optional[str]] = mapped_column(String(30))
+    promotion_policy_reason: Mapped[Optional[str]] = mapped_column(Text)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     source: Mapped["Source"] = relationship(back_populates="assertions")
