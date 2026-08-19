@@ -8,6 +8,7 @@ from app.models.signal import Signal
 from app.models.source import Source
 from app.models.source_assertion import SourceAssertion
 from app.models.physical_installation_identity import InstallationAssertionLink, PhysicalInstallationIdentity
+from app.models.reviewer_action import ReviewerAction
 
 __all__ = [
     "Airport",
@@ -19,6 +20,7 @@ __all__ = [
     "InstallationAssertionLink",
     "PhysicalInstallationIdentity",
     "PublishingSource",
+    "ReviewerAction",
     "Runway",
     "RunwayEnd",
     "Signal",

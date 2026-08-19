@@ -142,3 +142,4 @@ class SourceAssertion(Base):
     airport: Mapped[Optional["Airport"]] = relationship(back_populates="source_assertions")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="source_assertions")
     installation_assertion_links: Mapped[list["InstallationAssertionLink"]] = relationship(back_populates="assertion")
+    reviewer_actions: Mapped[list["ReviewerAction"]] = relationship(back_populates="source_assertion")

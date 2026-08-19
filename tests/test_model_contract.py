@@ -12,6 +12,7 @@ from app.models import (
     InstallationAssertionLink,
     PhysicalInstallationIdentity,
     PublishingSource,
+    ReviewerAction,
     Runway,
     RunwayEnd,
     Signal,
@@ -167,6 +168,16 @@ EXPECTED_COLUMNS = {
         "reviewed_at": ("DATETIME", False, ("callable",), None),
         "supersedes_link_id": ("INTEGER", True, None, None),
     },
+    "reviewer_actions": {
+        "id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+        "action": ("VARCHAR(30)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "reviewer": ("VARCHAR(100)", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_action_id": ("INTEGER", True, None, None),
+        "duplicate_of_signal_id": ("INTEGER", True, None, None),
+    },
     "installations": {
         "id": ("INTEGER", False, None, None),
         "airport_id": ("INTEGER", False, None, None),
@@ -268,6 +279,11 @@ EXPECTED_FOREIGN_KEYS = {
         ("physical_installation_id", "physical_installation_identities.id"),
         ("supersedes_link_id", "installation_assertion_links.id"),
     },
+    "reviewer_actions": {
+        ("source_assertion_id", "source_assertions.id"),
+        ("supersedes_action_id", "reviewer_actions.id"),
+        ("duplicate_of_signal_id", "signals.id"),
+    },
     "installations": {
         ("airport_id", "airports.id"),
         ("runway_id", "runways.id"),
@@ -331,6 +347,11 @@ EXPECTED_INDEXES = {
         ("ix_installation_assertion_links_assertion_id", ("assertion_id",), False),
         ("ix_installation_assertion_links_physical_installation_id", ("physical_installation_id",), False),
         ("ix_installation_assertion_links_supersedes_link_id", ("supersedes_link_id",), False),
+    },
+    "reviewer_actions": {
+        ("ix_reviewer_actions_source_assertion_id", ("source_assertion_id",), False),
+        ("ix_reviewer_actions_supersedes_action_id", ("supersedes_action_id",), False),
+        ("ix_reviewer_actions_duplicate_of_signal_id", ("duplicate_of_signal_id",), False),
     },
     "installations": {
         ("ix_installations_airport_id", ("airport_id",), False),
@@ -423,6 +444,12 @@ EXPECTED_RELATIONSHIPS = {
         "airport": ("Airport", "source_assertions", DEFAULT_CASCADE),
         "runway": ("Runway", "source_assertions", DEFAULT_CASCADE),
         "installation_assertion_links": ("InstallationAssertionLink", "assertion", DEFAULT_CASCADE),
+        "reviewer_actions": ("ReviewerAction", "source_assertion", DEFAULT_CASCADE),
+    },
+    "ReviewerAction": {
+        "source_assertion": ("SourceAssertion", "reviewer_actions", DEFAULT_CASCADE),
+        "supersedes": ("ReviewerAction", None, DEFAULT_CASCADE),
+        "duplicate_of_signal": ("Signal", None, DEFAULT_CASCADE),
     },
     "PhysicalInstallationIdentity": {
         "airport": ("Airport", "physical_installation_identities", DEFAULT_CASCADE),
@@ -463,6 +490,7 @@ def test_all_current_models_are_exported_from_app_models():
         InstallationAssertionLink.__name__,
         PhysicalInstallationIdentity.__name__,
         PublishingSource.__name__,
+        ReviewerAction.__name__,
         Runway.__name__,
         RunwayEnd.__name__,
         Signal.__name__,
@@ -478,6 +506,7 @@ def test_all_current_models_are_exported_from_app_models():
         "InstallationAssertionLink",
         "PhysicalInstallationIdentity",
         "PublishingSource",
+        "ReviewerAction",
         "Runway",
         "RunwayEnd",
         "Signal",
