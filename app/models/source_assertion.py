@@ -136,6 +136,25 @@ class SourceAssertion(Base):
     promotion_policy_decision: Mapped[Optional[str]] = mapped_column(String(30))
     promotion_policy_reason: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Additive (docs/architecture/human-approved-governed-signal-creation-slice9c-report.md,
+    # Slice 9C). Populated ONLY by
+    # app/services/governed_signal_creation.py::create_signal_from_approved_review(),
+    # after a human ReviewerAction (Slice 9B) has approved this row - never
+    # by any ingestion path, never by the identity-guard/intelligence-review/
+    # promotion-policy persistence services above, which never read or write
+    # it. NULL means no Signal has been created from this governed evidence
+    # yet; non-NULL both proves which evidence produced the Signal it points
+    # at AND is this slice's own idempotency/duplicate guard (a second
+    # create_signal_from_approved_review() call for the same SourceAssertion
+    # reuses the existing Signal rather than creating a second one - see the
+    # service's own docstring). Many SourceAssertions may point at the same
+    # Signal (a second, later, corroborating piece of evidence); one
+    # SourceAssertion points at, at most, one Signal - the same forward-FK-
+    # on-the-"many"-side cardinality already established by
+    # Signal.installation_id (app/models/signal.py) for the structurally
+    # analogous Signal -> Installation graduation step.
+    signal_id: Mapped[Optional[int]] = mapped_column(ForeignKey("signals.id"), nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     source: Mapped["Source"] = relationship(back_populates="assertions")
@@ -143,3 +162,4 @@ class SourceAssertion(Base):
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="source_assertions")
     installation_assertion_links: Mapped[list["InstallationAssertionLink"]] = relationship(back_populates="assertion")
     reviewer_actions: Mapped[list["ReviewerAction"]] = relationship(back_populates="source_assertion")
+    signal: Mapped[Optional["Signal"]] = relationship(back_populates="supporting_source_assertions")

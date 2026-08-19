@@ -148,6 +148,7 @@ EXPECTED_COLUMNS = {
         "intelligence_review_reason": ("TEXT", True, None, None),
         "promotion_policy_decision": ("VARCHAR(30)", True, None, None),
         "promotion_policy_reason": ("TEXT", True, None, None),
+        "signal_id": ("INTEGER", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
     "physical_installation_identities": {
@@ -270,6 +271,7 @@ EXPECTED_FOREIGN_KEYS = {
         ("source_id", "sources.id"),
         ("airport_id", "airports.id"),
         ("runway_id", "runways.id"),
+        ("signal_id", "signals.id"),
     },
     "physical_installation_identities": {
         ("airport_id", "airports.id"), ("runway_id", "runways.id"), ("runway_end_id", "runway_ends.id"),
@@ -337,6 +339,7 @@ EXPECTED_INDEXES = {
         ("ix_source_assertions_source_id", ("source_id",), False),
         ("ix_source_assertions_airport_id", ("airport_id",), False),
         ("ix_source_assertions_runway_id", ("runway_id",), False),
+        ("ix_source_assertions_signal_id", ("signal_id",), False),
     },
     "physical_installation_identities": {
         ("ix_physical_installation_identities_airport_id", ("airport_id",), False),
@@ -429,6 +432,7 @@ EXPECTED_RELATIONSHIPS = {
         "runway": ("Runway", "signals", DEFAULT_CASCADE),
         "source": ("Source", None, DEFAULT_CASCADE),
         "installation": ("Installation", None, DEFAULT_CASCADE),
+        "supporting_source_assertions": ("SourceAssertion", "signal", DEFAULT_CASCADE),
     },
     "PublishingSource": {
         "acquisition_sources": ("AcquisitionSource", "publishing_source", DEFAULT_CASCADE),
@@ -445,6 +449,7 @@ EXPECTED_RELATIONSHIPS = {
         "runway": ("Runway", "source_assertions", DEFAULT_CASCADE),
         "installation_assertion_links": ("InstallationAssertionLink", "assertion", DEFAULT_CASCADE),
         "reviewer_actions": ("ReviewerAction", "source_assertion", DEFAULT_CASCADE),
+        "signal": ("Signal", "supporting_source_assertions", DEFAULT_CASCADE),
     },
     "ReviewerAction": {
         "source_assertion": ("SourceAssertion", "reviewer_actions", DEFAULT_CASCADE),

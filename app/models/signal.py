@@ -113,3 +113,30 @@ class Signal(Base):
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="signals")
     source: Mapped[Optional["Source"]] = relationship()
     installation: Mapped[Optional["Installation"]] = relationship()
+
+    # Reverse of SourceAssertion.signal_id (Slice 9C) - every governed
+    # SourceAssertion whose evidence produced or corroborates this Signal.
+    # Answers "which SourceAssertion(s) caused this Signal to exist" without
+    # a generalized evidence-link table; a plain nullable FK on the "many"
+    # side (SourceAssertion) is sufficient because one SourceAssertion never
+    # produces more than one Signal, matching Signal.installation_id's own
+    # cardinality precedent above.
+    #
+    # passive_deletes=True (review checkpoint fix, Slice 9C): without it,
+    # SQLAlchemy's default relationship management issues
+    # `UPDATE source_assertions SET signal_id=NULL` for every referencing
+    # row BEFORE deleting the Signal - silently discarding the governed
+    # provenance link instead of blocking the delete. There is no code path
+    # in this repository that deletes a Signal today, but this is exactly
+    # the "evidence history must not disappear because Signal is deleted"
+    # invariant this slice exists to protect, so it must hold even for a
+    # future caller. With passive_deletes=True, SQLAlchemy leaves the FK
+    # alone and lets the real database-level FOREIGN KEY constraint decide
+    # - which, with no ON DELETE clause, refuses the delete outright while
+    # any SourceAssertion still points at it (verified: deleting a Signal
+    # with a linked SourceAssertion now raises IntegrityError; ReviewerAction's
+    # own append-only immutability is a different, stronger mechanism not
+    # needed here, since SourceAssertion is legitimately mutable elsewhere).
+    supporting_source_assertions: Mapped[list["SourceAssertion"]] = relationship(
+        back_populates="signal", passive_deletes=True,
+    )

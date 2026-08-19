@@ -38,6 +38,7 @@ from scripts.capture_mac_discovery import (
 from scripts.migrate_discovery_governed_evidence_slice1 import upgrade as migrate_upgrade
 from scripts.migrate_intelligence_review_persistence_slice4 import upgrade as migrate_upgrade_slice4
 from scripts.migrate_promotion_policy_persistence_slice7 import upgrade as migrate_upgrade_slice7
+from scripts.migrate_governed_signal_creation_slice9c import upgrade as migrate_upgrade_slice9c
 
 FIXTURE_PDF = (Path(__file__).parent / "fixtures" / "mac_granicus_emas_procurement_memo_sample.pdf").read_bytes()
 ARTIFACT_IDENTITY = "mac.granicus.document.4.2349.105406"
@@ -248,14 +249,14 @@ def test_apply_succeeds_after_running_the_real_migration_script(unmigrated_db):
     the capture runner itself) unblocks it - proving the runner's gate
     and the real migration scripts agree on schema readiness.
 
-    Runs ALL THREE additive source_assertions migrations, not just Slice 1's:
+    Runs ALL FOUR additive source_assertions migrations, not just Slice 1's:
     the ORM model (app/models/source_assertion.py) now also declares
-    Slice 4's intelligence_review_decision/intelligence_review_reason and
-    Slice 7's promotion_policy_decision/promotion_policy_reason columns
-    unconditionally, so any SELECT against SourceAssertion - including this
-    runner's own idempotency check - requires the physical table to carry
-    all four too, even though this capture runner's own write path never
-    touches any of them."""
+    Slice 4's intelligence_review_decision/intelligence_review_reason,
+    Slice 7's promotion_policy_decision/promotion_policy_reason, and
+    Slice 9C's signal_id columns unconditionally, so any SELECT against
+    SourceAssertion - including this runner's own idempotency check -
+    requires the physical table to carry all five too, even though this
+    capture runner's own write path never touches any of them."""
     dry = run_capture(CaptureConfig(database=unmigrated_db, fixture_documents=(_fixture_document(),)))
     refused = run_capture(CaptureConfig(
         database=unmigrated_db, fixture_documents=(_fixture_document(),),
@@ -266,6 +267,7 @@ def test_apply_succeeds_after_running_the_real_migration_script(unmigrated_db):
     migrate_upgrade(unmigrated_db)
     migrate_upgrade_slice4(unmigrated_db)
     migrate_upgrade_slice7(unmigrated_db)
+    migrate_upgrade_slice9c(unmigrated_db)
 
     dry2 = run_capture(CaptureConfig(database=unmigrated_db, fixture_documents=(_fixture_document(),)))
     assert dry2["schema_readiness"]["identity_guard_decision_column_exists"] is True
