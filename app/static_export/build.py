@@ -384,8 +384,16 @@ def _current_emas_views(airport: Airport) -> list[SimpleNamespace]:
 
 
 def _is_public_signal(signal: Signal) -> bool:
-    """Quarantine the two baseline-identified unnormalized airport Signals."""
-    return signal.id not in (52, 54)
+    """Whether a Signal is eligible for public/static export.
+
+    Historically a hardcoded exclusion of the two baseline-identified
+    unnormalized airport Signals (ids 52, 54). Slice 9A
+    (docs/architecture/signal-publication-separation-slice9a-report.md)
+    replaced that hardcoding with the explicit Signal.published column,
+    backfilled so this function's output is unchanged for every pre-existing
+    Signal - only Signal.published now decides publication.
+    """
+    return signal.published
 
 
 def _timeline_event(

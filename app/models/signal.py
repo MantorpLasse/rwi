@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -84,6 +84,20 @@ class Signal(Base):
     # displayed the same way as an analytical judgment call.
     confirmed_vendor: Mapped[Optional[str]] = mapped_column(String(150))
     last_verified_at: Mapped[Optional[date]] = mapped_column(Date)
+
+    # Whether this Signal is eligible for public/static export - and only
+    # that. Not a proxy for confidence, status, reviewer action, promotion
+    # policy, or source reliability; those stay on their own fields. Defaults
+    # to True so every existing (legacy) Signal-creation path keeps its
+    # current effective publication behavior unchanged (see
+    # scripts/migrate_signal_publication_slice9a.py, which backfills the two
+    # previously hardcoded-excluded rows to False). A future governed-write
+    # path (docs/architecture/reviewer-action-human-signal-promotion-slice9-design.md
+    # Slice 9C) must explicitly pass published=False itself - this column's
+    # default is a backward-compatibility default, not a fail-closed
+    # governance default; see
+    # docs/architecture/signal-publication-separation-slice9a-report.md S5.
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     # Added retroactively (see docs/utredning_senast_uppdaterat.md) -
     # nullable, unlike AcquisitionRun's non-null created_at, because rows

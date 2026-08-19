@@ -234,6 +234,7 @@ EXPECTED_COLUMNS = {
         "created_at": ("DATETIME", True, ("callable",), None),
         "updated_at": ("DATETIME", True, ("callable",), ("callable",)),
         "source_notes": ("TEXT", True, None, None),
+        "published": ("BOOLEAN", False, ("scalar", True), None),
     },
 }
 

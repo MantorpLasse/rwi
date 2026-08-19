@@ -70,6 +70,44 @@ def test_build_site_writes_expected_pages_and_data(tmp_path):
     assert data["signals"][0]["title"] == "Runway 15/33 future EMAS"
 
 
+def test_build_site_excludes_unpublished_signal_from_public_output(tmp_path):
+    """Slice 9A (docs/architecture/signal-publication-separation-slice9a-report.md):
+    Signal.published, not a hardcoded id exclusion, now decides what the
+    static export shows. A Signal created with published=False must not
+    appear anywhere in the generated site, while an ordinary published
+    Signal (the existing _seed() fixture) still does."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        _seed(session)
+        airport = session.query(Airport).one()
+        source = session.query(Source).one()
+        unpublished = Signal(
+            airport=airport, source=source, title="Internal governed signal - not yet published",
+            category="replacement", confidence="medium", published=False,
+        )
+        session.add(unpublished)
+        session.commit()
+        unpublished_id = unpublished.id
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    assert (output / "signals" / f"{unpublished_id}.html").exists() is False
+
+    index_html = (output / "index.html").read_text(encoding="utf-8")
+    assert "Internal governed signal - not yet published" not in index_html
+    # The existing published fixture signal is still there, unaffected.
+    assert "Runway 15/33 future EMAS" in index_html
+
+    signals_index_html = (output / "signals" / "index.html").read_text(encoding="utf-8")
+    assert "Internal governed signal - not yet published" not in signals_index_html
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    assert len(data["signals"]) == 1
+    assert data["signals"][0]["title"] == "Runway 15/33 future EMAS"
+
+
 def test_build_site_shows_unconfirmed_runway_pill_instead_of_a_pill_with_no_end(tmp_path):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
