@@ -90,6 +90,27 @@ class SourceAssertion(Base):
     identity_guard_decision: Mapped[Optional[str]] = mapped_column(String(30))
     identity_guard_reason: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Additive (docs/architecture/intelligence-review-persistence-slice4-report.md).
+    # Populated ONLY by app/services/intelligence_review_persistence.py, from
+    # app.services.signal_candidate_evaluation.SignalCandidateDecision - never
+    # by NASR/USAspending/FAA ingestion, and never by the identity-guard
+    # persistence path above, which leave both NULL exactly as before this
+    # addition. A structurally SEPARATE gate from identity_guard_decision:
+    # intelligence review only ever runs on rows where identity_guard_decision
+    # is exactly "ATTACH_CONFIRMED" (ATTACH_PROVISIONAL is deliberately NOT
+    # sufficient, per Slice 3's own stricter policy) - the two fields answer
+    # two different questions ("which airport" vs "is this materially
+    # interesting") and are never merged into one decision/reason pair.
+    # intelligence_review_decision holds one of the six SignalCandidateOutcome
+    # values verbatim (.value); deliberately NOT DB-CHECK-constrained in this
+    # slice for the same reason identity_guard_decision above isn't (a CHECK
+    # would require a full SQLite table rebuild, not a plain ADD COLUMN) -
+    # the persistence service is the sole writer and only ever writes a real
+    # SignalCandidateOutcome.value, enforced in Python. intelligence_review_reason
+    # holds SignalCandidateDecision.reason verbatim - never AI-regenerated.
+    intelligence_review_decision: Mapped[Optional[str]] = mapped_column(String(30))
+    intelligence_review_reason: Mapped[Optional[str]] = mapped_column(Text)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     source: Mapped["Source"] = relationship(back_populates="assertions")
