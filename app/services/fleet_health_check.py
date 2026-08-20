@@ -74,6 +74,7 @@ from sqlalchemy.orm import Session, aliased
 from app.models import (
     Airport,
     Installation,
+    InstallationAssertionLink,
     PhysicalInstallationIdentity,
     ReviewerAction,
     Runway,
@@ -96,11 +97,28 @@ from app.services.fleet_health_rules import (
     SourceAssertionSignalAirportFact,
     evaluate_hard_invariants,
 )
+from app.services.fleet_health_review_rules import (
+    AirportRunwayCountFact,
+    FleetReviewSnapshot,
+    InstallationAirportLinkageFact,
+    InstallationAssertionLinkRetractionFact,
+    SignalLifecycleFact,
+    SignalProvenanceFact,
+    SourceAssertionGovernanceDecisionFact,
+    SourceAssertionReviewStateFact,
+    evaluate_review_findings,
+)
 
 __all__ = [
     "build_fleet_hard_invariant_snapshot",
     "run_fleet_hard_invariant_check",
+    "build_fleet_review_snapshot",
+    "run_fleet_review_check",
+    "run_full_fleet_health_check",
 ]
+
+_SAME_PHYSICAL_INSTALLATION = "SAME_PHYSICAL_INSTALLATION"
+_HUMAN_REVIEW_REQUIRED_PROMOTION_DECISION = "HUMAN_REVIEW_REQUIRED"
 
 
 def _build_airport_codes(session: Session) -> "tuple[AirportCodeFact, ...]":
@@ -409,3 +427,238 @@ def run_fleet_hard_invariant_check(session: Session) -> "tuple[HealthFinding, ..
     FHC1 hard invariants against it, unmodified. Read-only end to end."""
     snapshot = build_fleet_hard_invariant_snapshot(session)
     return evaluate_hard_invariants(snapshot)
+
+
+# ---------------------------------------------------------------------------
+# FHC3 extension: read-only adapter functions for the 13 implemented
+# warning/review/informational rules (app.services.fleet_health_review_rules).
+# Appended, not interleaved, so the FHC1/FHC2-reviewed functions above stay
+# byte-for-byte unchanged. Same read-only discipline throughout: every call
+# below is session.query(...) SELECT; nothing is added, flushed, committed,
+# deleted, or mutated.
+# ---------------------------------------------------------------------------
+
+
+def _build_airport_runway_counts(session: Session) -> "tuple[AirportRunwayCountFact, ...]":
+    """One row per Airport, Runway count via LEFT JOIN + GROUP BY - never
+    once per Airport in a loop. FH-A1 input."""
+    rows = (
+        session.query(Airport.id, func.count(Runway.id))
+        .outerjoin(Runway, Runway.airport_id == Airport.id)
+        .group_by(Airport.id)
+        .order_by(Airport.id.asc())
+        .all()
+    )
+    return tuple(
+        AirportRunwayCountFact(airport_id=airport_id, runway_count=count)
+        for airport_id, count in rows
+    )
+
+
+def _build_installation_airport_linkages(
+    session: Session,
+) -> "tuple[InstallationAirportLinkageFact, ...]":
+    """One row per Installation, no joins - runway_id and runway_end are
+    both already-persisted columns directly on Installation. FH-C3 input."""
+    rows = session.query(Installation).order_by(Installation.id.asc()).all()
+    return tuple(
+        InstallationAirportLinkageFact(
+            installation_id=row.id,
+            airport_id=row.airport_id,
+            runway_id=row.runway_id,
+            runway_end=row.runway_end,
+        )
+        for row in rows
+    )
+
+
+def _build_installation_assertion_link_retractions(
+    session: Session,
+) -> "tuple[InstallationAssertionLinkRetractionFact, ...]":
+    """Fetches every InstallationAssertionLink row in one query, ordered by
+    (assertion_id, reviewed_at, id) - the exact recency tiebreak
+    app.services.existing_signal_reconciliation_candidates.
+    _latest_installation_links_by_assertion_id() already uses for this
+    table - then reduces in Python to exactly the two facts FH-C4 needs per
+    assertion_id: the latest outcome, and whether any OTHER (non-latest)
+    link for that assertion_id was SAME_PHYSICAL_INSTALLATION. Only
+    assertion_ids with two or more link rows produce a fact - a single link
+    has no earlier history to retract. FH-C4 input.
+    """
+    rows = (
+        session.query(InstallationAssertionLink)
+        .order_by(
+            InstallationAssertionLink.assertion_id,
+            InstallationAssertionLink.reviewed_at.asc(),
+            InstallationAssertionLink.id.asc(),
+        )
+        .all()
+    )
+    history_by_assertion: "dict[int, list[InstallationAssertionLink]]" = {}
+    for row in rows:
+        history_by_assertion.setdefault(row.assertion_id, []).append(row)
+
+    facts: "list[InstallationAssertionLinkRetractionFact]" = []
+    for assertion_id in sorted(history_by_assertion):
+        history = history_by_assertion[assertion_id]
+        if len(history) < 2:
+            continue
+        latest = history[-1]
+        had_earlier_same = any(
+            link.outcome == _SAME_PHYSICAL_INSTALLATION for link in history[:-1]
+        )
+        facts.append(
+            InstallationAssertionLinkRetractionFact(
+                assertion_id=assertion_id,
+                latest_outcome=latest.outcome,
+                had_earlier_same_physical_installation=had_earlier_same,
+            )
+        )
+    return tuple(facts)
+
+
+def _build_signal_lifecycles(session: Session) -> "tuple[SignalLifecycleFact, ...]":
+    """One row per Signal, no joins. FH-E1/FH-E2/FH-E4 input (combined into
+    one query/fact type - all three read disjoint columns off the same
+    Signal row, so one query serves all three rules)."""
+    rows = session.query(Signal).order_by(Signal.id.asc()).all()
+    return tuple(
+        SignalLifecycleFact(
+            signal_id=row.id,
+            airport_id=row.airport_id,
+            status=row.status,
+            planning_year=row.planning_year,
+            procurement_year=row.procurement_year,
+            target_year=row.target_year,
+            completion_date=row.completion_date,
+        )
+        for row in rows
+    )
+
+
+def _build_signal_provenance(session: Session) -> "tuple[SignalProvenanceFact, ...]":
+    """Two queries total, regardless of fleet size: (1) every Signal's own
+    id/source_id; (2) the distinct set of Signal ids any SourceAssertion
+    currently links to (SourceAssertion.signal_id, filtered non-NULL) - never
+    one query per Signal. FH-F1 input.
+    """
+    signals = session.query(Signal.id, Signal.source_id).order_by(Signal.id.asc()).all()
+    linked_signal_ids = {
+        row[0]
+        for row in session.query(SourceAssertion.signal_id)
+        .filter(SourceAssertion.signal_id.isnot(None))
+        .distinct()
+        .all()
+    }
+    return tuple(
+        SignalProvenanceFact(
+            signal_id=signal_id,
+            source_id=source_id,
+            has_governed_supporting_assertion=signal_id in linked_signal_ids,
+        )
+        for signal_id, source_id in signals
+    )
+
+
+def _build_source_assertion_review_states(
+    session: Session,
+) -> "tuple[SourceAssertionReviewStateFact, ...]":
+    """Only SourceAssertions with airport_id NULL - there is nothing to
+    report for the vast majority of rows that do have an attributed
+    airport. FH-F2/FH-F3 input."""
+    rows = (
+        session.query(SourceAssertion.id, SourceAssertion.review_state)
+        .filter(SourceAssertion.airport_id.is_(None))
+        .order_by(SourceAssertion.id.asc())
+        .all()
+    )
+    return tuple(
+        SourceAssertionReviewStateFact(assertion_id=assertion_id, review_state=review_state)
+        for assertion_id, review_state in rows
+    )
+
+
+def _build_source_assertion_governance_decisions(
+    session: Session,
+) -> "tuple[SourceAssertionGovernanceDecisionFact, ...]":
+    """Only SourceAssertions at promotion_policy_decision=HUMAN_REVIEW_REQUIRED
+    - FH-G1 can never fire for any other value. FH-G1 input."""
+    rows = (
+        session.query(
+            SourceAssertion.id,
+            SourceAssertion.identity_guard_decision,
+            SourceAssertion.intelligence_review_decision,
+            SourceAssertion.promotion_policy_decision,
+        )
+        .filter(
+            SourceAssertion.promotion_policy_decision
+            == _HUMAN_REVIEW_REQUIRED_PROMOTION_DECISION
+        )
+        .order_by(SourceAssertion.id.asc())
+        .all()
+    )
+    return tuple(
+        SourceAssertionGovernanceDecisionFact(
+            assertion_id=assertion_id,
+            identity_guard_decision=identity_guard_decision,
+            intelligence_review_decision=intelligence_review_decision,
+            promotion_policy_decision=promotion_policy_decision,
+        )
+        for (
+            assertion_id,
+            identity_guard_decision,
+            intelligence_review_decision,
+            promotion_policy_decision,
+        ) in rows
+    )
+
+
+def build_fleet_review_snapshot(session: Session) -> FleetReviewSnapshot:
+    """Builds one FleetReviewSnapshot from current database state, for the
+    13 implemented FHC3 warning/review/informational rules.
+
+    Read-only: every call above is a SELECT; nothing is added, flushed,
+    committed, or mutated. Wrapped in `session.no_autoflush`, the same
+    review-checkpoint fix FHC2's hard-invariant path already applies - a
+    caller's own pending, uncommitted changes on this session are never
+    flushed as a side effect of calling this function.
+
+    Reuses two fact tuples verbatim from build_fleet_hard_invariant_snapshot's
+    own query functions (_build_airport_codes for FH-A3,
+    _build_signal_runway_airports for FH-D3/FH-D4) - not a second query for
+    data FHC2 already knows how to read once.
+    """
+    with session.no_autoflush:
+        return FleetReviewSnapshot(
+            airport_runway_counts=_build_airport_runway_counts(session),
+            airport_codes=_build_airport_codes(session),
+            installation_airport_linkages=_build_installation_airport_linkages(session),
+            installation_assertion_link_retractions=(
+                _build_installation_assertion_link_retractions(session)
+            ),
+            signal_runway_airports=_build_signal_runway_airports(session),
+            signal_lifecycles=_build_signal_lifecycles(session),
+            signal_provenance=_build_signal_provenance(session),
+            source_assertion_review_states=_build_source_assertion_review_states(session),
+            source_assertion_governance_decisions=(
+                _build_source_assertion_governance_decisions(session)
+            ),
+        )
+
+
+def run_fleet_review_check(session: Session) -> "tuple[HealthFinding, ...]":
+    """Builds a review snapshot from current database state and evaluates
+    all 13 implemented FHC3 rules against it, unmodified. Read-only end to
+    end. Never calls, and is never called by, run_fleet_hard_invariant_check()."""
+    snapshot = build_fleet_review_snapshot(session)
+    return evaluate_review_findings(snapshot)
+
+
+def run_full_fleet_health_check(session: Session) -> "tuple[HealthFinding, ...]":
+    """Convenience wrapper: hard-invariant findings followed by review/
+    informational findings, in that fixed order - both tiers unmodified,
+    concatenated, never merged or re-ranked. Equivalent to calling
+    run_fleet_hard_invariant_check() then run_fleet_review_check() and
+    concatenating the results; provided only because that is the natural
+    "give me everything" call a future CLI will want, not a new code path."""
+    return run_fleet_hard_invariant_check(session) + run_fleet_review_check(session)
