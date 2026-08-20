@@ -94,6 +94,36 @@ calls them and interprets their three-outcome result:
                           persisted anywhere (no Signal field, no notes
                           field, no hidden write).
 
+STALE-SAFE CREATION (R4C of
+docs/architecture/existing-signal-reconciliation-r4-human-resolution-design.md's
+own S20 roadmap - see
+docs/architecture/existing-signal-reconciliation-r4c-stale-safe-creation-report.md).
+The latest ReviewerAction may now be `CONFIRM_DISTINCT_SIGNAL` as well as
+`APPROVE_SIGNAL` (`VALID_LATEST_ACTIONS_FOR_CREATION`) - but only
+`APPROVE_SIGNAL` is a general creation approval. When the latest action is
+`CONFIRM_DISTINCT_SIGNAL` and reconciliation (recomputed fresh, exactly as
+for any other call - never "trust the last answer") still returns
+`POSSIBLE_EXISTING_SIGNAL_MATCH`, this function builds a fresh
+`ReconciliationReviewPlan` for the CURRENT blocking state
+(`app.services.existing_signal_reconciliation_review.build_reconciliation_review_plan`,
+unmodified R4A) and compares its freshly computed fingerprint
+(`compute_reconciliation_fingerprint`, also unmodified R4A) against the
+confirmation's own stored `reconciliation_fingerprint`, byte-for-byte. A
+match means the human's confirmed-distinct review is still current, and
+creation proceeds through the unmodified path below; a mismatch raises
+`StaleReconciliationConfirmationError` - the blocking state changed (a
+candidate was added/removed, an anchor reason changed) since that
+confirmation was recorded, so it can no longer authorize creation. If
+reconciliation instead returns `CLEAR_TO_CREATE` while the latest action is
+`CONFIRM_DISTINCT_SIGNAL`, the stored confirmation is simply moot - nothing
+blocks creation any more, so nothing is compared or consulted, and creation
+proceeds exactly as it would for `APPROVE_SIGNAL` (design doc Section 14
+step 6). This module never reimplements R4A's canonicalization or hashing
+logic, never builds a plan for any outcome other than
+`POSSIBLE_EXISTING_SIGNAL_MATCH`, and never records, mutates, or reads any
+`ReviewerAction` field beyond `.action` and `.reconciliation_fingerprint` on
+the single row `get_latest_reviewer_action()` already returns.
+
 `claims` is an optional, already-structured `tuple[Claim, ...]` this
 function never inspects itself beyond passing it straight through to
 `build_reconciliation_subject()` - no raw text is re-extracted here, no
@@ -119,7 +149,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import Runway, Signal, SourceAssertion
+from app.models import ReviewerAction, Runway, Signal, SourceAssertion
 from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE
 from app.services.evidence_claim_semantics import Claim
 from app.services.existing_signal_reconciliation import (
@@ -131,14 +161,20 @@ from app.services.existing_signal_reconciliation_candidates import (
     build_reconciliation_subject,
     find_reconciliation_candidates,
 )
+from app.services.existing_signal_reconciliation_review import (
+    build_reconciliation_review_plan,
+    compute_reconciliation_fingerprint,
+)
 from app.services.reviewer_action_persistence import get_latest_reviewer_action
 
 __all__ = [
     "REQUIRED_IDENTITY_DECISION",
     "REQUIRED_INTELLIGENCE_DECISION",
     "REQUIRED_PROMOTION_DECISION",
+    "VALID_LATEST_ACTIONS_FOR_CREATION",
     "GovernedSignalCreationResult",
     "ExistingSignalPossibleMatchError",
+    "StaleReconciliationConfirmationError",
     "create_signal_from_approved_review",
     "link_source_assertion_to_duplicate_signal",
 ]
@@ -146,6 +182,17 @@ __all__ = [
 REQUIRED_IDENTITY_DECISION = "ATTACH_CONFIRMED"
 REQUIRED_INTELLIGENCE_DECISION = "REVIEW_REQUIRED"
 REQUIRED_PROMOTION_DECISION = "HUMAN_REVIEW_REQUIRED"
+
+# R4C (docs/architecture/existing-signal-reconciliation-r4c-stale-safe-creation-report.md,
+# Section 14 of docs/architecture/existing-signal-reconciliation-r4-human-resolution-design.md):
+# the only two latest-ReviewerAction values that may reach reconciliation
+# evaluation at all. CONFIRM_DISTINCT_SIGNAL is not a general creation
+# approval - it additionally requires, below, that reconciliation currently
+# returns POSSIBLE_EXISTING_SIGNAL_MATCH with a freshly recomputed
+# fingerprint matching the one it was recorded with (see
+# StaleReconciliationConfirmationError). Every other latest action still
+# fails closed here exactly as before R4C.
+VALID_LATEST_ACTIONS_FOR_CREATION = ("APPROVE_SIGNAL", "CONFIRM_DISTINCT_SIGNAL")
 
 # Status strings a mere human REVIEW approval cannot legitimately establish -
 # "completed" in particular has a separate, load-bearing meaning elsewhere
@@ -213,6 +260,53 @@ class ExistingSignalPossibleMatchError(ValueError):
         )
 
 
+class StaleReconciliationConfirmationError(ValueError):
+    """Raised by `create_signal_from_approved_review()` (R4C,
+    docs/architecture/existing-signal-reconciliation-r4c-stale-safe-creation-report.md,
+    Section 14 of docs/architecture/existing-signal-reconciliation-r4-human-
+    resolution-design.md) when the latest ReviewerAction is
+    CONFIRM_DISTINCT_SIGNAL but reconciliation still returns
+    POSSIBLE_EXISTING_SIGNAL_MATCH and the freshly recomputed
+    `compute_reconciliation_fingerprint()` value no longer matches the
+    fingerprint that confirmation was recorded with - the blocking
+    reconciliation state changed since a human reviewed and confirmed
+    distinctness (a candidate was added or removed, an anchor reason
+    changed, or the stored fingerprint was never genuinely derived from
+    this SourceAssertion's own reconciliation state at all, e.g. copied
+    from another assertion's confirmation).
+
+    Deliberately distinct from `ExistingSignalPossibleMatchError` so a
+    caller/human can tell "you never reviewed this" apart from "you
+    reviewed this, but the world changed since then" - a meaningfully
+    different, more actionable message (design doc's own Section 14
+    reasoning). Exposes only opaque fingerprint strings and the same
+    `ExistingSignalReconciliationDecision` `ExistingSignalPossibleMatchError`
+    already exposes (candidate_signal_ids/reasons only - no title, no
+    financial value, no raw evidence text, matching R1's own absent-field
+    discipline). Never auto-fixes and never records a ReviewerAction itself
+    - resolving staleness requires a new, separate, future human review
+    (out of this module's scope, same as every other ReviewerAction write in
+    this pipeline)."""
+
+    def __init__(
+        self,
+        decision: ExistingSignalReconciliationDecision,
+        stale_confirmation: ReviewerAction,
+        *,
+        current_fingerprint: str,
+    ) -> None:
+        self.current_reconciliation_decision = decision
+        self.stored_fingerprint = stale_confirmation.reconciliation_fingerprint
+        self.current_fingerprint = current_fingerprint
+        super().__init__(
+            "create_signal_from_approved_review: the latest CONFIRM_DISTINCT_SIGNAL "
+            "confirmation's stored reconciliation_fingerprint no longer matches the freshly "
+            "recomputed blocking reconciliation state - a new human review is required "
+            f"(stored_fingerprint={self.stored_fingerprint!r}, current_fingerprint={self.current_fingerprint!r}, "
+            f"current_candidate_signal_ids={decision.candidate_signal_ids!r})"
+        )
+
+
 # The same year-field priority order app.services.existing_signal_reconciliation_candidates
 # already established for reading an EXISTING Signal candidate
 # (`_YEAR_FIELD_PRIORITY`/`_signal_reference_year` there), reapplied here to
@@ -269,7 +363,15 @@ def _validate_human_selected_fields(
             )
 
 
-def _check_governance_gates(session: Session, source_assertion: SourceAssertion) -> None:
+def _check_governance_gates(session: Session, source_assertion: SourceAssertion) -> ReviewerAction:
+    """Unchanged governance-decision checks, plus the latest-ReviewerAction
+    check (R4C-widened, see VALID_LATEST_ACTIONS_FOR_CREATION). Returns the
+    latest ReviewerAction itself so the caller can distinguish an
+    APPROVE_SIGNAL from a CONFIRM_DISTINCT_SIGNAL latest action - this
+    function only validates that the latest action is *one of* the two
+    allowed values; it never inspects reconciliation_fingerprint or runs
+    reconciliation itself (that happens only after this function returns,
+    using fresh state - see create_signal_from_approved_review())."""
     if source_assertion.identity_guard_decision != REQUIRED_IDENTITY_DECISION:
         raise ValueError(
             f"create_signal_from_approved_review requires identity_guard_decision == "
@@ -294,11 +396,12 @@ def _check_governance_gates(session: Session, source_assertion: SourceAssertion)
         raise ValueError("no ReviewerAction has been recorded for this SourceAssertion")
     if latest.source_assertion_id != source_assertion.id:
         raise ValueError("latest ReviewerAction does not belong to this SourceAssertion")
-    if latest.action != "APPROVE_SIGNAL":
+    if latest.action not in VALID_LATEST_ACTIONS_FOR_CREATION:
         raise ValueError(
-            f"latest ReviewerAction is {latest.action!r}, not 'APPROVE_SIGNAL' - "
+            f"latest ReviewerAction is {latest.action!r}, not one of {VALID_LATEST_ACTIONS_FOR_CREATION!r} - "
             "a historical approval superseded by a later action is not sufficient"
         )
+    return latest
 
 
 def create_signal_from_approved_review(
@@ -340,7 +443,7 @@ def create_signal_from_approved_review(
     finds a genuine identity anchor to an existing Signal.
     """
     _validate_human_selected_fields(title=title, category=category, confidence=confidence, status=status)
-    _check_governance_gates(session, source_assertion)
+    latest_reviewer_action = _check_governance_gates(session, source_assertion)
 
     if runway_id is not None:
         runway = session.get(Runway, runway_id)
@@ -366,7 +469,31 @@ def create_signal_from_approved_review(
         # candidate is even inspected (module docstring's own "RECONCILIATION
         # GATE" section) - so this branch never conflicts with the existing
         # idempotent-reuse branch immediately below.
-        raise ExistingSignalPossibleMatchError(reconciliation_decision)
+        #
+        # R4C: a CONFIRM_DISTINCT_SIGNAL latest action may resolve this block
+        # only if its stored fingerprint still matches a freshly rebuilt plan
+        # for the CURRENT blocking state - R1/R2 are never told "trust the
+        # last answer," they already recomputed unconditionally above (design
+        # doc Section 14 step 5). The plan/fingerprint canonicalization logic
+        # itself is never reimplemented here - build_reconciliation_review_plan()
+        # and compute_reconciliation_fingerprint() (R4A) are the only
+        # authority for both.
+        if latest_reviewer_action.action == "CONFIRM_DISTINCT_SIGNAL":
+            fresh_plan = build_reconciliation_review_plan(
+                source_assertion_id=source_assertion.id,
+                subject=reconciliation_subject,
+                decision=reconciliation_decision,
+            )
+            fresh_fingerprint = compute_reconciliation_fingerprint(fresh_plan)
+            if fresh_fingerprint != latest_reviewer_action.reconciliation_fingerprint:
+                raise StaleReconciliationConfirmationError(
+                    reconciliation_decision, latest_reviewer_action, current_fingerprint=fresh_fingerprint,
+                )
+            # Matched: this confirmation is current. Fall through to the
+            # existing, unmodified creation path below - exactly the same
+            # path an APPROVE_SIGNAL + CLEAR_TO_CREATE call already takes.
+        else:
+            raise ExistingSignalPossibleMatchError(reconciliation_decision)
 
     requested_signature: _CompatibilitySignature = (title, category, confidence)
 

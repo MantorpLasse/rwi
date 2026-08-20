@@ -631,14 +631,15 @@ def test_structurally_valid_fingerprint_from_a_different_context_is_accepted_by_
 
 
 # ---------------------------------------------------------------------------
-# R3 non-interference: R4B must not have touched governed_signal_creation.py.
+# R3 non-interference: at the time R4B was implemented, governed_signal_
+# creation.py had not yet integrated CONFIRM_DISTINCT_SIGNAL - that
+# integration was R4C's job
+# (docs/architecture/existing-signal-reconciliation-r4c-stale-safe-creation-report.md),
+# now done. The assertion this test originally made ("the module contains
+# zero references to CONFIRM_DISTINCT_SIGNAL") is therefore no longer a
+# meaningful invariant to guard - it would now assert something false by
+# design, not something this file's own R4B-scoped behavior controls.
+# Removed rather than weakened; the actual R4C integration behavior is
+# covered exhaustively by
+# tests/test_governed_signal_creation_distinct_confirmation.py instead.
 # ---------------------------------------------------------------------------
-
-
-def test_governed_signal_creation_module_does_not_reference_confirm_distinct_signal():
-    """This is R4C's job, not R4B's - governed_signal_creation.py must not
-    yet know this action value exists."""
-    import app.services.governed_signal_creation as module
-
-    source = inspect_module.getsource(module)
-    assert "CONFIRM_DISTINCT_SIGNAL" not in source
