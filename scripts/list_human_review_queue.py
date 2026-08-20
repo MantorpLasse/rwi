@@ -5,6 +5,7 @@
     python -m scripts.list_human_review_queue --database data/runway_safe.db --limit 20
     python -m scripts.list_human_review_queue --state all
     python -m scripts.list_human_review_queue --state resolved
+    python -m scripts.list_human_review_queue --state reconciliation
 
 Default (`--state active`): prints only SourceAssertion rows that still need
 a human DECISION right now - promotion_policy_decision ==
@@ -16,7 +17,13 @@ APPROVE_SIGNAL no longer appears here forever, the way it did under Slice
 8's own promotion-policy-only filter). `--state all` shows every
 HUMAN_REVIEW_REQUIRED row regardless of state, annotated with its derived
 state, for audit; `--state resolved` shows only the resolved subset
-(RESOLVED_REJECTED, RESOLVED_DUPLICATE, RESOLVED_SIGNAL_CREATED). Never
+(RESOLVED_REJECTED, RESOLVED_DUPLICATE, RESOLVED_SIGNAL_CREATED); `--state
+reconciliation` (R4D, docs/architecture/existing-signal-reconciliation-r4d-
+review-queue-report.md) shows governed rows where a FRESH R1/R2
+reconciliation recomputation currently requires human attention - either
+blocked (no matching CONFIRM_DISTINCT_SIGNAL confirmation exists, or one
+exists but is stale) or DISTINCT_CONFIRMED_PENDING_SIGNAL (a confirmation
+exists, currently matches, but no Signal has been created yet). Never
 AUTO_ELIGIBLE, never DO_NOT_PROMOTE, never NULL/unevaluated rows, in any
 mode. Performs ZERO writes: the database connection is opened in SQLite's
 own read-only URI mode (`mode=ro`), so even a coding mistake that tried to
@@ -29,18 +36,36 @@ is displayed - never creates, updates, or deletes one).
 SCHEMA GATE: before running any ORM query, this script inspects the target
 database's raw schema (via the existing migration scripts' own read-only
 `inspect()` functions, reused rather than reimplemented) and refuses with
-`REVIEW_QUEUE_SCHEMA_MIGRATION_REQUIRED` if either the Slice 4
-(`intelligence_review_*`) or Slice 7 (`promotion_policy_*`) columns are
-missing - it does not attempt to migrate, and it does not silently query a
-schema that would raise an ORM-level `OperationalError` instead of a clear,
-typed refusal. Slice 9D deliberately does NOT add a third gate for Slice
-9B/9C's own reviewer_actions/signal_id - both are read defensively
-(get_latest_reviewer_action() naturally returns None and signal_id reads as
-missing-attribute-safe None on a schema that predates them), matching this
-script's own existing "refuse only what would otherwise raise, never for
-columns whose absence degrades gracefully" discipline; a real pre-9B/9C
-database simply shows every item as ACTIVE_REVIEW, identical to Slice 8's
-own original behavior.
+`REVIEW_QUEUE_SCHEMA_MIGRATION_REQUIRED` if the Slice 4
+(`intelligence_review_*`), Slice 7 (`promotion_policy_*`), or R4B
+(`reviewer_actions.reconciliation_fingerprint`) columns are missing - it
+does not attempt to migrate, and it does not silently query a schema that
+would raise an ORM-level `OperationalError` instead of a clear, typed
+refusal.
+
+R4D CORRECTION (docs/architecture/existing-signal-reconciliation-r4d-review-
+queue-report.md): the R4B column check above was added by this slice after
+fresh inspection proved the pre-existing claim below was already false for
+EVERY state, not just a new reconciliation-aware one. `app.models.reviewer_action.
+ReviewerAction` has declared `reconciliation_fingerprint` as a mapped column
+since R4B - any ORM query against that table (which `list_review_workflow_items()`,
+and therefore every existing `--state active|all|resolved` call, already
+performs unconditionally) now emits a `SELECT` naming that column, which
+raises `sqlite3.OperationalError: no such column: reviewer_actions.
+reconciliation_fingerprint` against any database that has not had R4B's own
+migration applied - including, as of this slice's own fresh, read-only
+inspection, the real `data/runway_safe.db` itself. The paragraph below
+described a narrower, different failure mode (no ReviewerAction ROWS yet
+recorded for one assertion, which does return `None` gracefully) and did not
+in fact cover the schema-missing-column case; this is a genuine, independently
+-proven defect this slice fixes, not a design choice being revisited.
+
+(Pre-existing text, now only accurate for the narrower case it actually
+describes:) Slice 9D deliberately does NOT add a further gate for "no
+ReviewerAction rows exist yet for this SourceAssertion" - that case is read
+defensively (`get_latest_reviewer_action()` naturally returns `None`) and
+needs no schema check at all, since it is a data condition, not a schema
+one.
 
 `run_review_queue()` is the one function that does the work (schema check,
 then query) and returns a single, importable report - `main()` and the
@@ -62,8 +87,16 @@ from app.services.human_review_queue import (
     list_human_review_items,
     list_review_workflow_items,
 )
+from app.services.human_review_reconciliation import (
+    ReconciliationReviewItem,
+    ReconciliationReviewState,
+    list_reconciliation_review_items,
+)
 from scripts.migrate_intelligence_review_persistence_slice4 import inspect as inspect_intelligence_review_schema
 from scripts.migrate_promotion_policy_persistence_slice7 import inspect as inspect_promotion_policy_schema
+from scripts.migrate_reconciliation_confirmation_slice_r4b import (
+    inspect as inspect_reconciliation_confirmation_schema,
+)
 
 DEFAULT_DATABASE = Path("data/runway_safe.db")
 DEFAULT_LIMIT = 20
@@ -90,12 +123,19 @@ class ReviewQueueConfig:
 class ReviewQueueReport:
     """The one result shape both `main()` and the test suite consume - no
     parallel/duplicated code path between CLI output and importable,
-    testable behavior."""
+    testable behavior.
+
+    `items` holds `HumanReviewItem` for state in {"active", "all",
+    "resolved"} and `ReconciliationReviewItem` for state == "reconciliation"
+    - a plain, untyped tuple rather than a generic/union wrapper, matching
+    this module's own existing "no parallel code path" preference; the two
+    item shapes are only ever handled together in `render_report()`/
+    `render_item_report()` below, which dispatch on `isinstance`."""
 
     database: str
     schema_readiness: dict
     blockers: "tuple[str, ...]" = ()
-    items: "tuple[HumanReviewItem, ...]" = ()
+    items: "tuple[HumanReviewItem, ...] | tuple[ReconciliationReviewItem, ...]" = ()
 
 
 def build_readonly_engine(database: Path):
@@ -112,26 +152,46 @@ def check_schema_readiness(database: Path) -> dict:
     """Read-only, via `sqlite3.connect(..., mode=ro)` inside each reused
     `inspect()` (never this script's own ORM engine, and never a write
     connection) - reuses the migration scripts' own already-proven,
-    already-tested schema inspection rather than reimplementing it."""
+    already-tested schema inspection rather than reimplementing it.
+
+    R4D CORRECTION: now also requires `reviewer_actions.reconciliation_fingerprint`
+    (R4B) to exist, for every state - see the module docstring's own "SCHEMA
+    GATE" section for why this was a genuine, proven gap, not a new
+    requirement invented for the new `reconciliation` state alone."""
     intelligence = inspect_intelligence_review_schema(database)
     promotion = inspect_promotion_policy_schema(database)
+    reconciliation_confirmation = inspect_reconciliation_confirmation_schema(database)
     ready = (
         intelligence["intelligence_review_decision_column_exists"]
         and intelligence["intelligence_review_reason_column_exists"]
         and promotion["promotion_policy_decision_column_exists"]
         and promotion["promotion_policy_reason_column_exists"]
+        and reconciliation_confirmation["reconciliation_fingerprint_column_exists"]
     )
     return {
         "intelligence_review_decision_column_exists": intelligence["intelligence_review_decision_column_exists"],
         "intelligence_review_reason_column_exists": intelligence["intelligence_review_reason_column_exists"],
         "promotion_policy_decision_column_exists": promotion["promotion_policy_decision_column_exists"],
         "promotion_policy_reason_column_exists": promotion["promotion_policy_reason_column_exists"],
+        "reconciliation_fingerprint_column_exists": reconciliation_confirmation["reconciliation_fingerprint_column_exists"],
         "source_assertions_count": promotion["source_assertions_count"],
         "ready": ready,
     }
 
 
-_VALID_STATE_FILTERS = ("active", "all", "resolved")
+_VALID_STATE_FILTERS = ("active", "all", "resolved", "reconciliation")
+
+# The reconciliation-aware states that actually mean "a human has something
+# new to look at" - CLEAR_TO_CREATE items list_reconciliation_review_items()
+# also returns (reconciliation_review_state is None on those) are not shown
+# by this state's default view, matching "avoid turning the queue into a
+# global Signal dedup scanner" (R4D mission) - a caller who wants the
+# complete reconciliation picture, including CLEAR items, can call
+# app.services.human_review_reconciliation.list_reconciliation_review_items()
+# directly.
+_RECONCILIATION_ATTENTION_STATES = frozenset(
+    {ReconciliationReviewState.RECONCILIATION_REVIEW_REQUIRED.value, ReconciliationReviewState.DISTINCT_CONFIRMED_PENDING_SIGNAL.value}
+)
 
 
 def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
@@ -146,7 +206,14 @@ def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
     `LIMIT` applied directly since no state sub-filtering happens afterward;
     "resolved" - list_review_workflow_items() filtered to just the
     RESOLVED_* states, for confirming an item (e.g. real MSP #222) was
-    correctly resolved and why.
+    correctly resolved and why; "reconciliation" (R4D,
+    app.services.human_review_reconciliation.list_reconciliation_review_items())
+    - governed rows where fresh R1/R2 reconciliation currently requires
+    attention (RECONCILIATION_REVIEW_REQUIRED, including stale confirmations,
+    or DISTINCT_CONFIRMED_PENDING_SIGNAL) - CLEAR_TO_CREATE items that
+    function also evaluates are not shown here, since reconciliation has
+    nothing new to say about them (matches the R4D mission's own "avoid
+    turning the queue into a global Signal dedup scanner" instruction).
 
     REVIEW-CHECKPOINT FIX: "resolved" must NOT pass `config.limit` into the
     inner list_review_workflow_items() call - that function's own `limit`
@@ -158,7 +225,10 @@ def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
     app.services.human_review_queue.list_human_review_items() itself
     already guards against for "active" - this script's own "resolved" path
     had not received the same fix until now). Fetches everything, filters to
-    resolved states, then applies `limit` in Python instead."""
+    resolved states, then applies `limit` in Python instead. "reconciliation"
+    (R4D) follows the identical discipline: list_reconciliation_review_items()
+    is called with no limit, filtered to the attention-needing states, THEN
+    limited in Python - never the reverse."""
     database_str = str(config.database.resolve())
     if config.state not in _VALID_STATE_FILTERS:
         raise ValueError(f"state must be one of {_VALID_STATE_FILTERS!r}, got {config.state!r}")
@@ -175,10 +245,17 @@ def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
                 items = list_human_review_items(session, limit=config.limit)
             elif config.state == "all":
                 items = list_review_workflow_items(session, limit=config.limit)
-            else:
+            elif config.state == "resolved":
                 all_items = list_review_workflow_items(session)
                 resolved = tuple(item for item in all_items if item.review_workflow_state in _RESOLVED_STATES)
                 items = resolved[: config.limit] if config.limit is not None else resolved
+            else:  # "reconciliation"
+                all_reconciliation_items = list_reconciliation_review_items(session)
+                attention = tuple(
+                    entry for entry in all_reconciliation_items
+                    if entry.reconciliation_review_state in _RECONCILIATION_ATTENTION_STATES
+                )
+                items = attention[: config.limit] if config.limit is not None else attention
             session.rollback()  # defensive - this session never adds/flushes anything
     finally:
         engine.dispose()
@@ -212,7 +289,54 @@ def _format_temporal(claim) -> "str | None":
     return f"{claim.temporal.qualifier.value}{as_of}{detail}"
 
 
-def render_item_report(item: HumanReviewItem) -> str:
+def _render_reconciliation_section(entry: ReconciliationReviewItem) -> "list[str]":
+    """R4D (mission Section 20's own example format):
+
+        Reviewer workflow: <state>
+        Reconciliation: POSSIBLE_EXISTING_SIGNAL_MATCH
+        Blocking Signals: 10, 20
+        Anchor reasons:
+          Signal 10: ...
+          Signal 20: ...
+        Current fingerprint: <64 hex>
+
+    plus, when a CONFIRM_DISTINCT_SIGNAL confirmation exists:
+    "Confirmation: CURRENT" or "Confirmation: STALE - RE-REVIEW REQUIRED".
+    Text formatting only - every value already exists on `entry`, nothing
+    computed here."""
+    lines: "list[str]" = []
+    lines.append("")
+    lines.append("Reconciliation (R4D, derived - fresh R1/R2 recomputation, never persisted)")
+    lines.append(f"  Reconciliation: {entry.reconciliation_outcome}")
+    if entry.reconciliation_review_state is not None:
+        lines.append(f"  Reconciliation review state: {entry.reconciliation_review_state}")
+    if entry.reconciliation_candidate_signal_ids:
+        lines.append(f"  Blocking Signals: {', '.join(str(i) for i in entry.reconciliation_candidate_signal_ids)}")
+        lines.append("  Anchor reasons:")
+        for reason in entry.reconciliation_anchor_reasons:
+            lines.append(f"    {reason}")
+    if entry.reconciliation_fingerprint:
+        lines.append(f"  Current fingerprint: {entry.reconciliation_fingerprint}")
+    if entry.stored_reconciliation_fingerprint is not None:
+        lines.append(f"  Stored fingerprint: {entry.stored_reconciliation_fingerprint}")
+        if entry.reconciliation_review_state == ReconciliationReviewState.DISTINCT_CONFIRMED_PENDING_SIGNAL.value:
+            lines.append("  Confirmation: CURRENT")
+        elif entry.reconciliation_outcome == "POSSIBLE_EXISTING_SIGNAL_MATCH":
+            lines.append("  Confirmation: STALE - RE-REVIEW REQUIRED")
+    if entry.reconciliation_warnings:
+        lines.append("")
+        lines.append("  !! RECONCILIATION WARNINGS !!")
+        for warning in entry.reconciliation_warnings:
+            lines.append(f"    {warning}")
+    return lines
+
+
+def render_item_report(item: "HumanReviewItem | ReconciliationReviewItem") -> str:
+    reconciliation_entry: "ReconciliationReviewItem | None" = None
+    if isinstance(item, ReconciliationReviewItem):
+        reconciliation_entry = item
+        item = item.item
+
     lines: "list[str]" = []
     lines.append("=" * 78)
     lines.append(f"SourceAssertion #{item.source_assertion_id}")
@@ -304,6 +428,9 @@ def render_item_report(item: HumanReviewItem) -> str:
         else:
             lines.append("  (no explicit not_established constraints on the re-derived claims)")
 
+    if reconciliation_entry is not None:
+        lines.extend(_render_reconciliation_section(reconciliation_entry))
+
     return "\n".join(lines)
 
 
@@ -311,6 +438,7 @@ _EMPTY_MESSAGE_BY_STATE = {
     "active": "Human review queue is empty. Nothing currently requires a human decision.",
     "all": "No governed evidence is currently HUMAN_REVIEW_REQUIRED.",
     "resolved": "No governed evidence has been resolved (rejected/duplicate/signal-created) yet.",
+    "reconciliation": "No governed evidence currently requires reconciliation review or re-review.",
 }
 
 
@@ -339,7 +467,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--state", choices=_VALID_STATE_FILTERS, default=DEFAULT_STATE_FILTER,
         help="active (default): needs a human decision now. all: every HUMAN_REVIEW_REQUIRED row, any state. "
-        "resolved: only rejected/duplicate/signal-created items.",
+        "resolved: only rejected/duplicate/signal-created items. reconciliation (R4D): governed rows where "
+        "fresh reconciliation currently requires attention (blocked or a stale distinct confirmation).",
     )
     return parser
 
