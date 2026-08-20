@@ -178,6 +178,7 @@ EXPECTED_COLUMNS = {
         "created_at": ("DATETIME", False, ("callable",), None),
         "supersedes_action_id": ("INTEGER", True, None, None),
         "duplicate_of_signal_id": ("INTEGER", True, None, None),
+        "reconciliation_fingerprint": ("VARCHAR(64)", True, None, None),
     },
     "installations": {
         "id": ("INTEGER", False, None, None),

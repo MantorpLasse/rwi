@@ -79,9 +79,16 @@ def _msp_222_shape(
 # ---------------------------------------------------------------------------
 
 
-def test_reviewer_actions_vocabulary_is_exactly_the_five_approved_actions():
+def test_reviewer_actions_vocabulary_is_exactly_the_six_approved_actions():
+    """Updated by R4B
+    (docs/architecture/existing-signal-reconciliation-r4b-reviewer-action-report.md)
+    to add CONFIRM_DISTINCT_SIGNAL - see
+    tests/test_reviewer_action_confirm_distinct_signal.py for that action's
+    own dedicated coverage; every pre-existing action's behavior in this
+    file is otherwise unmodified."""
     assert REVIEWER_ACTIONS == (
-        "APPROVE_SIGNAL", "REJECT_SIGNAL", "DEFER", "NEEDS_MORE_EVIDENCE", "MARK_DUPLICATE",
+        "APPROVE_SIGNAL", "REJECT_SIGNAL", "DEFER", "NEEDS_MORE_EVIDENCE",
+        "MARK_DUPLICATE", "CONFIRM_DISTINCT_SIGNAL",
     )
 
 

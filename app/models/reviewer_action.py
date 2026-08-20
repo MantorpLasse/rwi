@@ -28,6 +28,7 @@ REVIEWER_ACTIONS = (
     "DEFER",
     "NEEDS_MORE_EVIDENCE",
     "MARK_DUPLICATE",
+    "CONFIRM_DISTINCT_SIGNAL",
 )
 
 
@@ -52,12 +53,33 @@ class ReviewerAction(Base):
     matching that table's own `actor` field - RWI has no such
     infrastructure), and `supersedes_action_id` a self-referential nullable
     FK so a reviewer changing their mind appends a new row rather than
-    editing the old one, exactly like `supersedes_link_id`."""
+    editing the old one, exactly like `supersedes_link_id`.
+
+    CONFIRM_DISTINCT_SIGNAL (R4B,
+    docs/architecture/existing-signal-reconciliation-r4b-reviewer-action-report.md)
+    records that a human reviewed a specific existing-Signal reconciliation
+    block and confirmed the proposed Signal is a genuinely distinct
+    real-world event from the blocking candidate(s). Its
+    reconciliation_fingerprint is the R4A
+    app.services.existing_signal_reconciliation_review.compute_reconciliation_fingerprint()
+    value for the exact plan reviewed - stored verbatim, never recomputed or
+    derived from free text here. This row always supersedes a prior row on
+    the same SourceAssertion (enforced by app.services.
+    reviewer_action_persistence.record_reviewer_action(), a review-checkpoint
+    correction - see the R4B report) - it resolves a block that only ever
+    arises after an APPROVE_SIGNAL already exists as the latest action, so a
+    rootless CONFIRM_DISTINCT_SIGNAL with no predecessor is refused. This row
+    does not itself authorize Signal creation; a future integration slice
+    (R4C) is responsible for
+    recomputing the fingerprint fresh at creation time and comparing it
+    against this stored value before treating the confirmation as still
+    valid."""
 
     __tablename__ = "reviewer_actions"
     __table_args__ = (
         CheckConstraint(
-            "action IN ('APPROVE_SIGNAL','REJECT_SIGNAL','DEFER','NEEDS_MORE_EVIDENCE','MARK_DUPLICATE')",
+            "action IN ('APPROVE_SIGNAL','REJECT_SIGNAL','DEFER','NEEDS_MORE_EVIDENCE',"
+            "'MARK_DUPLICATE','CONFIRM_DISTINCT_SIGNAL')",
             name="ck_reviewer_actions_action",
         ),
         CheckConstraint(
@@ -67,6 +89,14 @@ class ReviewerAction(Base):
         CheckConstraint(
             "(action = 'MARK_DUPLICATE') OR duplicate_of_signal_id IS NULL",
             name="ck_reviewer_actions_duplicate_target_only_for_duplicate",
+        ),
+        CheckConstraint(
+            "(action != 'CONFIRM_DISTINCT_SIGNAL') OR reconciliation_fingerprint IS NOT NULL",
+            name="ck_reviewer_actions_fingerprint_required",
+        ),
+        CheckConstraint(
+            "(action = 'CONFIRM_DISTINCT_SIGNAL') OR reconciliation_fingerprint IS NULL",
+            name="ck_reviewer_actions_fingerprint_only_for_confirm_distinct",
         ),
     )
 
@@ -101,6 +131,16 @@ class ReviewerAction(Base):
     duplicate_of_signal_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("signals.id"), nullable=True, index=True
     )
+
+    # Populated only for action == "CONFIRM_DISTINCT_SIGNAL" (enforced by the
+    # CHECK constraints above and re-checked in Python): the R4A
+    # compute_reconciliation_fingerprint() value for the exact reconciliation
+    # plan the human reviewed, stored byte-for-byte. Sized for a SHA-256 hex
+    # digest (64 chars). No timestamp or "current fingerprint" concept here -
+    # this row is itself the immutable, dated record; recency (created_at,
+    # id) already answers "what is current," matching every other field on
+    # this table.
+    reconciliation_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     source_assertion: Mapped["SourceAssertion"] = relationship(back_populates="reviewer_actions")
     supersedes: Mapped[Optional["ReviewerAction"]] = relationship(

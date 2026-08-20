@@ -53,9 +53,35 @@ corrections discovered" section for why); DO_NOT_PROMOTE is an absolute
 block no reviewer action can override at this boundary. HUMAN_REVIEW_REQUIRED
 items do NOT need to first become AUTO_ELIGIBLE to be approved - that
 distinction from the design doc is preserved.
+
+CONFIRM_DISTINCT_SIGNAL GATE (R4B,
+docs/architecture/existing-signal-reconciliation-r4b-reviewer-action-report.md):
+this action is a follow-on resolution to an already-approved governed
+creation attempt that R3's reconciliation guard blocked, not a replacement
+for the original human approval - so it is gated by the exact same three
+governed decisions as APPROVE_SIGNAL, above. A SourceAssertion that could
+never legally receive APPROVE_SIGNAL (AUTO_ELIGIBLE, DO_NOT_PROMOTE, or a
+malformed/NULL governance state) can never receive CONFIRM_DISTINCT_SIGNAL
+either. This module also requires a syntactically valid R4A
+reconciliation_fingerprint (exactly 64 lowercase hex characters - the
+literal shape app.services.existing_signal_reconciliation_review.
+compute_reconciliation_fingerprint() produces) for every
+CONFIRM_DISTINCT_SIGNAL and forbids one for every other action, and
+requires supersedes_action_id to be set (this action must resolve some
+prior row in the same SourceAssertion's history - see the review-checkpoint
+correction note in the R4B report; a rootless confirmation with no
+predecessor is refused rather than left as ambiguous history). None of
+this recomputes or validates the fingerprint against a live reconciliation
+plan itself - only that a downstream integration (R4C, not yet built) can do:
+checking whether this stored fingerprint still matches the *current*
+blocking state requires re-running R1/R2/R4A fresh at creation time, which
+this persistence-only module deliberately does not do (see "R4B/R4C
+boundary" in the R4B report). R4B stores authorization evidence; R4C
+decides whether that evidence is still valid.
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -75,6 +101,16 @@ REQUIRED_IDENTITY_DECISION_FOR_APPROVAL = "ATTACH_CONFIRMED"
 REQUIRED_INTELLIGENCE_DECISION_FOR_APPROVAL = "REVIEW_REQUIRED"
 REQUIRED_PROMOTION_DECISION_FOR_APPROVAL = "HUMAN_REVIEW_REQUIRED"
 
+# The literal shape app.services.existing_signal_reconciliation_review.
+# compute_reconciliation_fingerprint() produces: hashlib.sha256(...).hexdigest()
+# is always exactly 64 lowercase hex characters. Anchored, no whitespace
+# allowed anywhere - deliberately stricter than str.strip()+lower() would
+# permit, since silently normalizing a malformed value would let a
+# non-fingerprint string through disguised as one.
+_FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+_ACTIONS_REQUIRING_APPROVAL_GATE = ("APPROVE_SIGNAL", "CONFIRM_DISTINCT_SIGNAL")
+
 
 def record_reviewer_action(
     session: Session,
@@ -85,6 +121,7 @@ def record_reviewer_action(
     reviewer: str,
     supersedes_action_id: Optional[int] = None,
     duplicate_of_signal_id: Optional[int] = None,
+    reconciliation_fingerprint: Optional[str] = None,
 ) -> ReviewerAction:
     """Validates and appends exactly one ReviewerAction row. Never commits;
     calls session.flush() only so a constraint violation surfaces
@@ -111,25 +148,52 @@ def record_reviewer_action(
     elif duplicate_of_signal_id is not None:
         raise ValueError("duplicate_of_signal_id is only valid when action == MARK_DUPLICATE")
 
-    if action == "APPROVE_SIGNAL":
+    if action in _ACTIONS_REQUIRING_APPROVAL_GATE:
         if source_assertion.identity_guard_decision != REQUIRED_IDENTITY_DECISION_FOR_APPROVAL:
             raise ValueError(
-                "APPROVE_SIGNAL requires identity_guard_decision == "
+                f"{action} requires identity_guard_decision == "
                 f"{REQUIRED_IDENTITY_DECISION_FOR_APPROVAL!r}, got "
                 f"{source_assertion.identity_guard_decision!r}"
             )
         if source_assertion.intelligence_review_decision != REQUIRED_INTELLIGENCE_DECISION_FOR_APPROVAL:
             raise ValueError(
-                "APPROVE_SIGNAL requires intelligence_review_decision == "
+                f"{action} requires intelligence_review_decision == "
                 f"{REQUIRED_INTELLIGENCE_DECISION_FOR_APPROVAL!r}, got "
                 f"{source_assertion.intelligence_review_decision!r}"
             )
         if source_assertion.promotion_policy_decision != REQUIRED_PROMOTION_DECISION_FOR_APPROVAL:
             raise ValueError(
-                "APPROVE_SIGNAL requires promotion_policy_decision == "
+                f"{action} requires promotion_policy_decision == "
                 f"{REQUIRED_PROMOTION_DECISION_FOR_APPROVAL!r}, got "
                 f"{source_assertion.promotion_policy_decision!r}"
             )
+
+    if action == "CONFIRM_DISTINCT_SIGNAL":
+        if reconciliation_fingerprint is None:
+            raise ValueError("CONFIRM_DISTINCT_SIGNAL requires reconciliation_fingerprint")
+        if not isinstance(reconciliation_fingerprint, str) or not _FINGERPRINT_PATTERN.fullmatch(
+            reconciliation_fingerprint
+        ):
+            raise ValueError(
+                "reconciliation_fingerprint must be exactly 64 lowercase hexadecimal "
+                f"characters, got {reconciliation_fingerprint!r}"
+            )
+        if supersedes_action_id is None:
+            # create_signal_from_approved_review() (unmodified by R4B) only ever
+            # raises the reconciliation block this action resolves when
+            # get_latest_reviewer_action() is already "APPROVE_SIGNAL" - so
+            # every legitimate CONFIRM_DISTINCT_SIGNAL necessarily supersedes
+            # some prior row (an APPROVE_SIGNAL, or a later DEFER/
+            # NEEDS_MORE_EVIDENCE recorded after it - every worked example in
+            # the R4 design's own Section 13 shows this). A row with no
+            # supersedes_action_id at all would be a rootless confirmation
+            # never actually tied to a reviewed block; rejected here rather
+            # than left to accumulate as ambiguous history. R4B does not
+            # further check *which* action is superseded - that remains a
+            # workflow/R4C concern, not something provable from this row alone.
+            raise ValueError("CONFIRM_DISTINCT_SIGNAL requires supersedes_action_id")
+    elif reconciliation_fingerprint is not None:
+        raise ValueError("reconciliation_fingerprint is only valid when action == CONFIRM_DISTINCT_SIGNAL")
 
     if supersedes_action_id is not None:
         previous = session.get(ReviewerAction, supersedes_action_id)
@@ -143,6 +207,7 @@ def record_reviewer_action(
         reviewer=reviewer.strip(),
         supersedes_action_id=supersedes_action_id,
         duplicate_of_signal_id=duplicate_of_signal_id,
+        reconciliation_fingerprint=reconciliation_fingerprint,
     )
     session.add(record)
     session.flush()
