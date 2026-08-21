@@ -16,6 +16,8 @@ from app.models import (
     Runway,
     RunwayEnd,
     Signal,
+    SignalDisposition,
+    SignalDispositionMember,
     Source,
     SourceAssertion,
     Snapshot,
@@ -249,6 +251,19 @@ EXPECTED_COLUMNS = {
         "source_notes": ("TEXT", True, None, None),
         "published": ("BOOLEAN", False, ("scalar", True), None),
     },
+    "signal_dispositions": {
+        "id": ("INTEGER", False, None, None),
+        "decision": ("VARCHAR(30)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "reviewer": ("VARCHAR(100)", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_id": ("INTEGER", True, None, None),
+    },
+    "signal_disposition_members": {
+        "id": ("INTEGER", False, None, None),
+        "disposition_id": ("INTEGER", False, None, None),
+        "signal_id": ("INTEGER", False, None, None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -302,6 +317,11 @@ EXPECTED_FOREIGN_KEYS = {
         ("runway_id", "runways.id"),
         ("source_id", "sources.id"),
         ("installation_id", "installations.id"),
+    },
+    "signal_dispositions": {("supersedes_id", "signal_dispositions.id")},
+    "signal_disposition_members": {
+        ("disposition_id", "signal_dispositions.id"),
+        ("signal_id", "signals.id"),
     },
 }
 
@@ -384,6 +404,13 @@ EXPECTED_INDEXES = {
         ("ix_signals_planning_year", ("planning_year",), False),
         ("ix_signals_procurement_year", ("procurement_year",), False),
         ("ix_signals_installation_id", ("installation_id",), False),
+    },
+    "signal_dispositions": {
+        ("ix_signal_dispositions_supersedes_id", ("supersedes_id",), False),
+    },
+    "signal_disposition_members": {
+        ("ix_signal_disposition_members_disposition_id", ("disposition_id",), False),
+        ("ix_signal_disposition_members_signal_id", ("signal_id",), False),
     },
 }
 
@@ -473,6 +500,14 @@ EXPECTED_RELATIONSHIPS = {
         "runway": ("Runway", "incidents", DEFAULT_CASCADE),
         "source": ("Source", None, DEFAULT_CASCADE),
     },
+    "SignalDisposition": {
+        "supersedes": ("SignalDisposition", None, DEFAULT_CASCADE),
+        "members": ("SignalDispositionMember", "disposition", DEFAULT_CASCADE),
+    },
+    "SignalDispositionMember": {
+        "disposition": ("SignalDisposition", "members", DEFAULT_CASCADE),
+        "signal": ("Signal", None, DEFAULT_CASCADE),
+    },
 }
 
 
@@ -500,6 +535,8 @@ def test_all_current_models_are_exported_from_app_models():
         Runway.__name__,
         RunwayEnd.__name__,
         Signal.__name__,
+        SignalDisposition.__name__,
+        SignalDispositionMember.__name__,
         Source.__name__,
         SourceAssertion.__name__,
         Snapshot.__name__,
@@ -516,6 +553,8 @@ def test_all_current_models_are_exported_from_app_models():
         "Runway",
         "RunwayEnd",
         "Signal",
+        "SignalDisposition",
+        "SignalDispositionMember",
         "Source",
         "SourceAssertion",
         "Snapshot",

@@ -9,6 +9,7 @@ from app.models.source import Source
 from app.models.source_assertion import SourceAssertion
 from app.models.physical_installation_identity import InstallationAssertionLink, PhysicalInstallationIdentity
 from app.models.reviewer_action import ReviewerAction
+from app.models.signal_disposition import SignalDisposition, SignalDispositionMember
 
 __all__ = [
     "Airport",
@@ -24,6 +25,8 @@ __all__ = [
     "Runway",
     "RunwayEnd",
     "Signal",
+    "SignalDisposition",
+    "SignalDispositionMember",
     "Source",
     "SourceAssertion",
     "Snapshot",
