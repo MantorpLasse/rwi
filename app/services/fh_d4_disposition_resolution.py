@@ -126,6 +126,63 @@ calls `session.add()`, `.flush()`, `.commit()`, or `.delete()`. No Signal is
 ever mutated, merged, or deleted; no ReviewerAction or SignalDisposition is
 ever created; `Signal.published` is never touched.
 
+D4D8B SUBGROUP DISCOVERY (docs/architecture/fh-d4-signal-disposition-d4d8-
+subgroup-semantics-design.md §4/§10, adversarially reviewed and locked in
+D4D8A): a raw FH-D4 group whose OWN exact-set status is `UNREVIEWED` may still
+contain one or more already-confirmed SignalDisposition rows whose exact
+member set is a PROPER SUBSET of the raw group's own member set.
+`FhD4OperationalGroup.resolved_subgroups`/`.unresolved_remainder_signal_ids`/
+`.subgroup_conflict` expose this as purely additive, purely derived read-side
+metadata - "subgroup" is not a new persisted concept (design doc §4): it is
+an ordinary exact-set disposition, recomputed fresh on every call from
+`signal_dispositions`/`signal_disposition_members`, that happens to be a
+strict subset of a currently-live raw group.
+
+EXACT-SET PRECEDENCE: subgroup discovery is computed only for groups whose
+own exact-set status is `UNREVIEWED` (i.e. members of `active_findings`) -
+a group already resolved (`CONFIRMED_DISTINCT`/`CONFIRMED_SAME_REAL_WORLD_
+EFFORT`) or already flagged `ambiguous_groups` at the WHOLE-group level keeps
+its existing, unmodified fields (`resolved_subgroups=()`,
+`unresolved_remainder_signal_ids=()`, `subgroup_conflict=False`) - exact-set
+semantics fully own those groups already; subgroup metadata is never computed
+or attached to them.
+
+NO TRANSITIVE INFERENCE, NO DISTINCT-FROM-REMAINDER INFERENCE (design doc
+§5/§6): a discovered subgroup asserts nothing about any Signal outside its
+own exact member set. `unresolved_remainder_signal_ids` names Signals not
+covered by any resolved subgroup - it is never a claim that those Signals are
+DISTINCT from the resolved subgroup(s), only that nothing has been confirmed
+about them. `{A,B}` SAME and `{B,C}` SAME are never combined into `{A,C}` or
+`{A,B,C}` SAME - no union-find, no equivalence-class engine, no closure.
+
+DEFENSIVE READ-SIDE DISJOINTNESS CHECK (design doc §10's "Correction 4"): the
+future D4D8C write-time overlap safeguard can only prevent bad states written
+AFTER it ships; it cannot guarantee no two discovered subset dispositions for
+the same raw group already overlap (share a Signal id) from data written
+before that safeguard exists. If two or more of a group's own discovered
+proper-subset dispositions are not pairwise disjoint, this module never
+silently resolves the conflict: no winner is picked, nothing is unioned, no
+transitive equivalence is derived, and no history is dropped.
+`subgroup_conflict=True` is set, `resolved_subgroups` carries EVERY
+discovered candidate for that group (unfiltered, for audit), and
+`unresolved_remainder_signal_ids` is the group's ENTIRE member set - nothing
+is treated as safely resolved when the underlying subgroup history itself
+conflicts. Fail-visible over silently-manufactured consistency, mirroring the
+existing whole-group `ambiguous_history`/`independent_root_count > 1`
+pattern exactly, but for a structurally different condition (two DIFFERENT
+overlapping member sets, not multiple roots for the SAME member set - the two
+concerns are orthogonal and never conflated).
+
+QUERY COST: `_batched_subgroup_discovery()` is intentionally NOT merged with
+`_batched_related_history()`'s own existing member-fetch/header-fetch, even
+though both scan the same two tables - keeping them independent keeps this
+addition a clean, separately-reviewable diff against already-committed,
+already-tested D4D4 code, at the cost of one additional bounded (not
+per-group) full-table scan of `signal_disposition_members` plus one
+additional bounded header query - the same accepted small-scale tradeoff
+`find_related_historical_dispositions()`'s own docstring already documents
+for this table.
+
 INFORMATION FIREWALL: this module composes ALREADY-COMPUTED decisions only
 - D4D3's own `SignalDispositionStatus`/`RelatedHistoricalDisposition`
 dataclasses (audit fields only: id/decision/reviewer/reason/created_at) and
@@ -157,6 +214,7 @@ from app.services.signal_disposition_resolution import (
 
 __all__ = [
     "FH_D4_RULE_ID",
+    "SubgroupDispositionSummary",
     "FhD4OperationalGroup",
     "FhD4DispositionResolution",
     "resolve_fh_d4_findings",
@@ -164,6 +222,34 @@ __all__ = [
 ]
 
 FH_D4_RULE_ID = "FH-D4"
+
+
+@dataclass(frozen=True)
+class SubgroupDispositionSummary:
+    """One already-confirmed, PROPER-SUBSET exact-set SignalDisposition,
+    exposed as contextual metadata against a currently-live raw FH-D4 group
+    (D4D8B - top-of-file "D4D8B SUBGROUP DISCOVERY" section). Not a new
+    persistence concept: "subgroup" is a purely derived read-side
+    relationship, recomputed fresh on every call, never stored.
+
+    Fields mirror `FhD4OperationalGroup`'s own exact-set fields verbatim
+    (same names, same meaning) - this is D3's own latest-wins resolution
+    (`resolve_fh_d4_group_statuses()`'s own tie-break: `created_at` DESC,
+    `id` DESC) applied to the subset's own exact member set, not a new
+    resolution algorithm. `independent_root_count`/`ambiguous_history` are
+    this subset's OWN root count/ambiguity - orthogonal to, and never
+    conflated with, `FhD4OperationalGroup.subgroup_conflict` (which flags
+    disagreement BETWEEN two different subset member sets, not multiple
+    roots for the SAME subset)."""
+
+    signal_ids: "tuple[int, ...]"
+    latest_disposition_id: int
+    decision: str
+    reviewer: str
+    reason: str
+    created_at: datetime
+    independent_root_count: int
+    ambiguous_history: bool
 
 
 @dataclass(frozen=True)
@@ -195,6 +281,21 @@ class FhD4OperationalGroup:
     its own `status` (a resolved group can still have older, narrower or
     broader historical context worth showing), never affecting `status`
     itself.
+
+    `resolved_subgroups`/`unresolved_remainder_signal_ids`/
+    `subgroup_conflict` (D4D8B addition - top-of-file "D4D8B SUBGROUP
+    DISCOVERY" section) are purely additive: populated only when this
+    group's own `status == UNREVIEWED` (exact-set precedence - a resolved or
+    ambiguous group keeps these at their empty/default values, since
+    exact-set semantics already fully own it). `resolved_subgroups` is
+    sorted ascending by `signal_ids` for deterministic ordering. When
+    `subgroup_conflict` is `True`, `resolved_subgroups` carries every
+    discovered candidate unfiltered (for audit) and
+    `unresolved_remainder_signal_ids` is this group's entire `signal_ids` -
+    nothing is treated as safely resolved when the underlying subgroup
+    history itself conflicts. Otherwise, `unresolved_remainder_signal_ids`
+    is `signal_ids` minus the union of every `resolved_subgroups` member
+    set - always true by construction, never independently verified state.
     """
 
     raw_finding: HealthFinding
@@ -209,6 +310,9 @@ class FhD4OperationalGroup:
     independent_root_count: int
     ambiguous_history: bool
     related_history: "tuple[RelatedHistoricalDisposition, ...]"
+    resolved_subgroups: "tuple[SubgroupDispositionSummary, ...]" = ()
+    unresolved_remainder_signal_ids: "tuple[int, ...]" = ()
+    subgroup_conflict: bool = False
 
 
 @dataclass(frozen=True)
@@ -308,6 +412,115 @@ def _batched_related_history(
     return result
 
 
+def _batched_subgroup_discovery(
+    session: Session, group_sets: "Sequence[frozenset]",
+) -> "dict[frozenset, tuple[tuple[SubgroupDispositionSummary, ...], tuple[int, ...], bool]]":
+    """For each raw FH-D4 group's own member set, discovers already-confirmed
+    exact-set `SignalDisposition` history whose member set is a PROPER SUBSET
+    of that group (D4D8B, design doc §4/§10) - never an exact match (exact-set
+    status remains D3's own `resolve_fh_d4_group_statuses()`'s job, unchanged)
+    and never a superset (irrelevant to "what does this group already
+    contain").
+
+    Deliberately independent of `_batched_related_history()` - see this
+    module's own top-of-file "D4D8B SUBGROUP DISCOVERY" section, "QUERY
+    COST," for why the two are not merged.
+
+    For each raw group_set: finds every DISTINCT subset member-set among its
+    own candidates, resolves that subset's own LATEST decision (the exact
+    `created_at` DESC, `id` DESC tie-break `resolve_fh_d4_group_statuses()`
+    already uses) plus its own `independent_root_count` - D3's own
+    latest-wins algorithm, applied to a subset's exact member set instead of
+    the raw group's own; no new resolution algorithm is introduced.
+
+    DEFENSIVE READ-SIDE DISJOINTNESS CHECK: if two or more of a group's own
+    discovered subset member-sets are not pairwise disjoint, `subgroup_
+    conflict=True` is returned together with every discovered candidate
+    (nothing dropped) and a remainder equal to the group's ENTIRE member set
+    (nothing is treated as safely resolved when the underlying subgroup
+    history itself conflicts) - see the module docstring's own full
+    reasoning.
+
+    Returns, per group_set: `(resolved_subgroups, unresolved_remainder_
+    signal_ids, subgroup_conflict)` - `resolved_subgroups` sorted ascending
+    by `signal_ids` for deterministic ordering.
+
+    Bounded query cost: at most 2 queries total for the ENTIRE batch call
+    (one full `SignalDispositionMember` scan, one batched header fetch for
+    whichever disposition ids turned out to be proper-subset candidates for
+    ANY group - skipped entirely if none are) - never one query per group.
+    """
+    if not group_sets:
+        return {}
+
+    all_members = session.query(
+        SignalDispositionMember.disposition_id, SignalDispositionMember.signal_id,
+    ).all()
+    member_sets: "dict[int, set]" = {}
+    for disposition_id, signal_id in all_members:
+        member_sets.setdefault(disposition_id, set()).add(signal_id)
+    member_sets = {did: frozenset(members) for did, members in member_sets.items()}
+
+    candidates_by_group: "dict[frozenset, list[int]]" = {gs: [] for gs in group_sets}
+    all_candidate_ids: "set[int]" = set()
+    for group_set in group_sets:
+        for disposition_id, members in member_sets.items():
+            if members < group_set:  # strict subset only - never exact, never superset
+                candidates_by_group[group_set].append(disposition_id)
+                all_candidate_ids.add(disposition_id)
+
+    if not all_candidate_ids:
+        return {group_set: ((), tuple(sorted(group_set)), False) for group_set in group_sets}
+
+    headers = session.query(SignalDisposition).filter(SignalDisposition.id.in_(all_candidate_ids)).all()
+    headers_by_id = {header.id: header for header in headers}
+
+    result: "dict[frozenset, tuple[tuple[SubgroupDispositionSummary, ...], tuple[int, ...], bool]]" = {}
+    for group_set in group_sets:
+        candidate_ids = candidates_by_group[group_set]
+        if not candidate_ids:
+            result[group_set] = ((), tuple(sorted(group_set)), False)
+            continue
+
+        by_member_set: "dict[frozenset, list[int]]" = {}
+        for disposition_id in candidate_ids:
+            by_member_set.setdefault(member_sets[disposition_id], []).append(disposition_id)
+
+        summaries: "list[SubgroupDispositionSummary]" = []
+        for subset, ids in by_member_set.items():
+            headers_for_subset = [headers_by_id[i] for i in ids]
+            latest = max(headers_for_subset, key=lambda h: (h.created_at, h.id))
+            independent_root_count = sum(1 for h in headers_for_subset if h.supersedes_id is None)
+            summaries.append(
+                SubgroupDispositionSummary(
+                    signal_ids=tuple(sorted(subset)),
+                    latest_disposition_id=latest.id,
+                    decision=latest.decision,
+                    reviewer=latest.reviewer,
+                    reason=latest.reason,
+                    created_at=latest.created_at,
+                    independent_root_count=independent_root_count,
+                    ambiguous_history=independent_root_count > 1,
+                )
+            )
+        summaries.sort(key=lambda s: s.signal_ids)
+
+        conflict = False
+        for i, a in enumerate(summaries):
+            a_set = frozenset(a.signal_ids)
+            if any(not a_set.isdisjoint(b.signal_ids) for b in summaries[i + 1:]):
+                conflict = True
+                break
+
+        if conflict:
+            result[group_set] = (tuple(summaries), tuple(sorted(group_set)), True)
+        else:
+            covered: "frozenset[int]" = frozenset().union(*(frozenset(s.signal_ids) for s in summaries))
+            result[group_set] = (tuple(summaries), tuple(sorted(group_set - covered)), False)
+
+    return result
+
+
 def resolve_fh_d4_findings(
     session: Session, findings: Sequence[HealthFinding],
 ) -> FhD4DispositionResolution:
@@ -320,9 +533,11 @@ def resolve_fh_d4_findings(
     Bounded, non-N+1 query cost: at most 4 queries for the exact-match
     batch resolution (D4D3's own `resolve_fh_d4_group_statuses()`, unmodified)
     plus at most 2 for the batched related-history scan
-    (`_batched_related_history()`) = at most 6 queries total for the ENTIRE
-    call, regardless of how many FH-D4 groups are present - never one query
-    per group. Zero queries at all if `findings` contains no FH-D4 rows.
+    (`_batched_related_history()`) plus at most 2 for the batched subgroup-
+    discovery scan (`_batched_subgroup_discovery()`, D4D8B) = at most 8
+    queries total for the ENTIRE call, regardless of how many FH-D4 groups
+    are present - never one query per group. Zero queries at all if
+    `findings` contains no FH-D4 rows.
 
     Fails loud naturally if the D4D2 tables are missing (an ordinary,
     uncaught `sqlalchemy.exc.OperationalError`) - see this module's own
@@ -351,6 +566,7 @@ def resolve_fh_d4_findings(
 
         group_sets = [frozenset(key) for key in canonical_keys]
         related_by_set = _batched_related_history(session, group_sets)
+        subgroups_by_set = _batched_subgroup_discovery(session, group_sets)
 
         active: "list[FhD4OperationalGroup]" = []
         confirmed_distinct: "list[FhD4OperationalGroup]" = []
@@ -362,6 +578,19 @@ def resolve_fh_d4_findings(
             status = statuses[canonical_key]
             related = related_by_set.get(frozenset(canonical_key), ())
             ambiguous_history = status.independent_root_count > 1
+
+            # Exact-set precedence (D4D8B, module docstring's own "D4D8B
+            # SUBGROUP DISCOVERY" section): subgroup metadata is computed
+            # ONLY for a group whose OWN exact-set status is UNREVIEWED - a
+            # resolved or already-ambiguous group keeps these at their
+            # empty/default values; exact-set semantics already fully own it.
+            if status.status == UNREVIEWED:
+                resolved_subgroups, remainder, subgroup_conflict = subgroups_by_set.get(
+                    frozenset(canonical_key), ((), canonical_key, False)
+                )
+            else:
+                resolved_subgroups, remainder, subgroup_conflict = (), (), False
+
             group = FhD4OperationalGroup(
                 raw_finding=finding,
                 signal_ids=canonical_key,
@@ -375,6 +604,9 @@ def resolve_fh_d4_findings(
                 independent_root_count=status.independent_root_count,
                 ambiguous_history=ambiguous_history,
                 related_history=related,
+                resolved_subgroups=resolved_subgroups,
+                unresolved_remainder_signal_ids=remainder,
+                subgroup_conflict=subgroup_conflict,
             )
             if status.status == UNREVIEWED:
                 active.append(group)

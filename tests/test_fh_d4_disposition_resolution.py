@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import inspect as inspect_module
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine, event, text
@@ -16,6 +17,11 @@ from sqlalchemy.orm import Session
 
 from app.database import Base
 from app.models import Airport, Signal
+from app.models.signal_disposition import (
+    ACCEPTING_INITIAL_MEMBERS_ATTR,
+    SignalDisposition,
+    SignalDispositionMember,
+)
 from app.services.fh_d4_disposition_resolution import (
     FH_D4_RULE_ID,
     FhD4DispositionResolution,
@@ -496,12 +502,14 @@ class TestTwelveGroupSimulation:
 
 class TestBatchQueryBehavior:
     @pytest.mark.parametrize("n_groups", [1, 12, 100])
-    def test_query_count_exactly_five_with_no_related_history(self, n_groups):
+    def test_query_count_exactly_six_with_no_related_or_subgroup_history(self, n_groups):
         """No group has any subset/superset-related historical disposition
-        (only an exact match, which is never 'related') - the related-
-        history header-fetch query short-circuits, leaving exactly 5:
-        4 from resolve_fh_d4_group_statuses() + 1 (the all-members scan
-        alone) from _batched_related_history()."""
+        (only an exact match, which is never 'related' and never a
+        'subgroup') - both the related-history and subgroup-discovery
+        header-fetch queries short-circuit, leaving exactly 6: 4 from
+        resolve_fh_d4_group_statuses() + 1 (all-members scan alone) from
+        _batched_related_history() + 1 (all-members scan alone) from
+        _batched_subgroup_discovery() (D4D8B)."""
         engine, session = make_session()
         ids = _signals(session, n_groups * 2)
         findings = [_fh_d4_finding(ids[i * 2: i * 2 + 2], airport_id=1) for i in range(n_groups)]
@@ -521,17 +529,19 @@ class TestBatchQueryBehavior:
             event.remove(engine_for_events, "before_cursor_execute", _capture)
 
         select_statements = [s for s in statements if s.startswith("SELECT")]
-        assert len(select_statements) == 5, (
-            f"expected exactly 5 SELECT statements for {n_groups} groups, got "
+        assert len(select_statements) == 6, (
+            f"expected exactly 6 SELECT statements for {n_groups} groups, got "
             f"{len(select_statements)}: {select_statements}"
         )
         session.close(); engine.dispose()
 
     @pytest.mark.parametrize("n_groups", [2, 10, 100])
-    def test_query_count_exactly_six_with_related_history_present(self, n_groups):
+    def test_query_count_exactly_eight_with_related_and_subgroup_history_present(self, n_groups):
         """At least one group has a genuine subset-related historical
-        disposition - the related-history header-fetch query fires once
-        for the whole batch, giving exactly 6 total, regardless of scale."""
+        disposition, which is simultaneously a genuine subgroup candidate -
+        both the related-history and subgroup-discovery header-fetch
+        queries fire once each for the whole batch, giving exactly 8 total,
+        regardless of scale."""
         engine, session = make_session()
         ids = _signals(session, n_groups * 3)
         findings = [_fh_d4_finding(ids[i * 3: i * 3 + 3], airport_id=1) for i in range(n_groups)]
@@ -553,9 +563,10 @@ class TestBatchQueryBehavior:
 
         target = next(g for g in result.active_findings if g.signal_ids == findings[0].entity_ids)
         assert target.related_history != ()  # sanity: the path we're measuring actually fired
+        assert target.resolved_subgroups != ()  # sanity: subgroup discovery also fired (D4D8B)
         select_statements = [s for s in statements if s.startswith("SELECT")]
-        assert len(select_statements) == 6, (
-            f"expected exactly 6 SELECT statements for {n_groups} groups, got "
+        assert len(select_statements) == 8, (
+            f"expected exactly 8 SELECT statements for {n_groups} groups, got "
             f"{len(select_statements)}: {select_statements}"
         )
         session.close(); engine.dispose()
@@ -1457,3 +1468,661 @@ class TestNoRealDatabaseAccess:
         ]
         real_db_filename = "runway_safe" + ".db"
         assert not any(real_db_filename in literal for literal in literals)
+
+
+# ---------------------------------------------------------------------------
+# D4D8B - subgroup discovery (docs/architecture/fh-d4-signal-disposition-
+# d4d8-subgroup-semantics-design.md, adversarially reviewed/locked in D4D8A)
+# ---------------------------------------------------------------------------
+
+
+class TestSubgroupDiscovery:
+    """Mandatory test matrix A-R (D4D8B mission) plus three synthetic
+    fixtures replaying the real D4D7 group shapes (Roanoke/Binghamton/
+    Worcester) - all fully synthetic, never touching the real database."""
+
+    # -- A: no dispositions at all ------------------------------------------------
+
+    def test_a_no_dispositions_ordinary_active_no_subgroups(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        finding = _real_fh_d4_finding(ids, airport_id=session.get(Signal, ids[0]).airport_id)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        assert len(result.active_findings) == 1
+        group = result.active_findings[0]
+        assert group.status == "UNREVIEWED"
+        assert group.resolved_subgroups == ()
+        assert group.subgroup_conflict is False
+        # Remainder = raw signal_ids minus union(resolved_subgroups) = full set.
+        assert group.unresolved_remainder_signal_ids == tuple(sorted(ids))
+        session.close(); engine.dispose()
+
+    # -- B/C: exact-set precedence ------------------------------------------------
+
+    def test_b_exact_set_distinct_carries_no_subgroup_metadata(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        record_signal_group_disposition(session, signal_ids=ids, decision="DISTINCT", reviewer="human:a", reason="x")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        assert len(result.confirmed_distinct) == 1
+        group = result.confirmed_distinct[0]
+        assert group.resolved_subgroups == ()
+        assert group.unresolved_remainder_signal_ids == ()
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    def test_c_exact_set_same_carries_no_subgroup_metadata(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        record_signal_group_disposition(session, signal_ids=ids, decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        assert len(result.confirmed_same_effort) == 1
+        group = result.confirmed_same_effort[0]
+        assert group.resolved_subgroups == ()
+        assert group.unresolved_remainder_signal_ids == ()
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    # -- D/E: a single two-member subgroup within a triple -------------------------
+
+    def test_d_subgroup_same_within_triple_raw_stays_active(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        assert result.confirmed_distinct == () and result.confirmed_same_effort == () and result.ambiguous_groups == ()
+        assert len(result.active_findings) == 1
+        group = result.active_findings[0]
+        assert group.status == "UNREVIEWED"  # the RAW group itself is still unreviewed
+        assert len(group.resolved_subgroups) == 1
+        sub = group.resolved_subgroups[0]
+        assert sub.signal_ids == tuple(sorted([a, b]))
+        assert sub.decision == "SAME_REAL_WORLD_EFFORT"
+        assert group.unresolved_remainder_signal_ids == (c,)
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    def test_e_subgroup_distinct_within_triple_no_inference_about_remainder(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="DISTINCT", reviewer="human:a", reason="x")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert len(group.resolved_subgroups) == 1
+        assert group.resolved_subgroups[0].decision == "DISTINCT"
+        assert group.unresolved_remainder_signal_ids == (c,)
+        # No disposition, exact-set or otherwise, exists for {c} paired with
+        # anything - resolve_fh_d4_group_statuses() (unmodified) would report
+        # UNREVIEWED for any set naming c; nothing here asserts DISTINCT for c.
+        session.close(); engine.dispose()
+
+    # -- F: four-member subgroup within a quintuple, singleton remainder ----------
+
+    def test_f_four_member_subgroup_within_quintuple(self):
+        engine, session = make_session()
+        ids = _signals(session, 5)
+        four, fifth = ids[:4], ids[4]
+        record_signal_group_disposition(session, signal_ids=four, decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert len(group.resolved_subgroups) == 1
+        assert group.resolved_subgroups[0].signal_ids == tuple(sorted(four))
+        assert group.unresolved_remainder_signal_ids == (fifth,)
+        session.close(); engine.dispose()
+
+    # -- G: two disjoint subgroups within a six-member raw group -------------------
+
+    def test_g_two_disjoint_subgroups_both_visible(self):
+        engine, session = make_session()
+        ids = _signals(session, 6)
+        a, b, c, d, e, f = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        record_signal_group_disposition(session, signal_ids=[c, d], decision="DISTINCT", reviewer="human:b", reason="y")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert len(group.resolved_subgroups) == 2
+        by_set = {s.signal_ids: s.decision for s in group.resolved_subgroups}
+        assert by_set[tuple(sorted([a, b]))] == "SAME_REAL_WORLD_EFFORT"
+        assert by_set[tuple(sorted([c, d]))] == "DISTINCT"
+        assert group.unresolved_remainder_signal_ids == tuple(sorted([e, f]))
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    # -- H/I: overlapping proper subsets - deterministic conflict behavior --------
+
+    def test_h_overlapping_proper_subsets_same_decision_is_conflict(self):
+        engine, session = make_session()
+        ids = _signals(session, 5)
+        a, b, c, d, e = ids
+        record_signal_group_disposition(session, signal_ids=[a, b, c], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        record_signal_group_disposition(session, signal_ids=[c, d], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:b", reason="y")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.subgroup_conflict is True
+        # Nothing dropped: both conflicting candidates remain visible.
+        assert len(group.resolved_subgroups) == 2
+        seen_sets = {s.signal_ids for s in group.resolved_subgroups}
+        assert tuple(sorted([a, b, c])) in seen_sets
+        assert tuple(sorted([c, d])) in seen_sets
+        # Nothing treated as safely resolved: remainder is the ENTIRE raw set.
+        assert group.unresolved_remainder_signal_ids == tuple(sorted(ids))
+        session.close(); engine.dispose()
+
+    def test_i_overlapping_proper_subsets_different_decisions_is_conflict(self):
+        engine, session = make_session()
+        ids = _signals(session, 5)
+        a, b, c, d, e = ids
+        record_signal_group_disposition(session, signal_ids=[a, b, c], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        record_signal_group_disposition(session, signal_ids=[c, d], decision="DISTINCT", reviewer="human:b", reason="y")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.subgroup_conflict is True
+        assert len(group.resolved_subgroups) == 2
+        assert group.unresolved_remainder_signal_ids == tuple(sorted(ids))
+        session.close(); engine.dispose()
+
+    # -- J: exact-set primary bucket semantics still win ---------------------------
+
+    def test_j_exact_set_history_wins_over_unrelated_subgroup_history(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        # A genuine subset disposition exists for {a,b} ...
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        # ... but the RAW group {a,b,c} itself has its OWN exact-set disposition.
+        record_signal_group_disposition(session, signal_ids=ids, decision="DISTINCT", reviewer="human:b", reason="y")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        assert result.active_findings == ()
+        assert len(result.confirmed_distinct) == 1
+        group = result.confirmed_distinct[0]
+        assert group.status == "CONFIRMED_DISTINCT"
+        # Exact-set precedence: subgroup metadata is not computed/attached at all.
+        assert group.resolved_subgroups == ()
+        assert group.unresolved_remainder_signal_ids == ()
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    # -- K: existing ambiguous exact-set-history behavior unchanged ---------------
+
+    def test_k_ambiguous_exact_set_history_unaffected_by_subgroup_logic(self):
+        """Strengthened (D4D8B critical review, mission §3 Case C): a
+        LEGITIMATE proper-subset disposition also exists alongside the
+        ambiguous exact-set history - subgroup metadata must not 'rescue' or
+        suppress the ambiguity; the exact-set ambiguity still controls the
+        primary bucket outright."""
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:z", reason="w")
+        record_signal_group_disposition(session, signal_ids=ids, decision="DISTINCT", reviewer="human:a", reason="x")
+        record_signal_group_disposition(session, signal_ids=ids, decision="SAME_REAL_WORLD_EFFORT", reviewer="human:b", reason="y")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        assert result.active_findings == () and result.confirmed_distinct == () and result.confirmed_same_effort == ()
+        assert len(result.ambiguous_groups) == 1
+        group = result.ambiguous_groups[0]
+        assert group.ambiguous_history is True
+        assert group.independent_root_count == 2
+        assert group.resolved_subgroups == ()
+        assert group.unresolved_remainder_signal_ids == ()
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    # -- L: subgroup recorded independently of any particular raw-group context ---
+
+    def test_l_subgroup_recorded_before_raw_group_is_ever_queried(self):
+        """"Subgroup" is a purely derived relationship (design doc §4) - a
+        disposition recorded with no FH-D4 raw group in view at all is
+        discovered correctly the first time it is later evaluated against a
+        currently-live raw group that happens to contain it as a proper
+        subset."""
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        # Recorded via the generic persistence API - no FH-D4 finding involved.
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="DISTINCT", reviewer="human:a", reason="x")
+        session.commit()
+
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+        group = result.active_findings[0]
+        assert len(group.resolved_subgroups) == 1
+        assert group.resolved_subgroups[0].signal_ids == tuple(sorted([a, b]))
+        session.close(); engine.dispose()
+
+    # -- M: deterministic ordering of multiple subgroup records --------------------
+
+    def test_m_deterministic_ordering_regardless_of_insertion_order(self):
+        engine, session = make_session()
+        ids = _signals(session, 6)
+        a, b, c, d, e, f = ids
+        # Insert the HIGHER-signal_id subgroup first.
+        record_signal_group_disposition(session, signal_ids=[c, d], decision="DISTINCT", reviewer="human:a", reason="x")
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:b", reason="y")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        ordering = [s.signal_ids for s in group.resolved_subgroups]
+        assert ordering == sorted(ordering)
+        assert ordering[0] == tuple(sorted([a, b]))
+        session.close(); engine.dispose()
+
+    # -- N: singleton remainder ------------------------------------------------
+
+    def test_n_singleton_remainder(self):
+        engine, session = make_session()
+        ids = _signals(session, 4)
+        three, fourth = ids[:3], ids[3]
+        record_signal_group_disposition(session, signal_ids=three, decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.unresolved_remainder_signal_ids == (fourth,)
+        session.close(); engine.dispose()
+
+    # -- O: empty remainder never occurs for a proper-subset interpretation -------
+
+    def test_o_minimum_pair_raw_group_has_no_possible_proper_subset(self):
+        """A raw group of exactly 2 Signals (the minimum FH-D4/disposition
+        cardinality) structurally cannot contain any proper subset of size
+        >= 2 - exact-set semantics own the full-set case entirely; subgroup
+        discovery must not crash or fabricate anything for the minimum case."""
+        engine, session = make_session()
+        ids = _signals(session, 2)
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.resolved_subgroups == ()
+        assert group.unresolved_remainder_signal_ids == tuple(sorted(ids))
+        session.close(); engine.dispose()
+
+    # -- P/Q: non-D4 findings and raw counts unchanged ------------------------------
+
+    def test_p_non_d4_findings_unchanged_by_subgroup_logic(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        session.commit()
+        d4_finding = _fh_d4_finding(ids, airport_id=1)
+        other = HealthFinding(
+            rule_id="FH-D3", classification=HealthClassification.REVIEW_REQUIRED,
+            entity_type="Signal", entity_ids=(a,), airport_id=1, summary="unrelated", structured_evidence={},
+        )
+        result = resolve_fh_d4_findings(session, [d4_finding, other])
+        assert result.non_d4_findings == (other,)
+        session.close(); engine.dispose()
+
+    def test_q_raw_finding_counts_and_accounting_invariant_unchanged(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:a", reason="x")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        all_grouped = (
+            result.active_findings + result.confirmed_distinct
+            + result.confirmed_same_effort + result.ambiguous_groups
+        )
+        assert len(all_grouped) == 1  # exactly the one raw finding, subgroup metadata notwithstanding
+        session.close(); engine.dispose()
+
+    # -- R: existing no-subgroup fixtures remain field/result compatible -----------
+
+    def test_r_existing_unreviewed_fixture_gains_only_additive_defaults(self):
+        engine, session = make_session()
+        ids = _signals(session, 2)
+        finding = _real_fh_d4_finding(ids, airport_id=session.get(Signal, ids[0]).airport_id)
+        result = resolve_fh_d4_findings(session, [finding])
+        group = result.active_findings[0]
+
+        # Every pre-existing field still behaves exactly as before D4D8B.
+        assert group.status == "UNREVIEWED"
+        assert group.latest_disposition_id is None
+        assert group.decision is None
+        assert group.independent_root_count == 0
+        assert group.ambiguous_history is False
+        assert group.related_history == ()
+        # New fields present with sane, non-crashing defaults.
+        assert group.resolved_subgroups == ()
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    # -- Real D4D7 shapes, as synthetic fixtures only (no real DB access) ----------
+
+    def test_roanoke_shape_pair_subgroup_singleton_remainder(self):
+        """Mirrors the real {37,51,61} topology: a two-member subgroup
+        SAME-supported, one member left as a correctly-unresolved
+        singleton remainder - no DISTINCT inference for it."""
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        thirty_seven, fifty_one, sixty_one = ids
+        record_signal_group_disposition(
+            session, signal_ids=[fifty_one, sixty_one], decision="SAME_REAL_WORLD_EFFORT",
+            reviewer="human:rwi-owner", reason="Shared Installation, same runway_end='34', explicit AIP cross-reference text.",
+        )
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=72)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.status == "UNREVIEWED"
+        assert len(group.resolved_subgroups) == 1
+        assert group.resolved_subgroups[0].signal_ids == tuple(sorted([fifty_one, sixty_one]))
+        assert group.resolved_subgroups[0].decision == "SAME_REAL_WORLD_EFFORT"
+        assert group.unresolved_remainder_signal_ids == (thirty_seven,)
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    def test_binghamton_shape_four_member_subgroup_singleton_remainder(self):
+        """Mirrors the real {49,55,58,59,60} topology: a four-member
+        subgroup SAME-supported, one member left as a correctly-unresolved
+        singleton remainder."""
+        engine, session = make_session()
+        ids = _signals(session, 5)
+        four, sixty = ids[:4], ids[4]
+        record_signal_group_disposition(
+            session, signal_ids=four, decision="SAME_REAL_WORLD_EFFORT", reviewer="human:rwi-owner",
+            reason="All four explicitly, consistently name Runway 34 end; gapless design->procurement->final(100%) phase sequence.",
+        )
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=6)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert len(group.resolved_subgroups) == 1
+        assert group.resolved_subgroups[0].signal_ids == tuple(sorted(four))
+        assert group.unresolved_remainder_signal_ids == (sixty,)
+        session.close(); engine.dispose()
+
+    def test_worcester_shape_no_subgroup_manufactured(self):
+        """Mirrors the real {46,53,56,57,62} topology: genuinely conflicting
+        evidence with no clean bipartition - no disposition of any kind
+        exists, so no subgroup state may be manufactured from suggestive
+        evidence; the group stays an ordinary, unresolved active finding."""
+        engine, session = make_session()
+        ids = _signals(session, 5)
+        finding = _fh_d4_finding(ids, airport_id=44)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.status == "UNREVIEWED"
+        assert group.resolved_subgroups == ()
+        assert group.unresolved_remainder_signal_ids == tuple(sorted(ids))
+        assert group.subgroup_conflict is False
+        session.close(); engine.dispose()
+
+    def test_greenville_shape_no_subgroup_manufactured(self):
+        """Mirrors the real {36,44} topology: a genuine pair with no positive
+        anchor either way - no disposition exists, so no subgroup state may
+        be manufactured from mere co-location."""
+        engine, session = make_session()
+        ids = _signals(session, 2)
+        finding = _fh_d4_finding(ids, airport_id=63)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.status == "UNREVIEWED"
+        assert group.resolved_subgroups == ()
+        assert group.unresolved_remainder_signal_ids == tuple(sorted(ids))
+        session.close(); engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# D4D8B critical review (adversarial pass): genuine coverage gaps found and
+# closed - the underlying implementation was independently verified correct
+# in every case below BEFORE the corresponding test was written; none of
+# these represent a production defect or a production code change.
+# ---------------------------------------------------------------------------
+
+
+class TestSubgroupDiscoveryCriticalReview:
+    # -- mission §7 case G: strict subset/superset subgroup sets are a conflict ---
+
+    def test_subset_of_subset_subgroup_sets_is_a_conflict(self):
+        """{1,2} SAME and {1,2,3} SAME are BOTH proper subsets of raw
+        {1,2,3,4} and are themselves in a subset/superset relationship with
+        EACH OTHER - the D4D8A locked overlap policy is syntactic ('any
+        non-exact-match, non-empty intersection... redundancy is not
+        exempted') and applies identically here: this is not treated as
+        'one is merely historical context for the other,' it is a hard
+        conflict, exactly like a bare partial overlap."""
+        engine, session = make_session()
+        ids = _signals(session, 4)
+        a, b, c, d = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r1")
+        record_signal_group_disposition(session, signal_ids=[a, b, c], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:y", reason="r2")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.subgroup_conflict is True
+        assert len(group.resolved_subgroups) == 2
+        seen_sets = {s.signal_ids for s in group.resolved_subgroups}
+        assert tuple(sorted([a, b])) in seen_sets
+        assert tuple(sorted([a, b, c])) in seen_sets
+        assert group.unresolved_remainder_signal_ids == tuple(sorted(ids))
+        session.close(); engine.dispose()
+
+    # -- mission §5: subgroup-level supersession chain is not walked/duplicated ---
+
+    def test_subgroup_level_supersession_yields_exactly_one_current_summary(self):
+        """A correction for the SAME exact subgroup member set ({1,2} SAME
+        superseded by {1,2} DISTINCT) must produce exactly ONE
+        SubgroupDispositionSummary reflecting the LATEST decision - the
+        older SAME must not remain visible alongside it, and this must not
+        be (mis)detected as a subgroup_conflict (it is one member set, not
+        two overlapping ones)."""
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        d1 = record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r1")
+        session.commit()
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="DISTINCT", reviewer="human:y", reason="r2", supersedes_id=d1.id)
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert group.subgroup_conflict is False
+        assert len(group.resolved_subgroups) == 1
+        sub = group.resolved_subgroups[0]
+        assert sub.decision == "DISTINCT"  # the later, superseding decision - not the stale SAME
+        assert sub.independent_root_count == 1
+        assert sub.ambiguous_history is False
+        session.close(); engine.dispose()
+
+    # -- mission §5: competing UNsuperseded roots for the SAME subset -------------
+
+    def test_competing_unsuperseded_roots_for_same_subset_flagged_not_duplicated(self):
+        """Two independently-recorded (no supersedes_id link) dispositions
+        for the identical {1,2} member set - D3's own latest-wins still
+        yields exactly one operational summary (never two), but that
+        summary's OWN ambiguous_history/independent_root_count exposes the
+        disagreement, exactly mirroring the existing whole-group
+        ambiguous_groups precedent. Orthogonal to, and must not trigger,
+        subgroup_conflict (there is only one distinct member set here)."""
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r1")
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="DISTINCT", reviewer="human:y", reason="r2")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+
+        group = result.active_findings[0]
+        assert len(group.resolved_subgroups) == 1
+        sub = group.resolved_subgroups[0]
+        assert sub.independent_root_count == 2
+        assert sub.ambiguous_history is True
+        assert group.subgroup_conflict is False  # orthogonal concern, not conflated
+        session.close(); engine.dispose()
+
+    # -- mission §5: same-timestamp tiebreak (higher id wins) ---------------------
+
+    def test_subgroup_latest_wins_same_timestamp_higher_id_wins(self):
+        engine, session = make_session()
+        ids = _signals(session, 3)
+        a, b, c = ids
+        ts = datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+        d1 = SignalDisposition(decision="SAME_REAL_WORLD_EFFORT", reason="r1", reviewer="human:x", created_at=ts)
+        setattr(d1, ACCEPTING_INITIAL_MEMBERS_ATTR, True)
+        session.add(d1); session.flush()
+        session.add(SignalDispositionMember(disposition_id=d1.id, signal_id=a))
+        session.add(SignalDispositionMember(disposition_id=d1.id, signal_id=b))
+        session.flush(); setattr(d1, ACCEPTING_INITIAL_MEMBERS_ATTR, False)
+
+        d2 = SignalDisposition(decision="DISTINCT", reason="r2", reviewer="human:y", created_at=ts)
+        setattr(d2, ACCEPTING_INITIAL_MEMBERS_ATTR, True)
+        session.add(d2); session.flush()
+        session.add(SignalDispositionMember(disposition_id=d2.id, signal_id=a))
+        session.add(SignalDispositionMember(disposition_id=d2.id, signal_id=b))
+        session.flush(); setattr(d2, ACCEPTING_INITIAL_MEMBERS_ATTR, False)
+        session.commit()
+        assert d1.created_at == d2.created_at
+        assert d2.id > d1.id
+
+        finding = _fh_d4_finding(ids, airport_id=1)
+        result = resolve_fh_d4_findings(session, [finding])
+        sub = result.active_findings[0].resolved_subgroups[0]
+        assert sub.latest_disposition_id == d2.id
+        assert sub.decision == "DISTINCT"
+        session.close(); engine.dispose()
+
+    # -- mission §11: detector growth/shrink transition, no data rewrite ----------
+
+    def test_detector_growth_shrink_transition_no_data_rewrite(self):
+        """The SAME persisted {a,b} SAME fact, evaluated against three
+        different raw-group presentations in sequence, with no mutation
+        between calls - purely derived, recomputed fresh each time."""
+        engine, session = make_session()
+        ids = _signals(session, 4)
+        a, b, c, d = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r1")
+        session.commit()
+
+        # Stage 1: raw {a,b,c} -> {a,b} is a subgroup, remainder {c}.
+        r1 = resolve_fh_d4_findings(session, [_fh_d4_finding([a, b, c], airport_id=1)])
+        g1 = r1.active_findings[0]
+        assert len(g1.resolved_subgroups) == 1
+        assert g1.unresolved_remainder_signal_ids == (c,)
+
+        # Stage 2: detector shrinks to raw {a,b} exactly -> ordinary confirmed
+        # SAME via D3's own exact-match resolution, NOT subgroup metadata.
+        r2 = resolve_fh_d4_findings(session, [_fh_d4_finding([a, b], airport_id=1)])
+        assert len(r2.confirmed_same_effort) == 1
+        assert r2.confirmed_same_effort[0].resolved_subgroups == ()
+
+        # Stage 3: detector grows to raw {a,b,c,d} -> {a,b} still a subgroup.
+        r3 = resolve_fh_d4_findings(session, [_fh_d4_finding([a, b, c, d], airport_id=1)])
+        g3 = r3.active_findings[0]
+        assert len(g3.resolved_subgroups) == 1
+        assert g3.unresolved_remainder_signal_ids == tuple(sorted([c, d]))
+        session.close(); engine.dispose()
+
+    # -- mission §10: no parent-group identity stored or assumed ------------------
+
+    def test_same_fact_discovered_independently_against_two_different_raw_groups(self):
+        """The identical {a,b} SAME fact is discovered correctly and
+        independently as a subgroup of BOTH {a,b,c} and {a,b,d} when both
+        are presented in the SAME batch call - proving no parent-group
+        identity is stored, cached, or assumed anywhere."""
+        engine, session = make_session()
+        ids = _signals(session, 4)
+        a, b, c, d = ids
+        record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r1")
+        session.commit()
+
+        findings = [_fh_d4_finding([a, b, c], airport_id=1), _fh_d4_finding([a, b, d], airport_id=1)]
+        result = resolve_fh_d4_findings(session, findings)
+        assert len(result.active_findings) == 2
+        by_set = {g.signal_ids: g for g in result.active_findings}
+
+        g_abc = by_set[tuple(sorted([a, b, c]))]
+        assert len(g_abc.resolved_subgroups) == 1
+        assert g_abc.resolved_subgroups[0].signal_ids == tuple(sorted([a, b]))
+        assert g_abc.unresolved_remainder_signal_ids == (c,)
+
+        g_abd = by_set[tuple(sorted([a, b, d]))]
+        assert len(g_abd.resolved_subgroups) == 1
+        assert g_abd.resolved_subgroups[0].signal_ids == tuple(sorted([a, b]))
+        assert g_abd.unresolved_remainder_signal_ids == (d,)
+        session.close(); engine.dispose()
+
+    # -- mission §13: independent query-count re-verification, overlapping case ---
+
+    def test_query_count_bounded_with_overlapping_subgroup_history(self):
+        """Independent re-measurement (not reusing TestBatchQueryBehavior's
+        own fixtures): a genuinely CONFLICTING subgroup scenario must not
+        cost any additional queries beyond the ordinary subgroup-present
+        case - conflict detection is pure in-Python post-processing over
+        already-fetched headers, never a further query."""
+        engine, session = make_session()
+        ids = _signals(session, 5)
+        a, b, c, d, e = ids
+        record_signal_group_disposition(session, signal_ids=[a, b, c], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r1")
+        record_signal_group_disposition(session, signal_ids=[c, d], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:y", reason="r2")
+        session.commit()
+        finding = _fh_d4_finding(ids, airport_id=1)
+
+        statements = []
+
+        def _capture(_conn, _cursor, statement, *_args, **_kwargs):
+            statements.append(statement.strip().upper())
+
+        engine_for_events = session.get_bind()
+        event.listen(engine_for_events, "before_cursor_execute", _capture)
+        try:
+            result = resolve_fh_d4_findings(session, [finding])
+        finally:
+            event.remove(engine_for_events, "before_cursor_execute", _capture)
+
+        assert result.active_findings[0].subgroup_conflict is True
+        select_statements = [s for s in statements if s.startswith("SELECT")]
+        assert len(select_statements) == 8, (
+            f"expected exactly 8 SELECT statements (same bound as the non-conflicting "
+            f"subgroup-present case), got {len(select_statements)}: {select_statements}"
+        )
+        session.close(); engine.dispose()
