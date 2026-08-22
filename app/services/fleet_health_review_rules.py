@@ -181,10 +181,21 @@ class SourceAssertionReviewStateFact:
     nothing to report for the vast majority of rows that do have an
     attributed airport (mirrors FHC1's own "only actual linked
     relationships become facts" discipline for FH-D2).
+
+    `unknown_airport_candidate_id` (UAC3, docs/architecture/rwi-uac3-unknown-airport-discovery-integration-report.md):
+    additive - None for the vast majority of pre-UAC2B rows and for
+    genuinely, truly unattributed evidence. When set, this row is NOT
+    raw, un-triaged evidence "pending identity-guard processing" (FH-F2's
+    own historical wording) - the identity guard already ran, correctly
+    found no known-Airport match, and the row was deliberately linked to
+    a governed UnknownAirportCandidate as the designed UAC1/UAC2B/UAC3
+    outcome, not left pending. FH-F2/FH-F3 both skip any fact where this
+    is set - see their own docstrings below.
     """
 
     assertion_id: int
     review_state: str
+    unknown_airport_candidate_id: "Optional[int]" = None
 
 
 @dataclass(frozen=True)
@@ -606,10 +617,23 @@ def evaluate_fh_f1(facts: tuple[SignalProvenanceFact, ...]) -> tuple[HealthFindi
 
 def evaluate_fh_f2(facts: tuple[SourceAssertionReviewStateFact, ...]) -> tuple[HealthFinding, ...]:
     """SourceAssertion with no attributed airport, still unreviewed -
-    legitimate for raw evidence pending identity-guard processing."""
+    legitimate for raw evidence pending identity-guard processing.
+
+    UAC3 correction: skips any fact whose unknown_airport_candidate_id is
+    set - such a row is not "pending identity-guard processing" (the
+    guard already ran and produced this row's own governed candidate
+    link); it is deliberately, correctly linked to an UnknownAirportCandidate
+    pending a SEPARATE, already-governed human resolution
+    (MATCH_EXISTING_AIRPORT/CREATE_NEW_AIRPORT/REJECT_CANDIDATE/DEFER).
+    Genuinely unattributed evidence (unknown_airport_candidate_id also
+    None) is completely unaffected - this is the smallest correction
+    that distinguishes the two states, per the UAC2B review's own
+    explicit deferral to this slice."""
     findings: list[HealthFinding] = []
     for fact in _dedupe_preserve_order(facts, key=lambda f: f.assertion_id):
         if fact.review_state != _UNREVIEWED:
+            continue
+        if fact.unknown_airport_candidate_id is not None:
             continue
         findings.append(
             HealthFinding(
@@ -633,10 +657,18 @@ def evaluate_fh_f3(facts: tuple[SourceAssertionReviewStateFact, ...]) -> tuple[H
     """SourceAssertion with no attributed airport that HAS been reviewed - a
     materially different, more concerning case than FH-F2's "still
     pending" state, worth a human glance.
-    """
+
+    UAC3 correction: skips any fact whose unknown_airport_candidate_id is
+    set - see evaluate_fh_f2()'s own docstring for the identical
+    reasoning. Such a row is already under a separate, already-governed
+    UAC candidate-review workflow; flagging it REVIEW_REQUIRED here would
+    imply raw, un-triaged identity evidence, which is misleading (though
+    not factually false - it does still lack a canonical Airport)."""
     findings: list[HealthFinding] = []
     for fact in _dedupe_preserve_order(facts, key=lambda f: f.assertion_id):
         if fact.review_state != _REVIEWED:
+            continue
+        if fact.unknown_airport_candidate_id is not None:
             continue
         findings.append(
             HealthFinding(

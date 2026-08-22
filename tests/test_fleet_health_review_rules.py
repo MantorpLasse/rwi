@@ -617,6 +617,31 @@ class TestFhF2:
     def test_reviewed_does_not_fire_f2(self):
         assert evaluate_fh_f2((SourceAssertionReviewStateFact(1, "reviewed"),)) == ()
 
+    def test_unreviewed_candidate_linked_does_not_fire_f2(self):
+        """UAC3 correction: unreviewed + unknown_airport_candidate_id set
+        is governed candidate-linked evidence, not raw evidence pending
+        identity-guard processing - must not fire FH-F2."""
+        fact = SourceAssertionReviewStateFact(assertion_id=1, review_state="unreviewed", unknown_airport_candidate_id=7)
+        assert evaluate_fh_f2((fact,)) == ()
+
+    def test_unreviewed_truly_unattributed_still_fires_f2(self):
+        """Genuinely unattributed evidence (unknown_airport_candidate_id
+        also None) must remain completely unaffected by the UAC3
+        correction - the pre-existing finding is not weakened."""
+        fact = SourceAssertionReviewStateFact(assertion_id=1, review_state="unreviewed", unknown_airport_candidate_id=None)
+        findings = evaluate_fh_f2((fact,))
+        assert len(findings) == 1
+        assert findings[0].classification == HealthClassification.INFORMATIONAL
+
+    def test_mixed_candidate_linked_and_unattributed_only_unattributed_fires_f2(self):
+        facts = (
+            SourceAssertionReviewStateFact(assertion_id=1, review_state="unreviewed", unknown_airport_candidate_id=7),
+            SourceAssertionReviewStateFact(assertion_id=2, review_state="unreviewed", unknown_airport_candidate_id=None),
+        )
+        findings = evaluate_fh_f2(facts)
+        assert len(findings) == 1
+        assert findings[0].entity_ids == (2,)
+
 
 class TestFhF3:
     def test_reviewed_fires_review_required(self):
@@ -626,6 +651,30 @@ class TestFhF3:
 
     def test_unreviewed_does_not_fire_f3(self):
         assert evaluate_fh_f3((SourceAssertionReviewStateFact(1, "unreviewed"),)) == ()
+
+    def test_reviewed_candidate_linked_does_not_fire_f3(self):
+        """UAC3 correction: reviewed + unknown_airport_candidate_id set is
+        already under a separate, already-governed UAC candidate-review
+        workflow - must not fire FH-F3's REVIEW_REQUIRED finding."""
+        fact = SourceAssertionReviewStateFact(assertion_id=1, review_state="reviewed", unknown_airport_candidate_id=7)
+        assert evaluate_fh_f3((fact,)) == ()
+
+    def test_reviewed_truly_unattributed_still_fires_f3(self):
+        """Genuinely unattributed, reviewed evidence must remain
+        completely unaffected by the UAC3 correction."""
+        fact = SourceAssertionReviewStateFact(assertion_id=1, review_state="reviewed", unknown_airport_candidate_id=None)
+        findings = evaluate_fh_f3((fact,))
+        assert len(findings) == 1
+        assert findings[0].classification == HealthClassification.REVIEW_REQUIRED
+
+    def test_mixed_candidate_linked_and_unattributed_only_unattributed_fires_f3(self):
+        facts = (
+            SourceAssertionReviewStateFact(assertion_id=1, review_state="reviewed", unknown_airport_candidate_id=7),
+            SourceAssertionReviewStateFact(assertion_id=2, review_state="reviewed", unknown_airport_candidate_id=None),
+        )
+        findings = evaluate_fh_f3(facts)
+        assert len(findings) == 1
+        assert findings[0].entity_ids == (2,)
 
 
 # ---------------------------------------------------------------------------

@@ -565,16 +565,24 @@ def _build_source_assertion_review_states(
 ) -> "tuple[SourceAssertionReviewStateFact, ...]":
     """Only SourceAssertions with airport_id NULL - there is nothing to
     report for the vast majority of rows that do have an attributed
-    airport. FH-F2/FH-F3 input."""
+    airport. FH-F2/FH-F3 input. UAC3: also selects
+    unknown_airport_candidate_id so FH-F2/FH-F3 can distinguish governed
+    candidate-linked evidence from truly unattributed evidence - see
+    those rules' own docstrings in fleet_health_review_rules.py."""
     rows = (
-        session.query(SourceAssertion.id, SourceAssertion.review_state)
+        session.query(
+            SourceAssertion.id, SourceAssertion.review_state, SourceAssertion.unknown_airport_candidate_id,
+        )
         .filter(SourceAssertion.airport_id.is_(None))
         .order_by(SourceAssertion.id.asc())
         .all()
     )
     return tuple(
-        SourceAssertionReviewStateFact(assertion_id=assertion_id, review_state=review_state)
-        for assertion_id, review_state in rows
+        SourceAssertionReviewStateFact(
+            assertion_id=assertion_id, review_state=review_state,
+            unknown_airport_candidate_id=unknown_airport_candidate_id,
+        )
+        for assertion_id, review_state, unknown_airport_candidate_id in rows
     )
 
 
