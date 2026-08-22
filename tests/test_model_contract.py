@@ -21,6 +21,8 @@ from app.models import (
     Source,
     SourceAssertion,
     Snapshot,
+    UnknownAirportCandidate,
+    UnknownAirportCandidateReview,
 )
 
 
@@ -264,6 +266,32 @@ EXPECTED_COLUMNS = {
         "disposition_id": ("INTEGER", False, None, None),
         "signal_id": ("INTEGER", False, None, None),
     },
+    "unknown_airport_candidates": {
+        "id": ("INTEGER", False, None, None),
+        "candidate_fingerprint": ("VARCHAR(64)", False, None, None),
+        "raw_name": ("VARCHAR(200)", False, None, None),
+        "raw_city": ("VARCHAR(100)", True, None, None),
+        "raw_state_region": ("VARCHAR(100)", True, None, None),
+        "raw_country": ("VARCHAR(100)", True, None, None),
+        "raw_iata_code": ("VARCHAR(20)", True, None, None),
+        "raw_icao_code": ("VARCHAR(20)", True, None, None),
+        "raw_faa_lid": ("VARCHAR(20)", True, None, None),
+        "raw_runway_designation": ("VARCHAR(20)", True, None, None),
+        "evidence_source_locator": ("TEXT", True, None, None),
+        "evidence_artifact_identity": ("TEXT", True, None, None),
+        "resolved_airport_id": ("INTEGER", True, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+    },
+    "unknown_airport_candidate_reviews": {
+        "id": ("INTEGER", False, None, None),
+        "candidate_id": ("INTEGER", False, None, None),
+        "action": ("VARCHAR(30)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "reviewer": ("VARCHAR(100)", False, None, None),
+        "matched_airport_id": ("INTEGER", True, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_review_id": ("INTEGER", True, None, None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -322,6 +350,12 @@ EXPECTED_FOREIGN_KEYS = {
     "signal_disposition_members": {
         ("disposition_id", "signal_dispositions.id"),
         ("signal_id", "signals.id"),
+    },
+    "unknown_airport_candidates": {("resolved_airport_id", "airports.id")},
+    "unknown_airport_candidate_reviews": {
+        ("candidate_id", "unknown_airport_candidates.id"),
+        ("matched_airport_id", "airports.id"),
+        ("supersedes_review_id", "unknown_airport_candidate_reviews.id"),
     },
 }
 
@@ -411,6 +445,15 @@ EXPECTED_INDEXES = {
     "signal_disposition_members": {
         ("ix_signal_disposition_members_disposition_id", ("disposition_id",), False),
         ("ix_signal_disposition_members_signal_id", ("signal_id",), False),
+    },
+    "unknown_airport_candidates": {
+        ("ix_unknown_airport_candidates_candidate_fingerprint", ("candidate_fingerprint",), False),
+        ("ix_unknown_airport_candidates_resolved_airport_id", ("resolved_airport_id",), False),
+    },
+    "unknown_airport_candidate_reviews": {
+        ("ix_unknown_airport_candidate_reviews_candidate_id", ("candidate_id",), False),
+        ("ix_unknown_airport_candidate_reviews_matched_airport_id", ("matched_airport_id",), False),
+        ("ix_unknown_airport_candidate_reviews_supersedes_review_id", ("supersedes_review_id",), False),
     },
 }
 
@@ -508,6 +551,15 @@ EXPECTED_RELATIONSHIPS = {
         "disposition": ("SignalDisposition", "members", DEFAULT_CASCADE),
         "signal": ("Signal", None, DEFAULT_CASCADE),
     },
+    "UnknownAirportCandidate": {
+        "reviews": ("UnknownAirportCandidateReview", "candidate", DEFAULT_CASCADE),
+        "resolved_airport": ("Airport", None, DEFAULT_CASCADE),
+    },
+    "UnknownAirportCandidateReview": {
+        "candidate": ("UnknownAirportCandidate", "reviews", DEFAULT_CASCADE),
+        "matched_airport": ("Airport", None, DEFAULT_CASCADE),
+        "supersedes": ("UnknownAirportCandidateReview", None, DEFAULT_CASCADE),
+    },
 }
 
 
@@ -540,6 +592,8 @@ def test_all_current_models_are_exported_from_app_models():
         Source.__name__,
         SourceAssertion.__name__,
         Snapshot.__name__,
+        UnknownAirportCandidate.__name__,
+        UnknownAirportCandidateReview.__name__,
     ] == [
         "Airport",
         "AcquisitionRun",
@@ -558,6 +612,8 @@ def test_all_current_models_are_exported_from_app_models():
         "Source",
         "SourceAssertion",
         "Snapshot",
+        "UnknownAirportCandidate",
+        "UnknownAirportCandidateReview",
     ]
 
 

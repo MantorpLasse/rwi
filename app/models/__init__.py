@@ -10,6 +10,7 @@ from app.models.source_assertion import SourceAssertion
 from app.models.physical_installation_identity import InstallationAssertionLink, PhysicalInstallationIdentity
 from app.models.reviewer_action import ReviewerAction
 from app.models.signal_disposition import SignalDisposition, SignalDispositionMember
+from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
 
 __all__ = [
     "Airport",
@@ -30,4 +31,6 @@ __all__ = [
     "Source",
     "SourceAssertion",
     "Snapshot",
+    "UnknownAirportCandidate",
+    "UnknownAirportCandidateReview",
 ]
