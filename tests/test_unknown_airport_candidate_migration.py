@@ -28,6 +28,7 @@ from app.services.unknown_airport_candidate_persistence import (
     find_or_create_unknown_airport_candidate,
     record_unknown_airport_candidate_review,
 )
+import scripts.migrate_source_assertion_unknown_airport_uac2b as uac2b_migration
 import scripts.migrate_unknown_airport_candidates_uac2a as migration
 
 UAC1_TABLES = ("unknown_airport_candidates", "unknown_airport_candidate_reviews")
@@ -35,14 +36,36 @@ UAC1_TABLES = ("unknown_airport_candidates", "unknown_airport_candidate_reviews"
 
 def _pre_uac1_db(path):
     """A full pre-UAC1 schema (every table except the two this migration
-    creates) - the realistic "not yet migrated" starting state."""
+    creates) - the realistic "not yet migrated" starting state.
+
+    UAC2B review-checkpoint fix: source_assertions now carries a forward
+    FK to unknown_airport_candidates (added by UAC2B), so it can no
+    longer be copied via plain Table.to_metadata() into a MetaData that
+    excludes that table - SQLAlchemy's own DDL table-sort fails with
+    NoReferencedTableError once create_all() tries to resolve it. Built
+    via the full current schema instead, then source_assertions is
+    rebuilt back to its exact pre-UAC2B shape using
+    migrate_source_assertion_unknown_airport_uac2b's own frozen snapshot
+    (the same helper technique
+    tests/test_source_assertion_unknown_airport_migration.py already
+    uses for its own "neither UAC2A nor UAC2B applied" starting state) -
+    this file's own UAC1_TABLES stay excluded exactly as before."""
     engine = create_engine(f"sqlite:///{path}")
-    pre_meta = MetaData()
-    for name, table in Base.metadata.tables.items():
-        if name not in UAC1_TABLES:
-            table.to_metadata(pre_meta)
-    pre_meta.create_all(engine)
+    Base.metadata.create_all(engine)
     engine.dispose()
+
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA foreign_keys=OFF")
+    for table_name in UAC1_TABLES:
+        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+    replacement = "source_assertions__pre_uac1_presetup"
+    conn.execute(uac2b_migration._pre_uac2b_create_table_sql(replacement))
+    quoted = ", ".join(f'"{c}"' for c in uac2b_migration._PRE_UAC2B_COLUMNS)
+    conn.execute(f'INSERT INTO "{replacement}" ({quoted}) SELECT {quoted} FROM source_assertions')
+    conn.execute("DROP TABLE source_assertions")
+    conn.execute(f'ALTER TABLE "{replacement}" RENAME TO source_assertions')
+    conn.commit()
+    conn.close()
 
 
 def _create_table_raw(db_path, table_name):
@@ -799,6 +822,13 @@ class TestWrongDatabaseIsolation:
 
 class TestExistingDataPreservation:
     def test_representative_domain_rows_unchanged_after_upgrade(self, tmp_path):
+        """source_assertions is seeded/read via raw SQL, not the ORM
+        SourceAssertion model - the pre-UAC1 fixture database is also
+        genuinely pre-UAC2B shaped (UAC2A's own migration never touches
+        source_assertions at all, so it remains pre-UAC2B shaped both
+        before AND after migration.upgrade() in this test), and the ORM
+        model now unconditionally declares the UAC2B-only
+        unknown_airport_candidate_id column."""
         db = tmp_path / "preserve.db"
         _pre_uac1_db(db)
         engine = create_engine(f"sqlite:///{db}")
@@ -810,29 +840,46 @@ class TestExistingDataPreservation:
             signal = Signal(airport=airport, title="Preserve Signal", category="replacement", confidence="high", source_id=source.id)
             s.add(signal)
             s.commit()
-            assertion = SourceAssertion(
-                source=source, airport=airport, assertion_type="project_construction",
-                source_record_identifier="preserve-1", signal_id=signal.id,
-                identity_guard_decision="ATTACH_CONFIRMED", intelligence_review_decision="REVIEW_REQUIRED",
-                promotion_policy_decision="HUMAN_REVIEW_REQUIRED",
-            )
-            s.add(assertion)
-            s.commit()
-            action = ReviewerAction(
-                source_assertion_id=assertion.id, action="APPROVE_SIGNAL", reason="x", reviewer="human:x",
-            )
-            s.add(action)
-            s.commit()
+            airport_id, source_id, signal_id = airport.id, source.id, signal.id
+        engine.dispose()
+
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "INSERT INTO source_assertions (source_id, airport_id, assertion_type, source_record_identifier, "
+            "signal_id, identity_guard_decision, intelligence_review_decision, promotion_policy_decision, "
+            "evidence_quality, review_state, created_at) VALUES (?, ?, 'project_construction', 'preserve-1', ?, "
+            "'ATTACH_CONFIRMED', 'REVIEW_REQUIRED', 'HUMAN_REVIEW_REQUIRED', 'unverified_candidate', "
+            "'unreviewed', '2026-01-01')", (source_id, airport_id, signal_id),
+        )
+        assertion_id = conn.execute("SELECT id FROM source_assertions").fetchone()[0]
+        conn.execute(
+            "INSERT INTO reviewer_actions (source_assertion_id, action, reason, reviewer, created_at) "
+            "VALUES (?, 'APPROVE_SIGNAL', 'x', 'human:x', '2026-01-01')", (assertion_id,),
+        )
+        conn.commit()
+        snapshot_source_assertions = conn.execute(
+            "SELECT id, signal_id, identity_guard_decision FROM source_assertions"
+        ).fetchall()
+        conn.close()
+
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
             snapshot = {
                 "airports": [(r.id, r.name, r.country, r.iata_code) for r in s.query(Airport).all()],
                 "sources": [(r.id, r.title, r.source_type) for r in s.query(Source).all()],
                 "signals": [(r.id, r.title, r.category, r.confidence, r.source_id) for r in s.query(Signal).all()],
-                "source_assertions": [(r.id, r.signal_id, r.identity_guard_decision) for r in s.query(SourceAssertion).all()],
+                "source_assertions": snapshot_source_assertions,
                 "reviewer_actions": [(r.id, r.action, r.reason, r.reviewer) for r in s.query(ReviewerAction).all()],
             }
         engine.dispose()
 
         migration.upgrade(db)
+
+        conn = sqlite3.connect(str(db))
+        after_source_assertions = conn.execute(
+            "SELECT id, signal_id, identity_guard_decision FROM source_assertions"
+        ).fetchall()
+        conn.close()
 
         engine2 = create_engine(f"sqlite:///{db}")
         with Session(engine2) as s:
@@ -840,7 +887,7 @@ class TestExistingDataPreservation:
                 "airports": [(r.id, r.name, r.country, r.iata_code) for r in s.query(Airport).all()],
                 "sources": [(r.id, r.title, r.source_type) for r in s.query(Source).all()],
                 "signals": [(r.id, r.title, r.category, r.confidence, r.source_id) for r in s.query(Signal).all()],
-                "source_assertions": [(r.id, r.signal_id, r.identity_guard_decision) for r in s.query(SourceAssertion).all()],
+                "source_assertions": after_source_assertions,
                 "reviewer_actions": [(r.id, r.action, r.reason, r.reviewer) for r in s.query(ReviewerAction).all()],
             }
         engine2.dispose()

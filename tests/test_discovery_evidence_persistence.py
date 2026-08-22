@@ -8,16 +8,21 @@ transaction" contract along the way."""
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+import pytest
+
 from app.database import Base
 from app import models  # noqa: F401 - registers all metadata
-from app.models import Airport, Signal, Source, SourceAssertion
+from app.models import Airport, Installation, PhysicalInstallationIdentity, Runway, RunwayEnd, Signal, Source, SourceAssertion
+from app.models.unknown_airport_candidate import UnknownAirportCandidate
 from app.services.discovery_candidate_fragment import CandidateFragment, DiscoveryContext
 from app.services.discovery_evidence_persistence import (
     DiscoveryPersistenceResult,
     DiscoverySourceMetadata,
+    persist_candidate_linked_source_assertion,
     persist_discovery_fragment,
 )
 from app.services.evidence_attachment_guard import AttachmentOutcome, CandidateAirport
+from app.services.unknown_airport_candidate_persistence import find_or_create_unknown_airport_candidate
 
 
 def _engine():
@@ -437,3 +442,423 @@ def test_no_canonical_fact_rows_created():
         assert session.query(RunwayEnd).count() == 0
         assert session.query(Installation).count() == 0
         assert session.query(PhysicalInstallationIdentity).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# UAC2B: persist_candidate_linked_source_assertion()
+# ---------------------------------------------------------------------------
+
+
+def _foo_candidate_kwargs(**overrides):
+    kwargs = dict(raw_name="Foo Regional Airport", raw_city="Fooville", raw_country="Fictionland")
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_candidate_linked_evidence_persists_with_airport_id_null():
+    """§11: the core UAC2B capability, end to end."""
+    with Session(_engine()) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        airports_before = session.query(Airport).count()
+
+        fragment = CandidateFragment(
+            artifact_identity=_artifact("foo-regional-memo"), source_locator="p1",
+            raw_text="Foo Regional Airport is planning an EMAS feasibility study.",
+        )
+        result = persist_candidate_linked_source_assertion(
+            session, _meta("foo-regional-doc"), fragment, unknown_airport_candidate_id=candidate.id,
+        )
+
+        assert isinstance(result, DiscoveryPersistenceResult)
+        assert result.attached_airport_id is None
+        assert result.attached_unknown_airport_candidate_id == candidate.id
+        assert result.outcome == AttachmentOutcome.INSUFFICIENT_IDENTITY
+
+        assertion = session.get(SourceAssertion, result.source_assertion_id)
+        assert assertion.airport_id is None
+        assert assertion.unknown_airport_candidate_id == candidate.id
+        assert assertion.raw_relevant_text == fragment.raw_text  # original evidence preserved
+
+        # No canonical Airport created by this call.
+        assert session.query(Airport).count() == airports_before
+        # The candidate itself remains non-canonical - no relationship to
+        # any canonical table exists on it at all.
+        session.refresh(candidate)
+        assert candidate.resolved_airport_id is None
+
+
+def test_candidate_linked_evidence_queryable_and_auditable():
+    with Session(_engine()) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        fragment = CandidateFragment(
+            artifact_identity=_artifact("foo-audit"), source_locator="p1", raw_text="Foo Regional evidence.",
+        )
+        result = persist_candidate_linked_source_assertion(
+            session, _meta("foo-audit-doc"), fragment, unknown_airport_candidate_id=candidate.id,
+        )
+        session.commit()
+
+        reloaded = session.get(SourceAssertion, result.source_assertion_id)
+        assert reloaded is not None
+        assert reloaded.unknown_airport_candidate_id == candidate.id
+        assert reloaded.source_id == result.source_id
+
+
+def test_candidate_linked_evidence_rejects_nonexistent_candidate():
+    with Session(_engine()) as session:
+        fragment = CandidateFragment(
+            artifact_identity=_artifact("ghost"), source_locator="p1", raw_text="Evidence for a ghost candidate.",
+        )
+        with pytest.raises(ValueError, match="does not reference an existing UnknownAirportCandidate"):
+            persist_candidate_linked_source_assertion(
+                session, _meta("ghost-doc"), fragment, unknown_airport_candidate_id=999999,
+            )
+        assert session.query(SourceAssertion).count() == 0
+
+
+def test_multiple_source_assertions_can_link_to_the_same_candidate():
+    """§12: convergence adds evidence links, never a one-to-one restriction."""
+    with Session(_engine()) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+
+        a = persist_candidate_linked_source_assertion(
+            session, _meta("doc-a"),
+            CandidateFragment(artifact_identity=_artifact("a"), source_locator="p1", raw_text="Evidence A."),
+            unknown_airport_candidate_id=candidate.id,
+        )
+        b = persist_candidate_linked_source_assertion(
+            session, _meta("doc-b"),
+            CandidateFragment(artifact_identity=_artifact("b"), source_locator="p1", raw_text="Evidence B."),
+            unknown_airport_candidate_id=candidate.id,
+        )
+        c = persist_candidate_linked_source_assertion(
+            session, _meta("doc-c"),
+            CandidateFragment(artifact_identity=_artifact("c"), source_locator="p1", raw_text="Evidence C."),
+            unknown_airport_candidate_id=candidate.id,
+        )
+
+        linked = session.query(SourceAssertion).filter_by(unknown_airport_candidate_id=candidate.id).all()
+        assert {row.id for row in linked} == {a.source_assertion_id, b.source_assertion_id, c.source_assertion_id}
+        assert len(linked) == 3
+        # No evidence overwrite - each has its own preserved raw text.
+        texts = {row.raw_relevant_text for row in linked}
+        assert texts == {"Evidence A.", "Evidence B.", "Evidence C."}
+        # Exactly one candidate row throughout.
+        assert session.query(UnknownAirportCandidate).count() == 1
+
+
+def test_candidate_linking_does_not_mutate_candidate_claim_fields():
+    """§14: linking new evidence must never rewrite the candidate's own
+    immutable claim fields."""
+    with Session(_engine()) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        before = (candidate.raw_name, candidate.raw_city, candidate.raw_country, candidate.candidate_fingerprint)
+
+        persist_candidate_linked_source_assertion(
+            session, _meta("doc-immut"),
+            CandidateFragment(artifact_identity=_artifact("immut"), source_locator="p1", raw_text="More evidence."),
+            unknown_airport_candidate_id=candidate.id,
+        )
+        session.commit()
+        session.refresh(candidate)
+        after = (candidate.raw_name, candidate.raw_city, candidate.raw_country, candidate.candidate_fingerprint)
+        assert before == after
+
+
+def test_rediscovered_candidate_linked_fragment_is_idempotent():
+    with Session(_engine()) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+
+        def _fragment():
+            return CandidateFragment(
+                artifact_identity=_artifact("foo-idem"), source_locator="p1", raw_text="Foo Regional evidence.",
+            )
+
+        first = persist_candidate_linked_source_assertion(
+            session, _meta("foo-idem-doc"), _fragment(), unknown_airport_candidate_id=candidate.id,
+        )
+        second = persist_candidate_linked_source_assertion(
+            session, _meta("foo-idem-doc"), _fragment(), unknown_airport_candidate_id=candidate.id,
+        )
+        assert first.source_assertion_created is True
+        assert second.source_assertion_created is False
+        assert first.source_assertion_id == second.source_assertion_id
+        assert session.query(SourceAssertion).count() == 1
+
+
+def test_already_airport_linked_assertion_is_never_rewritten_to_candidate_linked():
+    """The identical fragment identity was already resolved to a KNOWN
+    airport by persist_discovery_fragment() - a later call to
+    persist_candidate_linked_source_assertion() for the SAME fragment
+    identity must return that row exactly as-is, never rewrite its
+    identity, and never create a dual-identity state."""
+    with Session(_engine()) as session:
+        airport = Airport(name="Known Airport", country="XX")
+        session.add(airport)
+        session.flush()
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        known_candidate_airport = _candidate(airport, identifiers=frozenset({"KNOWN"}))
+
+        def _fragment():
+            return CandidateFragment(
+                artifact_identity=_artifact("shared"), source_locator="p1", raw_text="Shared fragment identity.",
+                airport_identifiers=frozenset({"KNOWN"}),
+            )
+
+        first = persist_discovery_fragment(session, _meta("shared-doc"), _fragment(), [known_candidate_airport])
+        assert first.attached_airport_id == airport.id
+
+        second = persist_candidate_linked_source_assertion(
+            session, _meta("shared-doc"), _fragment(), unknown_airport_candidate_id=candidate.id,
+        )
+        assert second.source_assertion_created is False
+        assert second.source_assertion_id == first.source_assertion_id
+        assert second.attached_airport_id == airport.id  # unchanged - never rewritten
+        assert second.attached_unknown_airport_candidate_id is None  # never set on this row
+
+        reloaded = session.get(SourceAssertion, first.source_assertion_id)
+        assert reloaded.airport_id == airport.id
+        assert reloaded.unknown_airport_candidate_id is None
+
+
+def test_candidate_linked_evidence_creates_no_canonical_rows():
+    with Session(_engine()) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        airports_before = session.query(Airport).count()
+
+        persist_candidate_linked_source_assertion(
+            session, _meta("doc-canon"),
+            CandidateFragment(artifact_identity=_artifact("canon"), source_locator="p1", raw_text="Evidence."),
+            unknown_airport_candidate_id=candidate.id,
+        )
+
+        assert session.query(Airport).count() == airports_before
+        assert session.query(Runway).count() == 0
+        assert session.query(RunwayEnd).count() == 0
+        assert session.query(Installation).count() == 0
+        assert session.query(PhysicalInstallationIdentity).count() == 0
+        assert session.query(Signal).count() == 0
+
+
+def test_candidate_linked_evidence_no_hidden_commit():
+    with Session(_engine()) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.commit()
+
+        persist_candidate_linked_source_assertion(
+            session, _meta("doc-rollback"),
+            CandidateFragment(artifact_identity=_artifact("rollback"), source_locator="p1", raw_text="Evidence."),
+            unknown_airport_candidate_id=candidate.id,
+        )
+        session.rollback()
+
+        assert session.query(SourceAssertion).count() == 0
+
+
+def test_dual_identity_rejected_at_db_layer_direct_orm_construction():
+    """§3/§21: the forbidden dual-identity state must fail at the DATABASE
+    level, not merely because no service function ever constructs it -
+    proven by direct ORM construction bypassing both persistence
+    functions entirely."""
+    from sqlalchemy.exc import IntegrityError
+
+    with Session(_engine()) as session:
+        airport = Airport(name="Known Airport", country="XX")
+        session.add(airport)
+        session.flush()
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        source = Source(title="x", source_type="web_discovery")
+        session.add(source)
+        session.flush()
+
+        session.add(SourceAssertion(
+            source_id=source.id, airport_id=airport.id, unknown_airport_candidate_id=candidate.id,
+            assertion_type="project_construction", source_record_identifier="dual-1",
+        ))
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+
+def test_dual_identity_rejected_on_update_known_to_both_raw_sql():
+    """UAC2B review §10: the forbidden dual state must fail via UPDATE,
+    not merely INSERT - proven by a raw SQL UPDATE (via SQLAlchemy Core
+    text(), bypassing the ORM's own attribute-assignment path entirely)
+    against a valid, already-committed known-airport row."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _engine()
+    with Session(engine) as session:
+        airport = Airport(name="Known Airport", country="XX")
+        session.add(airport)
+        session.flush()
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        source = Source(title="x", source_type="web_discovery")
+        session.add(source)
+        session.flush()
+        assertion = SourceAssertion(
+            source_id=source.id, airport_id=airport.id, assertion_type="project_construction",
+            source_record_identifier="update-known-raw-1",
+        )
+        session.add(assertion)
+        session.commit()
+
+        with pytest.raises(IntegrityError, match="CHECK constraint failed"):
+            session.execute(
+                text("UPDATE source_assertions SET unknown_airport_candidate_id=:cid WHERE id=:aid"),
+                {"cid": candidate.id, "aid": assertion.id},
+            )
+        session.rollback()
+
+
+def test_dual_identity_rejected_on_update_known_to_both_via_orm():
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _engine()
+    with Session(engine) as session:
+        airport = Airport(name="Known Airport", country="XX")
+        session.add(airport)
+        session.flush()
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        source = Source(title="x", source_type="web_discovery")
+        session.add(source)
+        session.flush()
+        assertion = SourceAssertion(
+            source_id=source.id, airport_id=airport.id, assertion_type="project_construction",
+            source_record_identifier="update-known-2",
+        )
+        session.add(assertion)
+        session.commit()
+
+        assertion.unknown_airport_candidate_id = candidate.id
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+
+def test_dual_identity_rejected_on_update_candidate_to_both_via_orm():
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _engine()
+    with Session(engine) as session:
+        airport = Airport(name="Known Airport", country="XX")
+        session.add(airport)
+        session.flush()
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        source = Source(title="x", source_type="web_discovery")
+        session.add(source)
+        session.flush()
+        assertion = SourceAssertion(
+            source_id=source.id, unknown_airport_candidate_id=candidate.id, assertion_type="project_construction",
+            source_record_identifier="update-candidate-1",
+        )
+        session.add(assertion)
+        session.commit()
+
+        assertion.airport_id = airport.id
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+
+def test_known_airport_only_state_still_allowed():
+    """Truth-table case: airport_id set, unknown_airport_candidate_id NULL
+    - the existing, unchanged behavior."""
+    with Session(_engine()) as session:
+        airport = Airport(name="Known Airport", country="XX")
+        session.add(airport)
+        session.flush()
+        source = Source(title="x", source_type="web_discovery")
+        session.add(source)
+        session.flush()
+        assertion = SourceAssertion(
+            source_id=source.id, airport_id=airport.id, unknown_airport_candidate_id=None,
+            assertion_type="project_construction", source_record_identifier="known-1",
+        )
+        session.add(assertion)
+        session.flush()  # must not raise
+        assert assertion.airport_id == airport.id
+        assert assertion.unknown_airport_candidate_id is None
+
+
+def test_unresolved_state_both_null_still_allowed():
+    """Truth-table case: both NULL - the pre-existing 'unresolved
+    evidence' state (e.g. REJECT_CROSS_AIRPORT/INSUFFICIENT_IDENTITY with
+    no candidate link either) must remain valid. This is NOT an XOR
+    requiring exactly one of the two to be set."""
+    with Session(_engine()) as session:
+        source = Source(title="x", source_type="web_discovery")
+        session.add(source)
+        session.flush()
+        assertion = SourceAssertion(
+            source_id=source.id, airport_id=None, unknown_airport_candidate_id=None,
+            assertion_type="project_construction", source_record_identifier="unresolved-1",
+        )
+        session.add(assertion)
+        session.flush()  # must not raise
+        assert assertion.airport_id is None
+        assert assertion.unknown_airport_candidate_id is None
+
+
+def test_candidate_only_state_still_allowed():
+    """Truth-table case: unknown_airport_candidate_id set, airport_id
+    NULL - the new UAC2B state."""
+    with Session(_engine()) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.flush()
+        source = Source(title="x", source_type="web_discovery")
+        session.add(source)
+        session.flush()
+        assertion = SourceAssertion(
+            source_id=source.id, airport_id=None, unknown_airport_candidate_id=candidate.id,
+            assertion_type="project_construction", source_record_identifier="candidate-1",
+        )
+        session.add(assertion)
+        session.flush()  # must not raise
+        assert assertion.airport_id is None
+        assert assertion.unknown_airport_candidate_id == candidate.id
+
+
+def test_deleting_referenced_unknown_airport_candidate_is_blocked_by_fk():
+    """§6: governed evidence must not silently lose its identity linkage
+    through cascade deletion - no ON DELETE override, matching every
+    other FK in this model."""
+    from sqlalchemy import event
+    from sqlalchemy.exc import IntegrityError
+
+    engine = create_engine("sqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def _enable_fk(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_candidate_kwargs()).candidate
+        session.commit()
+        persist_candidate_linked_source_assertion(
+            session, _meta("doc-delete"),
+            CandidateFragment(artifact_identity=_artifact("delete"), source_locator="p1", raw_text="Evidence."),
+            unknown_airport_candidate_id=candidate.id,
+        )
+        session.commit()
+
+        session.delete(candidate)
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+        assert session.query(SourceAssertion).count() == 1

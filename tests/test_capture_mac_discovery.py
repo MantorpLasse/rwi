@@ -39,6 +39,8 @@ from scripts.migrate_discovery_governed_evidence_slice1 import upgrade as migrat
 from scripts.migrate_intelligence_review_persistence_slice4 import upgrade as migrate_upgrade_slice4
 from scripts.migrate_promotion_policy_persistence_slice7 import upgrade as migrate_upgrade_slice7
 from scripts.migrate_governed_signal_creation_slice9c import upgrade as migrate_upgrade_slice9c
+from scripts.migrate_unknown_airport_candidates_uac2a import upgrade as migrate_upgrade_uac2a
+from scripts.migrate_source_assertion_unknown_airport_uac2b import upgrade as migrate_upgrade_uac2b
 
 FIXTURE_PDF = (Path(__file__).parent / "fixtures" / "mac_granicus_emas_procurement_memo_sample.pdf").read_bytes()
 ARTIFACT_IDENTITY = "mac.granicus.document.4.2349.105406"
@@ -249,14 +251,17 @@ def test_apply_succeeds_after_running_the_real_migration_script(unmigrated_db):
     the capture runner itself) unblocks it - proving the runner's gate
     and the real migration scripts agree on schema readiness.
 
-    Runs ALL FOUR additive source_assertions migrations, not just Slice 1's:
+    Runs ALL SIX additive source_assertions migrations, not just Slice 1's:
     the ORM model (app/models/source_assertion.py) now also declares
     Slice 4's intelligence_review_decision/intelligence_review_reason,
-    Slice 7's promotion_policy_decision/promotion_policy_reason, and
-    Slice 9C's signal_id columns unconditionally, so any SELECT against
-    SourceAssertion - including this runner's own idempotency check -
-    requires the physical table to carry all five too, even though this
-    capture runner's own write path never touches any of them."""
+    Slice 7's promotion_policy_decision/promotion_policy_reason, Slice
+    9C's signal_id, and (UAC2B) unknown_airport_candidate_id columns
+    unconditionally, so any SELECT against SourceAssertion - including
+    this runner's own idempotency check - requires the physical table to
+    carry all six too, even though this capture runner's own write path
+    never touches any of them. UAC2B's own migration additionally
+    requires UAC2A (unknown_airport_candidates/unknown_airport_candidate_reviews)
+    to already exist - the ordering below matters."""
     dry = run_capture(CaptureConfig(database=unmigrated_db, fixture_documents=(_fixture_document(),)))
     refused = run_capture(CaptureConfig(
         database=unmigrated_db, fixture_documents=(_fixture_document(),),
@@ -268,6 +273,8 @@ def test_apply_succeeds_after_running_the_real_migration_script(unmigrated_db):
     migrate_upgrade_slice4(unmigrated_db)
     migrate_upgrade_slice7(unmigrated_db)
     migrate_upgrade_slice9c(unmigrated_db)
+    migrate_upgrade_uac2a(unmigrated_db)
+    migrate_upgrade_uac2b(unmigrated_db)
 
     dry2 = run_capture(CaptureConfig(database=unmigrated_db, fixture_documents=(_fixture_document(),)))
     assert dry2["schema_readiness"]["identity_guard_decision_column_exists"] is True

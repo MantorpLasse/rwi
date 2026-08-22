@@ -11,10 +11,25 @@ Source/SourceAssertion models:
 
 This module performs NO web search, NO fetch, NO parsing, NO AI
 extraction, NO database-wide airport resolution, and creates NO Signal,
-NO Airport/Runway/RunwayEnd, NO Installation, NO PhysicalInstallationIdentity.
-It receives an already-built CandidateFragment and a small set of already-
-resolved candidate airports, and persists exactly what the deterministic
-guard decided - nothing more.
+NO Airport/Runway/RunwayEnd, NO Installation, NO PhysicalInstallationIdentity,
+NO UnknownAirportCandidate. It receives an already-built CandidateFragment
+and a small set of already-resolved candidate airports, and persists
+exactly what the deterministic guard decided - nothing more.
+
+UAC2B (docs/architecture/rwi-uac2b-sourceassertion-unknown-airport-integration-report.md,
+Slice 2 of docs/architecture/rwi-governed-new-airport-discovery-design.md)
+adds `persist_candidate_linked_source_assertion()`: the smallest safe
+bridge letting a caller persist a SourceAssertion linked to an
+ALREADY-EXISTING, ALREADY-CREATED UnknownAirportCandidate (created
+separately, by app.services.unknown_airport_candidate_persistence -
+never here). This function performs NO candidate lookup by raw name or
+fingerprint, NO candidate creation, and NO automatic canonical match - it
+accepts only an explicit, caller-supplied `unknown_airport_candidate_id`
+and validates that it refers to a real, already-persisted row before
+touching anything. `persist_discovery_fragment()` itself is entirely
+unmodified by this addition - it still only ever sets `airport_id`,
+never `unknown_airport_candidate_id`, matching its own pre-UAC2B
+behavior exactly.
 
 The service never commits and never imports app.database.SessionLocal -
 it mutates the caller-supplied Session and flushes only enough to obtain
@@ -31,6 +46,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Source, SourceAssertion
+from app.models.unknown_airport_candidate import UnknownAirportCandidate
 from app.services.discovery_candidate_fragment import CandidateFragment, candidate_fragment_to_evidence_bag
 from app.services.evidence_attachment_guard import (
     AttachmentOutcome,
@@ -42,7 +58,23 @@ __all__ = [
     "DiscoverySourceMetadata",
     "DiscoveryPersistenceResult",
     "persist_discovery_fragment",
+    "persist_candidate_linked_source_assertion",
 ]
+
+# UAC2B (docs/architecture/rwi-uac2b-sourceassertion-unknown-airport-integration-report.md):
+# the identity_guard_decision persist_candidate_linked_source_assertion()
+# always records. Deliberately reuses the existing, unmodified
+# AttachmentOutcome vocabulary rather than inventing a sixth outcome -
+# INSUFFICIENT_IDENTITY already means exactly "no positive or
+# contradicting identity evidence found" against whatever known Airport
+# candidates were checked (zero or more), which is precisely the caller's
+# own prerequisite for calling this function at all (design doc §6's
+# governing flow: "EVERY supplied known candidate returns
+# INSUFFICIENT_IDENTITY... -> persist as candidate-linked evidence").
+# The candidate LINK itself is an orthogonal fact, recorded via the
+# separate unknown_airport_candidate_id column - it is never folded into
+# a new guard outcome.
+_CANDIDATE_LINKED_IDENTITY_GUARD_DECISION = AttachmentOutcome.INSUFFICIENT_IDENTITY.value
 
 # Discovery-created SourceAssertion rows use this assertion_type uniformly
 # (one of the six already-governed ASSERTION_TYPES values,
@@ -111,7 +143,15 @@ class DiscoverySourceMetadata:
 @dataclass(frozen=True)
 class DiscoveryPersistenceResult:
     """Deterministic, ORM-free summary of what persist_discovery_fragment()
-    did (task S19) - never exposes ORM instances directly."""
+    (or, as of UAC2B, persist_candidate_linked_source_assertion()) did
+    (task S19) - never exposes ORM instances directly.
+
+    `attached_unknown_airport_candidate_id` is additive (UAC2B): always
+    None for a persist_discovery_fragment() result (that function never
+    sets unknown_airport_candidate_id); populated only by
+    persist_candidate_linked_source_assertion(). Mutually exclusive with
+    `attached_airport_id` being non-None, mirroring the DB-level
+    CheckConstraint on SourceAssertion itself."""
 
     source_id: int
     source_created: bool
@@ -121,6 +161,7 @@ class DiscoveryPersistenceResult:
     reason: str
     attached_airport_id: int | None
     evaluated_candidate_ids: tuple[object, ...] = field(default_factory=tuple)
+    attached_unknown_airport_candidate_id: int | None = None
 
 
 def _get_or_create_source(session: Session, metadata: DiscoverySourceMetadata) -> tuple[Source, bool]:
@@ -273,4 +314,112 @@ def persist_discovery_fragment(
         reason=reason,
         attached_airport_id=primary_airport_id,
         evaluated_candidate_ids=tuple(decisions.keys()),
+    )
+
+
+def persist_candidate_linked_source_assertion(
+    session: Session,
+    source_metadata: DiscoverySourceMetadata,
+    fragment: CandidateFragment,
+    *,
+    unknown_airport_candidate_id: int,
+) -> DiscoveryPersistenceResult:
+    """Governed bridge from one already-extracted CandidateFragment to
+    persisted RWI evidence LINKED TO AN ALREADY-EXISTING
+    UnknownAirportCandidate (UAC2B). Never commits; the caller owns the
+    transaction, matching persist_discovery_fragment()'s own convention.
+    Never creates a Signal, an Airport, or an UnknownAirportCandidate -
+    only ever touches Source and SourceAssertion.
+
+    The caller is responsible for having already determined (elsewhere -
+    typically via evaluate_attachment_for_candidates() returning no
+    ATTACH_CONFIRMED/ATTACH_PROVISIONAL/REVIEW_REQUIRED result for any
+    known Airport candidate) that this evidence has no known-airport
+    match, and for having already found-or-created the target
+    UnknownAirportCandidate via
+    app.services.unknown_airport_candidate_persistence.find_or_create_unknown_airport_candidate().
+    This function performs NO candidate lookup by raw name or
+    fingerprint, and NO candidate creation of any kind - it validates
+    only that `unknown_airport_candidate_id` refers to a real,
+    already-persisted row (raising ValueError otherwise) and links to it
+    exactly as given.
+
+    1. Gets-or-creates the Source (identical to persist_discovery_fragment()).
+    2. Gets-or-creates the one SourceAssertion for this fragment (identical
+       fragment-identity dedup as persist_discovery_fragment() - the same
+       fragment rediscovered again returns the existing row UNCHANGED,
+       never re-linked or overwritten). If that existing row was already
+       linked to a KNOWN Airport (by an earlier persist_discovery_fragment()
+       call for the identical fragment identity), it is returned exactly
+       as-is - this function never rewrites an already-resolved
+       SourceAssertion's identity, preserving the DB-level mutual-
+       exclusivity invariant by construction, never merely by convention.
+    3. A new row sets airport_id=NULL, unknown_airport_candidate_id=the
+       given id, and identity_guard_decision=INSUFFICIENT_IDENTITY (see
+       module-level comment on _CANDIDATE_LINKED_IDENTITY_GUARD_DECISION
+       for why this reuses the existing guard vocabulary rather than
+       inventing a new outcome).
+    """
+    if session.get(UnknownAirportCandidate, unknown_airport_candidate_id) is None:
+        raise ValueError(
+            f"unknown_airport_candidate_id={unknown_airport_candidate_id!r} does not reference an "
+            "existing UnknownAirportCandidate"
+        )
+
+    source, source_created = _get_or_create_source(session, source_metadata)
+
+    existing_assertion = _get_existing_assertion(session, source.id, fragment)
+    if existing_assertion is not None:
+        existing_outcome = (
+            AttachmentOutcome(existing_assertion.identity_guard_decision)
+            if existing_assertion.identity_guard_decision
+            else AttachmentOutcome(_CANDIDATE_LINKED_IDENTITY_GUARD_DECISION)
+        )
+        return DiscoveryPersistenceResult(
+            source_id=source.id,
+            source_created=source_created,
+            source_assertion_id=existing_assertion.id,
+            source_assertion_created=False,
+            outcome=existing_outcome,
+            reason=existing_assertion.identity_guard_reason or "",
+            attached_airport_id=existing_assertion.airport_id,
+            attached_unknown_airport_candidate_id=existing_assertion.unknown_airport_candidate_id,
+        )
+
+    reason = (
+        f"No known Airport candidate matched; evidence linked to UnknownAirportCandidate "
+        f"{unknown_airport_candidate_id} pending human resolution."
+    )
+    assertion = SourceAssertion(
+        source_id=source.id,
+        airport_id=None,
+        unknown_airport_candidate_id=unknown_airport_candidate_id,
+        assertion_type=_ASSERTION_TYPE,
+        raw_airport_identifier=_join_or_none(fragment.airport_identifiers),
+        raw_airport_name=_join_or_none(fragment.airport_names),
+        raw_runway_value=_join_or_none(fragment.runway_pairs),
+        raw_runway_end_value=_join_or_none(fragment.runway_ends),
+        raw_relevant_text=fragment.raw_text,
+        source_locator=fragment.source_locator,
+        raw_fragment_hash=fragment.fragment_hash,
+        artifact_identity=fragment.artifact_identity,
+        parser_identifier=fragment.parser_identifier,
+        extracted_at=fragment.extracted_at,
+        evidence_quality=_EVIDENCE_QUALITY,
+        review_state=_REVIEW_STATE,
+        identity_guard_decision=_CANDIDATE_LINKED_IDENTITY_GUARD_DECISION,
+        identity_guard_reason=reason,
+    )
+    session.add(assertion)
+    session.flush()
+
+    return DiscoveryPersistenceResult(
+        source_id=source.id,
+        source_created=source_created,
+        source_assertion_id=assertion.id,
+        source_assertion_created=True,
+        outcome=AttachmentOutcome(_CANDIDATE_LINKED_IDENTITY_GUARD_DECISION),
+        reason=reason,
+        attached_airport_id=None,
+        attached_unknown_airport_candidate_id=unknown_airport_candidate_id,
     )

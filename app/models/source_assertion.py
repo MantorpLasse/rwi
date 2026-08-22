@@ -46,12 +46,44 @@ class SourceAssertion(Base):
             "source_id", "artifact_identity", "source_locator", "raw_fragment_hash",
             name="uq_source_assertions_locator_fragment",
         ),
+        # UAC2B (docs/architecture/rwi-uac2b-sourceassertion-unknown-airport-integration-report.md,
+        # Slice 2 of docs/architecture/rwi-governed-new-airport-discovery-design.md
+        # §5). Locked domain contract: a SourceAssertion may reference a
+        # canonical Airport, OR a governed UnknownAirportCandidate, OR
+        # neither (unresolved) - NEVER both at once. This is deliberately
+        # NOT an XOR requiring exactly one; both-NULL is a valid,
+        # already-existing state (the pre-UAC2B "unresolved evidence"
+        # case, e.g. identity_guard_decision REJECT_CROSS_AIRPORT/
+        # INSUFFICIENT_IDENTITY with no candidate link either) and must
+        # remain allowed. Enforced at the DB layer, not merely by
+        # application-level discipline in
+        # app.services.discovery_evidence_persistence.
+        CheckConstraint(
+            "NOT (airport_id IS NOT NULL AND unknown_airport_candidate_id IS NOT NULL)",
+            name="ck_source_assertions_airport_candidate_mutually_exclusive",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
     airport_id: Mapped[Optional[int]] = mapped_column(ForeignKey("airports.id"), nullable=True, index=True)
     runway_id: Mapped[Optional[int]] = mapped_column(ForeignKey("runways.id"), nullable=True, index=True)
+
+    # UAC2B: the governed, non-canonical counterpart to airport_id - see
+    # the mutual-exclusivity CheckConstraint above and
+    # app.models.unknown_airport_candidate.UnknownAirportCandidate's own
+    # docstring ("NOT a shadow Airport"). Populated ONLY by
+    # app.services.discovery_evidence_persistence.persist_candidate_linked_source_assertion(),
+    # never inferred, never backfilled, never treated as equivalent to
+    # airport_id by any reader (see that service's own module docstring
+    # for the read-path audit this addition was reviewed against). No
+    # ON DELETE override - defaults to SQLite's implicit NO ACTION,
+    # matching every other FK in this model and this repository: a
+    # referenced UnknownAirportCandidate cannot be silently deleted out
+    # from under governed evidence that still points at it.
+    unknown_airport_candidate_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("unknown_airport_candidates.id"), nullable=True, index=True
+    )
 
     assertion_type: Mapped[str] = mapped_column(String(30))
     runway_end: Mapped[Optional[str]] = mapped_column(String(20))
@@ -160,6 +192,15 @@ class SourceAssertion(Base):
     source: Mapped["Source"] = relationship(back_populates="assertions")
     airport: Mapped[Optional["Airport"]] = relationship(back_populates="source_assertions")
     runway: Mapped[Optional["Runway"]] = relationship(back_populates="source_assertions")
+    # One-directional, no back_populates and no reciprocal collection on
+    # UnknownAirportCandidate - matches the existing
+    # ReviewerAction.duplicate_of_signal precedent exactly (a plain
+    # Mapped[Optional[...]] relationship() with no back_populates, no
+    # change to the target model). app/models/unknown_airport_candidate.py
+    # is deliberately not touched by UAC2B - "many SourceAssertions may
+    # point at the same UnknownAirportCandidate" (§12) is proven by a
+    # plain query, not an ORM collection.
+    unknown_airport_candidate: Mapped[Optional["UnknownAirportCandidate"]] = relationship()
     installation_assertion_links: Mapped[list["InstallationAssertionLink"]] = relationship(back_populates="assertion")
     reviewer_actions: Mapped[list["ReviewerAction"]] = relationship(back_populates="source_assertion")
     signal: Mapped[Optional["Signal"]] = relationship(back_populates="supporting_source_assertions")
