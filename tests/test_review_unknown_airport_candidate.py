@@ -1,0 +1,1055 @@
+"""Tests for scripts/review_unknown_airport_candidate.py (UAC5A) and its
+interaction with the guard-replay-feasibility finding (UAC5B).
+
+Every test uses an isolated tmp_path-scoped SQLite database file - nothing
+here ever opens data/runway_safe.db (see TestNoRealDatabaseAccess).
+"""
+from __future__ import annotations
+
+import ast
+import inspect as inspect_module
+import sqlite3
+
+import pytest
+from sqlalchemy import MetaData, create_engine
+from sqlalchemy.orm import Session
+
+from app.database import Base
+from app.models import Airport, Installation, PhysicalInstallationIdentity, Runway, RunwayEnd, Signal, SourceAssertion
+from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
+from app.services.discovery_candidate_fragment import CandidateFragment
+from app.services.discovery_evidence_persistence import DiscoverySourceMetadata, persist_candidate_linked_source_assertion
+from app.services.fleet_health_check import _build_source_assertion_review_states
+from app.services.fleet_health_review_rules import evaluate_fh_f2, evaluate_fh_f3
+from app.services.unknown_airport_candidate_persistence import (
+    find_or_create_unknown_airport_candidate,
+    record_unknown_airport_candidate_review,
+)
+import scripts.migrate_source_assertion_unknown_airport_uac2b as uac2b_migration
+import scripts.migrate_unknown_airport_candidates_uac2a as uac2a_migration
+import scripts.review_unknown_airport_candidate as cli_module
+from scripts.review_unknown_airport_candidate import (
+    CANDIDATE_NOT_FOUND_BLOCKER,
+    SCHEMA_MIGRATION_REQUIRED_BLOCKER,
+    UnknownAirportCandidateReviewConfig,
+    build_engine,
+    main,
+    render_result,
+    run_review,
+)
+
+
+def _make_full_db(path):
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(engine)
+    return engine
+
+
+def _make_pre_uac_db(path):
+    """No unknown_airport_candidates/unknown_airport_candidate_reviews
+    tables, no source_assertions.unknown_airport_candidate_id column -
+    the genuine "neither UAC2A nor UAC2B applied" starting state. Builds
+    the FULL current schema first (so source_assertions' own forward FK
+    to unknown_airport_candidates resolves cleanly during create_all),
+    then rebuilds source_assertions back to its pre-UAC2B shape via raw
+    SQL and drops the two UAC1 tables - the same technique
+    tests/test_unknown_airport_candidate_migration.py's own
+    _pre_uac1_db() fixture uses, established during UAC2B's own review
+    for the identical NoReferencedTableError this shortcut would
+    otherwise hit."""
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA foreign_keys=OFF")
+    replacement = "source_assertions__pre"
+    conn.execute(uac2b_migration._pre_uac2b_create_table_sql(replacement))
+    quoted = ", ".join(f'"{c}"' for c in uac2b_migration._PRE_UAC2B_COLUMNS)
+    conn.execute(f'INSERT INTO "{replacement}" ({quoted}) SELECT {quoted} FROM source_assertions')
+    conn.execute("DROP TABLE source_assertions")
+    conn.execute(f'ALTER TABLE "{replacement}" RENAME TO source_assertions')
+    conn.execute("DROP TABLE unknown_airport_candidate_reviews")
+    conn.execute("DROP TABLE unknown_airport_candidates")
+    conn.commit()
+    conn.close()
+    return create_engine(f"sqlite:///{path}")
+
+
+def _seed_candidate_with_n_assertions(engine, *, n=1, raw_name="Foo Regional Airport"):
+    with Session(engine) as session:
+        candidate = find_or_create_unknown_airport_candidate(session, raw_name=raw_name).candidate
+        session.commit()
+        assertion_ids = []
+        for i in range(n):
+            fragment = CandidateFragment(
+                artifact_identity=f"art-{raw_name}-{i}", source_locator="p1", raw_text=f"{raw_name} evidence {i}.",
+            )
+            linked = persist_candidate_linked_source_assertion(
+                session, DiscoverySourceMetadata(document_identity=f"doc-{raw_name}-{i}", title="t"), fragment,
+                unknown_airport_candidate_id=candidate.id,
+            )
+            assertion_ids.append(linked.source_assertion_id)
+        session.commit()
+        return candidate.id, tuple(assertion_ids)
+
+
+def _seed_airport(engine, *, name="Real Airport", country="XX", **kwargs):
+    with Session(engine) as session:
+        airport = Airport(name=name, country=country, **kwargs)
+        session.add(airport)
+        session.commit()
+        return airport.id
+
+
+def _record_review(engine, candidate_id, **kwargs):
+    with Session(engine) as session:
+        candidate = session.get(UnknownAirportCandidate, candidate_id)
+        review = record_unknown_airport_candidate_review(session, candidate, **kwargs)
+        session.commit()
+        return review.id
+
+
+def _canonical_counts(engine):
+    with Session(engine) as session:
+        return dict(
+            airports=session.query(Airport).count(), runways=session.query(Runway).count(),
+            runway_ends=session.query(RunwayEnd).count(), installations=session.query(Installation).count(),
+            signals=session.query(Signal).count(),
+            physical_installation_identities=session.query(PhysicalInstallationIdentity).count(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# A/J. Schema gate
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaGate:
+    def test_missing_schema_returns_structured_blocker_not_operational_error(self, tmp_path):
+        db = tmp_path / "pre_uac.db"
+        _make_pre_uac_db(db).dispose()
+        config = UnknownAirportCandidateReviewConfig(database=db, candidate_id=1)
+        result = run_review(config)
+        assert result.blockers == (SCHEMA_MIGRATION_REQUIRED_BLOCKER,)
+        assert result.candidate_found is None
+
+    def test_full_schema_passes_gate(self, tmp_path):
+        db = tmp_path / "full.db"
+        _make_full_db(db).dispose()
+        config = UnknownAirportCandidateReviewConfig(database=db, candidate_id=1)
+        result = run_review(config)
+        assert SCHEMA_MIGRATION_REQUIRED_BLOCKER not in result.blockers
+
+
+# ---------------------------------------------------------------------------
+# A. Inspect
+# ---------------------------------------------------------------------------
+
+
+class TestInspect:
+    def test_inspect_never_mutates_and_shows_full_state(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=2)
+        engine.dispose()
+
+        config = UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id)
+        result = run_review(config)
+        assert result.mode == "inspect"
+        assert result.candidate_found is True
+        assert result.raw_name == "Foo Regional Airport"
+        assert result.linked_assertion_count == 2
+        assert result.resolved_airport_id is None
+        assert result.review_history == ()
+        assert result.latest_review is None
+
+        # Read-only engine - even if something tried to write, it would be
+        # refused at the driver level.
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            assert session.query(SourceAssertion).count() == 2
+        engine2.dispose()
+
+    def test_inspect_nonexistent_candidate(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        _make_full_db(db).dispose()
+        config = UnknownAirportCandidateReviewConfig(database=db, candidate_id=999999)
+        result = run_review(config)
+        assert result.blockers == (CANDIDATE_NOT_FOUND_BLOCKER,)
+        assert result.candidate_found is False
+
+    def test_inspect_shows_deterministic_code_match_never_fuzzy(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        _seed_airport(engine, name="Existing", icao_code="KABC")
+        with Session(engine) as session:
+            candidate = find_or_create_unknown_airport_candidate(
+                session, raw_name="Totally Different Name", raw_icao_code="kabc",
+            ).candidate
+            session.commit()
+            candidate_id = candidate.id
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert len(result.deterministic_code_matches) == 1
+        match = result.deterministic_code_matches[0]
+        assert match.matched_field == "icao_code"
+        assert match.airport_name == "Existing"
+
+
+# ---------------------------------------------------------------------------
+# B/C. Dry-run and write gate
+# ---------------------------------------------------------------------------
+
+
+class TestDryRunAndWriteGate:
+    def test_dry_run_defer_never_writes(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine)
+        engine.dispose()
+
+        config = UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, decision="DEFER", reviewer="human:x", reason="need more",
+        )
+        result = run_review(config)
+        assert result.mode == "dry_run"
+        assert result.action_eligible is True
+        assert result.written is False
+
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            assert session.query(UnknownAirportCandidateReview).count() == 0
+        engine2.dispose()
+
+    def test_write_requires_allow_database_write(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine)
+        engine.dispose()
+
+        with pytest.raises(ValueError, match="requires --decision or --execute"):
+            run_review(UnknownAirportCandidateReviewConfig(
+                database=db, candidate_id=candidate_id, allow_database_write=True,
+            ))
+
+
+# ---------------------------------------------------------------------------
+# D/E/F/G. Review recording for each action
+# ---------------------------------------------------------------------------
+
+
+class TestReviewRecording:
+    def test_match_review_recorded(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine)
+        real_id = _seed_airport(engine)
+        engine.dispose()
+
+        config = UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, decision="MATCH_EXISTING_AIRPORT",
+            matched_airport_id=real_id, reviewer="human:x", reason="same airport",
+            allow_database_write=True,
+        )
+        result = run_review(config)
+        assert result.mode == "write"
+        assert result.written is True
+        assert result.written_review_id is not None
+
+        inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert inspect_result.latest_review.action == "MATCH_EXISTING_AIRPORT"
+        assert inspect_result.latest_review.matched_airport_id == real_id
+        assert inspect_result.resolved_airport_id is None  # recording != executing
+
+    def test_create_review_recorded(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, decision="CREATE_NEW_AIRPORT",
+            reviewer="human:x", reason="genuinely new", allow_database_write=True,
+        ))
+        assert result.written is True
+        assert _canonical_counts(create_engine(f"sqlite:///{db}"))["airports"] == 0
+
+    def test_defer_review_recorded_no_canonical_change(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, decision="DEFER",
+            reviewer="human:x", reason="need more", allow_database_write=True,
+        ))
+        assert result.written is True
+        inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert inspect_result.resolved_airport_id is None
+        assert inspect_result.linked_assertion_count == 1
+
+    def test_reject_review_recorded_no_canonical_change(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, decision="REJECT_CANDIDATE",
+            reviewer="human:x", reason="hallucinated", allow_database_write=True,
+        ))
+        assert result.written is True
+        inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert inspect_result.resolved_airport_id is None
+        assert inspect_result.linked_assertion_count == 1
+
+    def test_create_rejects_matched_airport_id(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine)
+        real_id = _seed_airport(engine)
+        engine.dispose()
+
+        with pytest.raises(ValueError, match="only valid when --decision MATCH_EXISTING_AIRPORT"):
+            run_review(UnknownAirportCandidateReviewConfig(
+                database=db, candidate_id=candidate_id, decision="CREATE_NEW_AIRPORT",
+                matched_airport_id=real_id, reviewer="human:x", reason="x",
+            ))
+
+    def test_match_requires_matched_airport_id(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine)
+        engine.dispose()
+
+        with pytest.raises(ValueError, match="--matched-airport-id is required"):
+            run_review(UnknownAirportCandidateReviewConfig(
+                database=db, candidate_id=candidate_id, decision="MATCH_EXISTING_AIRPORT",
+                reviewer="human:x", reason="x",
+            ))
+
+
+# ---------------------------------------------------------------------------
+# O/P. Execute (MATCH / CREATE) via CLI
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteMatch:
+    def test_dry_run_then_execute_full_flow(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=2)
+        real_id = _seed_airport(engine)
+        review_id = _record_review(
+            engine, candidate_id, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+            matched_airport_id=real_id,
+        )
+        engine.dispose()
+
+        dry = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+        ))
+        assert dry.mode == "execute_dry_run"
+        assert dry.execute_eligible is True
+        assert dry.executed is False
+
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            assert session.get(UnknownAirportCandidate, candidate_id).resolved_airport_id is None
+        engine2.dispose()
+
+        written = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            allow_database_write=True,
+        ))
+        assert written.executed is True
+        assert written.execution_resolved_airport_id == real_id
+        assert set(written.execution_moved_assertion_ids) == set(assertion_ids)
+
+        inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert inspect_result.resolved_airport_id == real_id
+        assert inspect_result.linked_assertion_count == 0  # moved off candidate linkage
+
+
+class TestExecuteCreate:
+    def test_dry_run_then_execute_full_flow(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        review_id = _record_review(engine, candidate_id, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x")
+        engine.dispose()
+
+        dry = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            new_airport_name="Foo Regional Airport", new_airport_country="Fictionland",
+        ))
+        assert dry.execute_eligible is True
+        assert dry.executed is False
+        assert _canonical_counts(create_engine(f"sqlite:///{db}"))["airports"] == 0
+
+        written = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            new_airport_name="Foo Regional Airport", new_airport_country="Fictionland",
+            allow_database_write=True,
+        ))
+        assert written.executed is True
+        assert written.execution_created_airport_id is not None
+        counts = _canonical_counts(create_engine(f"sqlite:///{db}"))
+        assert counts["airports"] == 1
+        assert counts["runways"] == 0
+        assert counts["signals"] == 0
+
+    def test_missing_new_airport_fields_refused(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        review_id = _record_review(engine, candidate_id, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x")
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            allow_database_write=True,
+        ))
+        assert result.execute_eligible is False
+        assert "new-airport-name" in result.execute_refusal_reason
+
+
+# ---------------------------------------------------------------------------
+# H. Stale review handshake
+# ---------------------------------------------------------------------------
+
+
+class TestStaleReviewHandshake:
+    def test_execute_refuses_after_newer_review_recorded(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        real_id = _seed_airport(engine)
+        first_review_id = _record_review(
+            engine, candidate_id, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+            matched_airport_id=real_id,
+        )
+        _record_review(
+            engine, candidate_id, action="DEFER", reason="changed mind", reviewer="human:y",
+            supersedes_review_id=first_review_id,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=first_review_id,
+            allow_database_write=True,
+        ))
+        assert result.execute_eligible is False
+        assert "stale" in result.execute_refusal_reason.lower()
+
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            assert session.get(UnknownAirportCandidate, candidate_id).resolved_airport_id is None
+        engine2.dispose()
+
+    def test_execute_refuses_reject_or_defer_review(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        review_id = _record_review(engine, candidate_id, action="DEFER", reason="x", reviewer="human:x")
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            allow_database_write=True,
+        ))
+        assert result.execute_eligible is False
+        assert "REJECT_CANDIDATE or DEFER" not in (result.execute_refusal_reason or "")  # message doesn't mislead
+        assert result.execute_action == "DEFER"
+
+
+# ---------------------------------------------------------------------------
+# Q/R/S. Execution failure / repeat / contradictory later review
+# ---------------------------------------------------------------------------
+
+
+class TestExecutionFailureRepeatAndContradiction:
+    def test_review_survives_execution_failure(self, tmp_path):
+        """Review recorded, then the matched Airport is deleted before
+        execute runs - execution must refuse, but the review row must
+        remain fully committed authorization history (mission §22/§23)."""
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        real_id = _seed_airport(engine)
+        review_id = _record_review(
+            engine, candidate_id, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+            matched_airport_id=real_id,
+        )
+        with Session(engine) as session:
+            session.execute(Airport.__table__.delete().where(Airport.id == real_id))
+            session.commit()
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            allow_database_write=True,
+        ))
+        assert result.execute_eligible is False
+
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            assert session.query(UnknownAirportCandidateReview).count() == 1
+            assert session.get(UnknownAirportCandidateReview, review_id) is not None
+        engine2.dispose()
+
+    def test_repeat_execute_refused(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        real_id = _seed_airport(engine)
+        review_id = _record_review(
+            engine, candidate_id, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+            matched_airport_id=real_id,
+        )
+        engine.dispose()
+
+        first = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            allow_database_write=True,
+        ))
+        assert first.executed is True
+
+        second = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            allow_database_write=True,
+        ))
+        assert second.execute_eligible is False
+        assert "already resolved" in second.execute_refusal_reason.lower()
+        assert _canonical_counts(create_engine(f"sqlite:///{db}"))["airports"] == 1
+
+    def test_contradictory_later_review_never_re_executes(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        real_id = _seed_airport(engine, name="Real")
+        other_id = _seed_airport(engine, name="Other")
+        review_id = _record_review(
+            engine, candidate_id, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+            matched_airport_id=real_id,
+        )
+        engine.dispose()
+
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            allow_database_write=True,
+        ))
+
+        later_review_id = _record_review(
+            create_engine(f"sqlite:///{db}"), candidate_id, action="MATCH_EXISTING_AIRPORT", reason="actually this one",
+            reviewer="human:y", matched_airport_id=other_id, supersedes_review_id=review_id,
+        )
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=later_review_id,
+            allow_database_write=True,
+        ))
+        assert result.execute_eligible is False
+        assert "already resolved" in result.execute_refusal_reason.lower()
+
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            assert session.get(UnknownAirportCandidate, candidate_id).resolved_airport_id == real_id
+        engine2.dispose()
+
+
+# ---------------------------------------------------------------------------
+# K. Canonical side-effect firewall
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalSideEffectFirewall:
+    def test_create_execute_touches_only_airport_count(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        review_id = _record_review(engine, candidate_id, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x")
+        before = _canonical_counts(engine)
+        engine.dispose()
+
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            new_airport_name="Foo", new_airport_country="XX", allow_database_write=True,
+        ))
+        after = _canonical_counts(create_engine(f"sqlite:///{db}"))
+        assert after["airports"] == before["airports"] + 1
+        for key in ("runways", "runway_ends", "installations", "signals", "physical_installation_identities"):
+            assert after[key] == before[key]
+
+
+# ---------------------------------------------------------------------------
+# L. Unicode
+# ---------------------------------------------------------------------------
+
+
+class TestUnicode:
+    def test_unicode_candidate_round_trips_through_inspect(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, raw_name="羽田空港")
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.raw_name == "羽田空港"
+        rendered = render_result(result)
+        assert "羽田空港" in rendered
+
+
+# ---------------------------------------------------------------------------
+# M. Deterministic output
+# ---------------------------------------------------------------------------
+
+
+class TestDeterministicOutput:
+    def test_render_result_is_deterministic(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=2)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert render_result(result) == render_result(result)
+
+
+# ---------------------------------------------------------------------------
+# N. No business logic in CLI
+# ---------------------------------------------------------------------------
+
+
+class TestNoBusinessLogicInCli:
+    def test_no_canonical_construction_in_cli_source(self):
+        tree = ast.parse(inspect_module.getsource(cli_module))
+        forbidden = {"Airport", "Runway", "RunwayEnd", "Installation", "Signal", "PhysicalInstallationIdentity"}
+        found = {
+            node.func.id for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in forbidden
+        }
+        assert found == set()
+
+    def test_no_reimplemented_stale_review_or_fingerprint_logic(self):
+        source = inspect_module.getsource(cli_module)
+        assert "compute_candidate_fingerprint" not in source
+        assert "casefold" in source  # only the deterministic-code-match display helper
+
+
+# ---------------------------------------------------------------------------
+# T/U. Downstream continuation note honesty
+# ---------------------------------------------------------------------------
+
+
+class TestDownstreamContinuationNote:
+    def test_unresolved_candidate_has_no_continuation_note(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.downstream_continuation_note is None
+
+    def test_resolved_candidate_shows_honest_continuation_note_and_insufficient_identity_persists(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        real_id = _seed_airport(engine)
+        review_id = _record_review(
+            engine, candidate_id, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+            matched_airport_id=real_id,
+        )
+        engine.dispose()
+
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id, allow_database_write=True,
+        ))
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.downstream_continuation_note is not None
+        assert "INSUFFICIENT_IDENTITY" in result.downstream_continuation_note
+
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            reloaded = session.get(SourceAssertion, assertion_ids[0])
+            assert reloaded.airport_id == real_id
+            assert reloaded.identity_guard_decision == "INSUFFICIENT_IDENTITY"
+        engine2.dispose()
+
+    def test_no_reevaluation_service_exists(self):
+        """UAC5B finding: guard replay is architecturally blocked (see the
+        UAC5 report) - no such service module was created."""
+        import importlib
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("app.services.resolved_candidate_evidence_reevaluation")
+
+
+# ---------------------------------------------------------------------------
+# Z. Fleet Health FH-F2/FH-F3 candidate/unresolved/resolved states
+# ---------------------------------------------------------------------------
+
+
+class TestFleetHealthThreeStates:
+    def test_candidate_linked_unresolved_resolved_and_unattributed_all_classify_correctly(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1, raw_name="Still Unresolved Airport")
+        resolved_candidate_id, resolved_assertion_ids = _seed_candidate_with_n_assertions(
+            engine, n=1, raw_name="Now Resolved Airport",
+        )
+        real_id = _seed_airport(engine)
+        review_id = _record_review(
+            engine, resolved_candidate_id, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+            matched_airport_id=real_id,
+        )
+        engine.dispose()
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=resolved_candidate_id, execute=True, review_id=review_id,
+            allow_database_write=True,
+        ))
+
+        # A genuinely, truly unattributed row (no candidate link at all).
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            from app.models import Source
+            source = Source(title="t", source_type="web_discovery", external_id="discovery:unattributed")
+            session.add(source)
+            session.flush()
+            unattributed = SourceAssertion(
+                source_id=source.id, airport_id=None, unknown_airport_candidate_id=None,
+                assertion_type="project_construction", raw_relevant_text="orphan evidence",
+                artifact_identity="art-orphan", source_locator="p1", raw_fragment_hash="hash-orphan",
+                review_state="reviewed",
+            )
+            session.add(unattributed)
+            session.commit()
+
+            facts = _build_source_assertion_review_states(session)
+            f2 = evaluate_fh_f2(facts)
+            f3 = evaluate_fh_f3(facts)
+
+            fact_ids = {f.assertion_id: f for f in facts}
+            # Candidate-linked unresolved: present in the input set, skipped by both rules.
+            assert any(f.unknown_airport_candidate_id == candidate_id for f in facts)
+            # Resolved: no longer even in the airport_id-IS-NULL input set at all.
+            assert not any(f.assertion_id == resolved_assertion_ids[0] for f in facts)
+            # Truly unattributed: present, and since review_state="reviewed", FH-F3 fires for it.
+            assert unattributed.id in fact_ids
+            f3_ids = {aid for finding in f3 for aid in finding.entity_ids}
+            assert unattributed.id in f3_ids
+        engine2.dispose()
+
+
+# ---------------------------------------------------------------------------
+# AA. Migration-chain parity - full CLI flow against a genuinely migrated DB
+# ---------------------------------------------------------------------------
+
+
+class TestMigrationChainParity:
+    def test_full_cli_flow_against_genuinely_migrated_schema(self, tmp_path):
+        db = tmp_path / "migrated.db"
+        engine = create_engine(f"sqlite:///{db}")
+        Base.metadata.create_all(engine)
+        engine.dispose()
+        conn = sqlite3.connect(str(db))
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE unknown_airport_candidate_reviews")
+        conn.execute("DROP TABLE unknown_airport_candidates")
+        replacement = "source_assertions__pre"
+        conn.execute(uac2b_migration._pre_uac2b_create_table_sql(replacement))
+        quoted = ", ".join(f'"{c}"' for c in uac2b_migration._PRE_UAC2B_COLUMNS)
+        conn.execute(f'INSERT INTO "{replacement}" ({quoted}) SELECT {quoted} FROM source_assertions')
+        conn.execute("DROP TABLE source_assertions")
+        conn.execute(f'ALTER TABLE "{replacement}" RENAME TO source_assertions')
+        conn.commit()
+        conn.close()
+
+        uac2a_migration.upgrade(db)
+        uac2b_migration.upgrade(db)
+
+        engine = create_engine(f"sqlite:///{db}")
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        review_id = _record_review(engine, candidate_id, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x")
+        engine.dispose()
+
+        inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert inspect_result.latest_review.action == "CREATE_NEW_AIRPORT"
+
+        written = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id,
+            new_airport_name="Foo Regional Airport", new_airport_country="Fictionland",
+            allow_database_write=True,
+        ))
+        assert written.executed is True
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            reloaded = session.get(SourceAssertion, assertion_ids[0])
+            assert reloaded.airport_id == written.execution_created_airport_id
+        engine2.dispose()
+
+
+# ---------------------------------------------------------------------------
+# I. Wrong-DB isolation
+# ---------------------------------------------------------------------------
+
+
+class TestWrongDbIsolation:
+    def test_writing_to_one_database_never_touches_another(self, tmp_path):
+        db_a = tmp_path / "a.db"
+        db_b = tmp_path / "b.db"
+        engine_a = _make_full_db(db_a)
+        engine_b = _make_full_db(db_b)
+        candidate_id_a, _ = _seed_candidate_with_n_assertions(engine_a, n=1)
+        candidate_id_b, _ = _seed_candidate_with_n_assertions(engine_b, n=1)
+        engine_a.dispose()
+        engine_b.dispose()
+
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db_a, candidate_id=candidate_id_a, decision="REJECT_CANDIDATE",
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+
+        with Session(create_engine(f"sqlite:///{db_b}")) as session:
+            assert session.query(UnknownAirportCandidateReview).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# AB. Real DB no-access
+# ---------------------------------------------------------------------------
+
+
+class TestNoRealDatabaseAccess:
+    def test_no_real_database_path_literal_outside_the_module_docstring(self):
+        """The module docstring's own usage examples legitimately mention
+        data/runway_safe.db as an illustration - this proves it never
+        appears as an executable string literal (a default value, a
+        hardcoded path) anywhere in the actual code."""
+        tree = ast.parse(inspect_module.getsource(cli_module))
+        docstring_node = tree.body[0].value if tree.body and isinstance(tree.body[0], ast.Expr) else None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node is docstring_node:
+                    continue
+                assert "runway_safe.db" not in node.value
+
+    def test_database_argument_has_no_default(self):
+        parser = cli_module._parser()
+        for action in parser._actions:
+            if action.dest == "database":
+                assert action.default is None
+                assert action.required is True
+                return
+        pytest.fail("--database argument not found")
+
+    def test_no_sessionlocal_or_process_global_engine(self):
+        source = inspect_module.getsource(cli_module)
+        assert "import SessionLocal" not in source
+        assert "SessionLocal()" not in source
+
+    def test_no_migration_execution_imported(self):
+        source = inspect_module.getsource(cli_module)
+        assert "uac2a_migration" not in source
+        assert ".upgrade(" not in source
+        assert ".downgrade(" not in source
+
+
+# ---------------------------------------------------------------------------
+# main() / argv-level smoke test
+# ---------------------------------------------------------------------------
+
+
+class TestMainEntrypoint:
+    def test_main_inspect_exit_code_zero(self, tmp_path, capsys):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        exit_code = main(["--database", str(db), "--candidate-id", str(candidate_id)])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "Foo Regional Airport" in captured.out
+
+    def test_main_schema_missing_exit_code_one(self, tmp_path, capsys):
+        db = tmp_path / "pre_uac.db"
+        _make_pre_uac_db(db).dispose()
+        exit_code = main(["--database", str(db), "--candidate-id", "1"])
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert SCHEMA_MIGRATION_REQUIRED_BLOCKER in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Adversarial review addendum - regression tests for genuine findings
+# ---------------------------------------------------------------------------
+
+
+class TestSupersedesReviewIdWiring:
+    """Completeness gap found during adversarial review: the CLI's first
+    draft never exposed record_unknown_airport_candidate_review()'s own
+    optional supersedes_review_id parameter, even though the underlying
+    governed function already validates and accepts it - a real, if
+    minor, audit-annotation gap for a "human review CLI," not a new
+    capability."""
+
+    def test_supersedes_review_id_recorded_and_visible_in_history(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        first = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, decision="DEFER",
+            reviewer="human:x", reason="need more", allow_database_write=True,
+        ))
+        first_id = first.written_review_id
+
+        second = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, decision="REJECT_CANDIDATE",
+            reviewer="human:y", reason="now confident it's hallucinated",
+            supersedes_review_id=first_id, allow_database_write=True,
+        ))
+        assert second.written is True
+
+        inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert inspect_result.latest_review.supersedes_review_id == first_id
+
+    def test_supersedes_review_id_rejected_without_decision(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        with pytest.raises(ValueError, match="--supersedes-review-id is only valid when --decision"):
+            run_review(UnknownAirportCandidateReviewConfig(
+                database=db, candidate_id=candidate_id, supersedes_review_id=1,
+            ))
+
+    def test_supersedes_review_id_rejected_with_execute(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        with pytest.raises(ValueError, match="only valid when recording a review"):
+            run_review(UnknownAirportCandidateReviewConfig(
+                database=db, candidate_id=candidate_id, execute=True, review_id=1, supersedes_review_id=1,
+            ))
+
+
+class TestUac5bEvidenceBagReconstructionProof:
+    """Adversarial review of the UAC5B STOP (mission Part B) - empirical,
+    executable proof, not just re-trusted reasoning from the report."""
+
+    def test_comma_joined_persistence_is_provably_lossy_not_merely_theoretically(self):
+        """Two structurally DIFFERENT EvidenceBag.identifiers sets - one
+        containing a single value that itself embeds the join delimiter,
+        one containing two ordinary separate values - collapse to the
+        IDENTICAL persisted string. This is empirical proof the encoding
+        is non-reversible, not merely an assumption."""
+        from app.services.discovery_evidence_persistence import _join_or_none
+
+        set_a = frozenset({"KABC, KXYZ"})
+        set_b = frozenset({"KABC", "KXYZ"})
+        assert _join_or_none(set_a) == _join_or_none(set_b)
+
+    def test_lost_contradicting_evidence_flips_reject_cross_airport_into_false_attach_confirmed(self):
+        """The single most important empirical proof behind the UAC5B
+        STOP: identical positive (identifier) evidence, with and without
+        the SAME real contradicting_issuers fact that is NEVER persisted
+        anywhere on SourceAssertion, produces two DIFFERENT, opposite-in-
+        consequence guard outcomes. A partial replay fed only what
+        SourceAssertion actually persists would silently reach
+        ATTACH_CONFIRMED where the original, full-evidence evaluation
+        correctly reached REJECT_CROSS_AIRPORT."""
+        from app.services.evidence_attachment_guard import AttachmentOutcome, CandidateAirport, EvidenceBag, evaluate_attachment
+
+        candidate = CandidateAirport(id=1, name="Foo Regional Airport", identifiers=frozenset({"KFOO"}))
+
+        original_bag = EvidenceBag(
+            identifiers=frozenset({"KFOO"}),
+            contradicting_issuers=frozenset({"Bar County Airport Authority"}),
+        )
+        original_decision = evaluate_attachment(candidate, original_bag)
+        assert original_decision.outcome == AttachmentOutcome.REJECT_CROSS_AIRPORT
+
+        # Only `identifiers` survives persistence (as a lossy joined
+        # string) - contradicting_issuers has no column anywhere on
+        # SourceAssertion, so a replay's own reconstructed bag omits it.
+        replay_bag = EvidenceBag(identifiers=frozenset({"KFOO"}))
+        replay_decision = evaluate_attachment(candidate, replay_bag)
+        assert replay_decision.outcome == AttachmentOutcome.ATTACH_CONFIRMED
+
+    def test_evidencebag_fields_never_persisted_have_no_sourceassertion_column(self):
+        """Structural proof, via the ORM's own mapped columns, that
+        locations/issuers/every contradicting_*/both alternate_airport_*
+        fields have no column anywhere on SourceAssertion."""
+        column_names = {c.name for c in SourceAssertion.__table__.columns}
+        never_persisted_evidencebag_fields = {
+            "locations", "issuers", "contradicting_names", "contradicting_issuers",
+            "contradicting_locations", "alternate_airport_runway_ends", "alternate_airport_runway_pairs",
+        }
+        assert never_persisted_evidencebag_fields.isdisjoint(column_names)
+
+    def test_no_structural_link_from_source_assertion_to_snapshot_payload(self):
+        """Part B(E): Snapshot.payload (app.models.acquisition.Snapshot)
+        does preserve the ORIGINAL raw document bytes immutably - but
+        there is no database-enforced (or even code-level) mapping from
+        SourceAssertion.artifact_identity back to a specific Snapshot row
+        anywhere in this repository. Even if such a mapping existed,
+        recovering an EvidenceBag from raw bytes would require RE-RUNNING
+        EXTRACTION (a separately-scoped, not-necessarily-deterministic
+        capability for any AI-assisted extractor - explicitly out of
+        scope, "no recurring acquisition") rather than reading an already-
+        persisted structured field. This test proves the negative half of
+        that claim structurally: no FK, and no code anywhere joins
+        artifact_identity to snapshots."""
+        from app.models import source_assertion as source_assertion_module
+        from app.models import acquisition as acquisition_module
+
+        # No FK from SourceAssertion to Snapshot/AcquisitionSource/AcquisitionRun.
+        fk_targets = {
+            fk.target_fullname for column in SourceAssertion.__table__.columns for fk in column.foreign_keys
+        }
+        assert not any("snapshot" in t or "acquisition" in t for t in fk_targets)
+
+        # acquisition.py (Snapshot/AcquisitionSource/AcquisitionRun) never
+        # references artifact_identity at all - no join key exists on
+        # either side.
+        acquisition_source = inspect_module.getsource(acquisition_module)
+        assert "artifact_identity" not in acquisition_source
+
+        # source_assertion.py never references "snapshot" - confirms the
+        # column's own docstring never even documents an intended
+        # convention-based mapping, let alone a structural one.
+        source_assertion_source = inspect_module.getsource(source_assertion_module)
+        assert "snapshot" not in source_assertion_source.lower()
+
+
+class TestNonexistentDatabaseFileBehavior:
+    """Adversarial finding, NOT fixed in this mission: a nonexistent
+    --database path crashes with a raw sqlite3.OperationalError rather
+    than a clean, structured blocker. Confirmed to be a PRE-EXISTING
+    pattern already present in the already-committed, already-reviewed
+    scripts/review_signal_disposition.py precedent (same crash, same
+    root cause: check_schema_readiness()'s own read-only sqlite3.connect()
+    call is never wrapped) - not a UAC5-introduced regression. Documented
+    here, not silently fixed, per this review's own "fix only defects
+    that belong inside UAC5's established scope" instruction: patching
+    this in exactly one of at least two sibling scripts sharing the
+    identical pattern would be an inconsistent, scope-creeping partial
+    fix; the correct fix is a shared, repo-wide follow-up."""
+
+    def test_nonexistent_database_file_raises_rather_than_returning_a_blocker(self, tmp_path):
+        missing = tmp_path / "does_not_exist.db"
+        with pytest.raises(Exception):
+            run_review(UnknownAirportCandidateReviewConfig(database=missing, candidate_id=1))
+
+    def test_identical_pattern_already_exists_in_the_committed_precedent_script(self, tmp_path):
+        import scripts.review_signal_disposition as precedent_module
+
+        missing = tmp_path / "does_not_exist.db"
+        with pytest.raises(Exception):
+            precedent_module.run_review(precedent_module.SignalDispositionReviewConfig(database=missing))
