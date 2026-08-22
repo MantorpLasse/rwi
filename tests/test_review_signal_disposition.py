@@ -18,6 +18,7 @@ from app.database import Base
 from app.models import Airport, Signal, Source, SourceAssertion
 from app.models.reviewer_action import ReviewerAction
 from app.models.signal_disposition import SignalDisposition, SignalDispositionMember
+from app.services.signal_disposition_conflicts import find_signal_disposition_conflicts
 from app.services.signal_disposition_persistence import record_signal_group_disposition
 import scripts.migrate_signal_disposition_d4d2 as migration
 import scripts.review_signal_disposition as review_module
@@ -103,6 +104,21 @@ class TestSchemaGate:
         _make_pre_d4d2_db(db)
         result = run_review(SignalDispositionReviewConfig(database=db, signal_ids=(1, 2)))
         assert result.blockers == (SCHEMA_MIGRATION_REQUIRED_BLOCKER,)
+
+    def test_missing_schema_blocks_subgroup_mode_too(self, tmp_path):
+        """D4D8D critical-review addition: the schema gate is checked
+        BEFORE any mode branching in run_review() - confirms it applies
+        uniformly whether or not subgroup mode was requested, and renders
+        correctly (the generic early-blockers path in render_result(), not
+        the subgroup-specific one, since subgroup_mode/parent_found are
+        both still at their unset defaults at this point)."""
+        db = tmp_path / "t.db"
+        _make_pre_d4d2_db(db)
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=(1, 2, 3), signal_ids=(1, 2)))
+        assert result.blockers == (SCHEMA_MIGRATION_REQUIRED_BLOCKER,)
+        assert result.subgroup_mode is False
+        text = render_result(result)
+        assert "BLOCKED: SIGNAL_DISPOSITION_SCHEMA_MIGRATION_REQUIRED" in text
 
     def test_missing_schema_blocks_write(self, tmp_path):
         db = tmp_path / "t.db"
@@ -1112,12 +1128,18 @@ class TestNoAutoDecision:
         assert not (attrs & set(self._FORBIDDEN_SIGNAL_ATTRS))
 
     def test_decision_comes_only_from_config_ast(self):
-        """AST-verified (not a substring search): the ONLY call to
-        record_signal_group_disposition() anywhere in this module must
-        pass its `decision=` keyword argument as a plain attribute-access
-        expression on `config` (`config.decision`) - never a literal
-        string, a conditional expression, or any value derived from
-        another field (title/summary/related history/etc.)."""
+        """AST-verified (not a substring search): EVERY call to
+        record_signal_group_disposition() anywhere in this module (D4D8D:
+        exactly two now - whole-group mode's own write path and subgroup
+        mode's own, both independently reviewed, deliberately not merged
+        into one shared helper so each stays a plain, directly-readable
+        call site rather than one level of indirection removed from
+        `config` - see run_review()'s/`_run_subgroup_review()`'s own
+        top-of-file "PERSISTENCE" documentation) must pass its `decision=`
+        keyword argument as a plain attribute-access expression on `config`
+        (`config.decision`) - never a literal string, a conditional
+        expression, or any value derived from another field (title/summary/
+        related history/etc.)."""
         tree = ast.parse(inspect_module.getsource(review_module))
         calls = [
             node for node in ast.walk(tree)
@@ -1125,12 +1147,13 @@ class TestNoAutoDecision:
             and isinstance(node.func, ast.Name)
             and node.func.id == "record_signal_group_disposition"
         ]
-        assert len(calls) == 1, f"expected exactly one call site, found {len(calls)}"
-        decision_kwargs = [kw for kw in calls[0].keywords if kw.arg == "decision"]
-        assert len(decision_kwargs) == 1
-        value_node = decision_kwargs[0].value
-        assert isinstance(value_node, ast.Attribute) and value_node.attr == "decision"
-        assert isinstance(value_node.value, ast.Name) and value_node.value.id == "config"
+        assert len(calls) == 2, f"expected exactly two call sites (whole-group + subgroup), found {len(calls)}"
+        for call in calls:
+            decision_kwargs = [kw for kw in call.keywords if kw.arg == "decision"]
+            assert len(decision_kwargs) == 1
+            value_node = decision_kwargs[0].value
+            assert isinstance(value_node, ast.Attribute) and value_node.attr == "decision"
+            assert isinstance(value_node.value, ast.Name) and value_node.value.id == "config"
 
     def test_misleading_summary_never_changes_written_decision(self, tmp_path):
         """A raw FH-D4 summary/evidence never influences what gets
@@ -1196,3 +1219,728 @@ class TestNoRealDatabaseAccess:
         parser = review_module._parser()
         with pytest.raises(SystemExit):
             parser.parse_args([])
+
+
+# ---------------------------------------------------------------------------
+# D4D8D - human subgroup review CLI (mission's own lettered test matrix A-S)
+# ---------------------------------------------------------------------------
+
+
+from scripts.review_signal_disposition import PARENT_GROUP_NOT_CURRENT_ACTIVE_BLOCKER  # noqa: E402
+
+
+class TestSubgroupInspectDryRunWrite:
+    def test_a_inspect_works_no_history(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert result.subgroup_mode is True
+        assert result.parent_found is True
+        assert result.parent_signal_ids == tuple(sorted(ids))
+        assert result.parent_status == "UNREVIEWED"
+        assert result.signal_ids == tuple(sorted([a, b]))
+        assert result.status == "UNREVIEWED"
+        assert result.target_remainder_signal_ids == (c,)
+        assert result.conflicts == ()
+        assert result.written is False
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 0
+
+    def test_b_dry_run_works_no_write(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert result.action_eligible is True
+        assert result.planned_supersedes_id is None
+        assert result.written is False
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 0
+
+    def test_c_write_creates_one_header_two_members(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert result.written is True
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 1
+            header = verify.query(SignalDisposition).one()
+            assert header.decision == "SAME_REAL_WORLD_EFFORT"
+            assert header.supersedes_id is None
+            members = verify.query(SignalDispositionMember).filter_by(disposition_id=header.id).all()
+            assert {m.signal_id for m in members} == {a, b}
+            assert len(members) == 2
+
+
+class TestSubgroupIdempotencyAndSupersession:
+    def test_d_same_decision_after_write_is_idempotent(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:y", reason="r2",
+        ))
+        assert result.action_eligible is False
+        assert "ALREADY_CONFIRMED_CURRENT_DECISION" in result.action_refusal_reason
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 1
+
+    def test_e_changed_decision_supersedes_exact_set_subgroup_disposition(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        first = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        second = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="DISTINCT", reviewer="human:y", reason="corrected", allow_database_write=True,
+        ))
+        assert second.written is True
+        assert second.planned_supersedes_id == first.written_disposition_id
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 2
+            new_header = verify.get(SignalDisposition, second.written_disposition_id)
+            assert new_header.supersedes_id == first.written_disposition_id
+
+
+class TestSubgroupTargetValidation:
+    def test_f_target_equal_to_parent_rejected(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        with pytest.raises(ValueError, match="STRICT, PROPER subset"):
+            run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=ids))
+
+    def test_g_target_not_subset_of_parent_rejected(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        outsider = _grow_group(engine, airport_id, title="OUTSIDER")
+        with pytest.raises(ValueError, match="STRICT, PROPER subset"):
+            run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=(a, b, c), signal_ids=(a, outsider)))
+
+    def test_parent_below_minimum_cardinality_rejected(self, tmp_path):
+        db = tmp_path / "t.db"
+        with pytest.raises(ValueError, match="parent-signal-id"):
+            run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=(1,), signal_ids=(1, 2)))
+
+    def test_parent_without_target_rejected(self, tmp_path):
+        db = tmp_path / "t.db"
+        with pytest.raises(ValueError, match="requires --signal-id"):
+            run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=(1, 2, 3)))
+
+
+class TestSubgroupParentReReadBeforeWrite:
+    def test_h_parent_disappears_entirely_between_dry_run_and_write(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert dry_run.action_eligible is True
+
+        # Remove enough members that the raw FH-D4 group vanishes entirely.
+        _remove_from_group(engine, b)
+        _remove_from_group(engine, c)
+
+        write_attempt = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert write_attempt.written is False
+        assert write_attempt.parent_found is False
+        assert write_attempt.blockers == (PARENT_GROUP_NOT_CURRENT_ACTIVE_BLOCKER,)
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 0
+
+    def test_i_parent_grows_between_dry_run_and_write_refuses_stale_parent(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert dry_run.action_eligible is True
+
+        _grow_group(engine, airport_id)  # parent {a,b,c} -> {a,b,c,d}, still a valid proper superset of {a,b}
+
+        write_attempt = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert write_attempt.written is False
+        # The ORIGINALLY-specified parent {a,b,c} is no longer a current
+        # active raw group at all (the live one is now {a,b,c,d}) - refused
+        # even though {a,b} is technically still a valid subset of the NEW
+        # parent, exactly per this mission's own explicit "REFUSE stale
+        # parent" requirement.
+        assert write_attempt.parent_found is False
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 0
+
+    def test_j_parent_shrinks_between_dry_run_and_write_refuses(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 4)
+        a, b, c, d = ids
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert dry_run.action_eligible is True
+
+        _remove_from_group(engine, d)  # parent {a,b,c,d} -> {a,b,c}, still active but a different exact set
+
+        write_attempt = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert write_attempt.written is False
+        assert write_attempt.parent_found is False
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 0
+
+    def test_k_new_overlapping_disposition_appears_between_dry_run_and_write(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert dry_run.action_eligible is True
+        assert dry_run.conflicts == ()
+
+        # A different reviewer independently records a genuinely overlapping
+        # disposition for {b,c} in between the dry-run and the write.
+        with Session(engine) as other:
+            record_signal_group_disposition(other, signal_ids=[b, c], decision="DISTINCT", reviewer="human:other", reason="concurrent")
+            other.commit()
+
+        write_attempt = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert write_attempt.written is False
+        assert write_attempt.action_eligible is False
+        assert "SUBGROUP_OVERLAP_CONFLICT_DETECTED" in write_attempt.action_refusal_reason
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 1  # only the concurrent one - our write never landed
+
+    def test_parent_shrinks_to_exactly_equal_target_refuses(self, tmp_path):
+        """Critical-review addition: parent {a,b,c} shrinks to EXACTLY
+        {a,b} (== the target itself) between dry-run and write - the
+        ORIGINALLY-specified parent {a,b,c} is no longer found via exact
+        match, so the write must refuse even though {a,b} would now,
+        confusingly, itself look like a perfectly fine EXACT-set target
+        (not a subgroup at all) if re-evaluated from scratch."""
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert dry_run.action_eligible is True
+
+        _remove_from_group(engine, c)  # parent {a,b,c} -> {a,b}, exactly the target
+
+        write_attempt = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert write_attempt.written is False
+        assert write_attempt.parent_found is False
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 0
+
+    def test_target_member_itself_leaves_parent_refuses(self, tmp_path):
+        """Critical-review addition: distinct from a REMAINDER member
+        leaving (already covered by test_i/test_j) - here a member of the
+        TARGET subgroup itself (not the remainder) leaves the raw group
+        between dry-run and write, so the new raw parent is {a,c} - the
+        originally-specified parent {a,b,c} is gone, refused."""
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert dry_run.action_eligible is True
+
+        _remove_from_group(engine, b)  # b is a TARGET member, not remainder
+
+        write_attempt = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert write_attempt.written is False
+        assert write_attempt.parent_found is False
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 0
+
+    def test_cross_airport_global_conflict_still_refuses(self, tmp_path):
+        """Critical-review addition: D4D8C's conflict scan is genuinely
+        global (never airport-scoped) - an existing disposition spanning a
+        Signal from a COMPLETELY DIFFERENT airport plus one target member
+        still correctly refuses the subgroup write."""
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        with Session(engine) as session:
+            other_airport = Airport(name="Other Airport", country="XX")
+            session.add(other_airport)
+            session.commit()
+            other_signal = Signal(airport=other_airport, title="OTHER", category="replacement", confidence="high")
+            session.add(other_signal)
+            session.commit()
+            other_id = other_signal.id
+            record_signal_group_disposition(session, signal_ids=[b, other_id], decision="DISTINCT", reviewer="human:other", reason="cross-airport")
+            session.commit()
+
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert len(result.conflicts) == 1
+        assert result.conflicts[0].overlap_signal_ids == (b,)
+        assert result.action_eligible is False
+
+
+class TestSubgroupFailureInjection:
+    def test_subgroup_write_failure_after_flush_rolls_back_completely(self, tmp_path):
+        """Mirrors the whole-group TestTransactionBoundary test exactly,
+        for the subgroup write call site specifically - both call sites
+        share the same module-level `record_signal_group_disposition` name,
+        but this proves the SUBGROUP path's own surrounding try/except
+        genuinely rolls back too, not merely assumed from the whole-group
+        test alone."""
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+
+        original_record = review_module.record_signal_group_disposition
+
+        def _failing_record(*args, **kwargs):
+            original_record(*args, **kwargs)
+            raise RuntimeError("simulated failure after flush, before commit")
+
+        review_module.record_signal_group_disposition = _failing_record
+        try:
+            with pytest.raises(RuntimeError):
+                run_review(SignalDispositionReviewConfig(
+                    database=db, parent_signal_ids=ids, signal_ids=(a, b),
+                    decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+                ))
+        finally:
+            review_module.record_signal_group_disposition = original_record
+
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 0
+            assert verify.query(SignalDispositionMember).count() == 0
+
+
+class TestSubgroupDisjointAndOverlap:
+    def test_l_existing_disjoint_subgroup_target_permitted(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 6)
+        a, b, c, d, e, f = ids
+        first_write = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert first_write.written is True
+
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(c, d),
+            decision="DISTINCT", reviewer="human:y", reason="r2",
+        ))
+        assert result.conflicts == ()
+        assert result.action_eligible is True
+        write = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(c, d),
+            decision="DISTINCT", reviewer="human:y", reason="r2", allow_database_write=True,
+        ))
+        assert write.written is True
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 2
+
+    def test_m_existing_overlapping_subgroup_blocked(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(b, c),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:y", reason="r2",
+        ))
+        assert len(result.conflicts) == 1
+        assert result.conflicts[0].conflicting_signal_ids == tuple(sorted([a, b]))
+        assert result.action_eligible is False
+        assert "SUBGROUP_OVERLAP_CONFLICT_DETECTED" in result.action_refusal_reason
+        # Same decision or different decision makes no difference (syntactic policy).
+        result_same_decision = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(b, c),
+            decision="DISTINCT", reviewer="human:y", reason="r2",
+        ))
+        assert result_same_decision.action_eligible is False
+
+    def test_n_strict_subset_superset_overlap_blocked(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 4)
+        a, b, c, d = ids
+        run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b, c),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:y", reason="r2",
+        ))
+        assert len(result.conflicts) == 1
+        assert result.conflicts[0].relation == "STRICT_SUBSET"
+        assert result.action_eligible is False
+
+
+class TestSubgroupExactSetHistoryNotOverlap:
+    def test_o_own_exact_set_history_never_treated_as_overlap_conflict(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        inspect_result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert inspect_result.status == "CONFIRMED_SAME_REAL_WORLD_EFFORT"
+        assert inspect_result.conflicts == ()  # its own exact-set history is never a conflict against itself
+
+        reReview = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="DISTINCT", reviewer="human:y", reason="corrected",
+        ))
+        assert reReview.conflicts == ()
+        assert reReview.action_eligible is True
+
+
+class TestSubgroupAmbiguousHistory:
+    def test_p_ambiguous_target_history_fails_closed(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        with Session(engine) as session:
+            record_signal_group_disposition(session, signal_ids=[a, b], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r1")
+            record_signal_group_disposition(session, signal_ids=[a, b], decision="DISTINCT", reviewer="human:y", reason="r2")  # independent root, no supersedes_id
+            session.commit()
+
+        inspect_result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert inspect_result.ambiguous_history is True
+        assert inspect_result.independent_root_count == 2
+
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:z", reason="r3",
+        ))
+        assert dry_run.action_eligible is False
+        assert "AMBIGUOUS_HISTORY_REQUIRES_EXPLICIT_RESOLUTION" in dry_run.action_refusal_reason
+        with Session(engine) as verify:
+            assert verify.query(SignalDisposition).count() == 2  # unchanged
+
+
+class TestSubgroupRemainder:
+    def test_q_singleton_remainder_displayed_no_inference(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert result.target_remainder_signal_ids == (c,)
+        # No disposition of any kind exists that names c - never inferred.
+        with Session(engine) as verify:
+            assert verify.query(SignalDispositionMember).filter_by(signal_id=c).count() == 0
+
+    def test_r_multi_member_remainder(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 5)
+        a, b, c, d, e = ids
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert result.target_remainder_signal_ids == tuple(sorted([c, d, e]))
+
+
+class TestSubgroupRealCaseShapes:
+    """Synthetic replays of the real D4D7 topologies - fully synthetic ids,
+    never touching data/runway_safe.db."""
+
+    def test_s_roanoke_shape_pair_subgroup(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3, airport_name="Roanoke-shape")
+        thirty_seven, fifty_one, sixty_one = ids
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(fifty_one, sixty_one),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:rwi-owner",
+            reason="Shared Installation, same runway_end='34', explicit AIP cross-reference text.",
+        ))
+        assert result.action_eligible is True
+        assert result.target_remainder_signal_ids == (thirty_seven,)
+        assert result.conflicts == ()
+
+    def test_s_binghamton_shape_four_member_subgroup(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 5, airport_name="Binghamton-shape")
+        four, sixty = ids[:4], ids[4]
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=four,
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:rwi-owner",
+            reason="All four explicitly, consistently name Runway 34 end; gapless phase sequence.",
+        ))
+        assert result.action_eligible is True
+        assert result.target_remainder_signal_ids == (sixty,)
+        assert result.conflicts == ()
+
+
+class TestSubgroupParentValidation:
+    def test_parent_not_found_at_all_refused(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=(9001, 9002, 9003), signal_ids=(9001, 9002)))
+        assert result.parent_found is False
+        assert result.blockers == (PARENT_GROUP_NOT_CURRENT_ACTIVE_BLOCKER,)
+
+    def test_parent_already_resolved_distinct_at_whole_group_level_refused(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        run_review(SignalDispositionReviewConfig(
+            database=db, signal_ids=ids, decision="DISTINCT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert result.parent_found is False
+        assert result.blockers == (PARENT_GROUP_NOT_CURRENT_ACTIVE_BLOCKER,)
+        # Independently confirms this is not merely an earlier-message
+        # convenience: a subset write against this exact-set-DISTINCT
+        # parent would ALWAYS also be blocked by D4D8C's own conflict scan
+        # (STRICT_SUPERSET), so no legitimate capability is lost.
+        with Session(engine) as verify:
+            conflicts = find_signal_disposition_conflicts(verify, signal_ids=(a, b))
+            assert len(conflicts) == 1
+            assert conflicts[0].relation == "STRICT_SUPERSET"
+
+    def test_parent_already_resolved_same_at_whole_group_level_refused(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        run_review(SignalDispositionReviewConfig(
+            database=db, signal_ids=ids, decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert result.parent_found is False
+        assert result.blockers == (PARENT_GROUP_NOT_CURRENT_ACTIVE_BLOCKER,)
+
+    def test_parent_with_ambiguous_whole_group_history_refused(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        with Session(engine) as session:
+            record_signal_group_disposition(session, signal_ids=ids, decision="DISTINCT", reviewer="human:x", reason="r1")
+            record_signal_group_disposition(session, signal_ids=ids, decision="SAME_REAL_WORLD_EFFORT", reviewer="human:y", reason="r2")
+            session.commit()
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert result.parent_found is False
+        assert result.blockers == (PARENT_GROUP_NOT_CURRENT_ACTIVE_BLOCKER,)
+
+    def test_parent_with_conflicting_existing_subgroup_metadata_still_valid_and_displayed(self, tmp_path):
+        """Distinct from the three tests above: a parent whose OWN
+        exact-set status is still UNREVIEWED (so it correctly remains a
+        valid, active parent) but whose EXISTING resolved subgroups
+        conflict with EACH OTHER (D4D8B's own subgroup_conflict flag) -
+        must remain a usable parent, with the conflict displayed honestly,
+        never hidden and never used to block parent validity itself."""
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 5)
+        a, b, c, d, e = ids
+        with Session(engine) as session:
+            record_signal_group_disposition(session, signal_ids=[a, b, c], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r1")
+            record_signal_group_disposition(session, signal_ids=[c, d], decision="SAME_REAL_WORLD_EFFORT", reviewer="human:y", reason="r2")
+            session.commit()
+
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(b, e)))
+        assert result.parent_found is True
+        assert result.parent_status == "UNREVIEWED"
+        assert result.parent_subgroup_conflict is True
+        seen = {s.signal_ids for s in result.parent_resolved_subgroups}
+        assert seen == {tuple(sorted([a, b, c])), tuple(sorted([c, d]))}
+        # The NEW target itself also correctly conflicts (shares b with the
+        # first existing subgroup).
+        assert len(result.conflicts) == 1
+
+
+class TestSubgroupDisplayExplainability:
+    def test_parent_and_target_never_confused_in_output(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        text = render_result(result)
+        assert "PARENT RAW FH-D4 GROUP" in text
+        assert "TARGET SUBGROUP" in text
+        assert "REMAINDER" in text
+        assert "CONFLICTS" in text
+        parent_idx = text.index("PARENT RAW FH-D4 GROUP")
+        target_idx = text.index("TARGET SUBGROUP")
+        assert parent_idx < target_idx  # parent always shown first, distinctly labeled
+
+    def test_write_mode_prints_same_plan_before_committing(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        write = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        dry_text = render_result(dry_run)
+        write_text = render_result(write)
+        assert "Proposed decision: SAME_REAL_WORLD_EFFORT" in dry_text
+        assert "Proposed decision: SAME_REAL_WORLD_EFFORT" in write_text
+        assert "TARGET SUBGROUP: [1, 2]" in dry_text
+        assert "TARGET SUBGROUP: [1, 2]" in write_text
+
+    def test_mode_label_prefixed_subgroup(self, tmp_path):
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        inspect_result = run_review(SignalDispositionReviewConfig(database=db, parent_signal_ids=ids, signal_ids=(a, b)))
+        assert "Mode: SUBGROUP INSPECT (read-only)" in render_result(inspect_result)
+        dry_run = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert "Mode: SUBGROUP DRY RUN (no write)" in render_result(dry_run)
+        write = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r", allow_database_write=True,
+        ))
+        assert "Mode: SUBGROUP WRITE (committed)" in render_result(write)
+
+
+class TestSubgroupNoOverrideFlag:
+    def test_no_force_flag_exists(self):
+        """Checks argparse's own registered option strings, not rendered
+        help text - the module's own top-of-file docstring legitimately
+        contains the substring "--force" in prose explaining its absence,
+        which a naive text-search would false-positive on."""
+        parser = review_module._parser()
+        option_strings = {opt for action in parser._actions for opt in action.option_strings}
+        assert not any("force" in opt.lower() for opt in option_strings)
+
+    def test_conflict_refusal_has_no_bypass_kwarg(self, tmp_path):
+        """SignalDispositionReviewConfig itself has no field capable of
+        bypassing a conflict refusal - structural proof, not just absence
+        of a CLI flag."""
+        field_names = {f.name for f in dataclasses.fields(SignalDispositionReviewConfig)}
+        assert not (field_names & {"force", "override", "ignore_conflicts", "skip_conflict_check"})
+
+
+class TestSubgroupInformationFirewall:
+    def test_no_forbidden_signal_attribute_access_ast(self):
+        """Reuses TestNoAutoDecision's own forbidden-attribute list - the
+        subgroup path is part of the SAME module and must satisfy the
+        identical firewall the whole-group path already does."""
+        tree = ast.parse(inspect_module.getsource(review_module))
+        attrs = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        assert not (attrs & set(TestNoAutoDecision._FORBIDDEN_SIGNAL_ATTRS))
+
+    def test_subgroup_eligibility_decided_only_by_governance_structure(self, tmp_path):
+        """A subgroup with SECRET-laden Signal titles/values is validated
+        identically to one without - eligibility never depends on Signal
+        content, only on parent/target/conflict governance structure."""
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        with Session(engine) as session:
+            airport = Airport(name="Firewall Airport", country="XX")
+            session.add(airport)
+            sigs = [
+                Signal(airport=airport, title="SECRET TITLE", category="replacement", confidence="high", estimated_total_value_usd=999999999),
+                Signal(airport=airport, title="OTHER SECRET", category="replacement", confidence="high"),
+                Signal(airport=airport, title="THIRD SECRET", category="replacement", confidence="high"),
+            ]
+            session.add_all(sigs)
+            session.commit()
+            ids = tuple(s.id for s in sigs)
+        a, b, c = ids
+        result = run_review(SignalDispositionReviewConfig(
+            database=db, parent_signal_ids=ids, signal_ids=(a, b),
+            decision="SAME_REAL_WORLD_EFFORT", reviewer="human:x", reason="r",
+        ))
+        assert result.action_eligible is True
+        assert "SECRET" not in render_result(result)
+        assert "999999999" not in render_result(result)
+
+
+class TestSubgroupModeNeverInferredFromLegacyCall:
+    def test_bare_signal_ids_without_parent_is_ordinary_whole_group_mode(self, tmp_path):
+        """Passing FEWER signal ids than some raw group's own size, with NO
+        --parent-signal-id, must never be silently reinterpreted as
+        subgroup mode - it is either an ordinary (possibly-not-found) whole
+        -group target or a validation error, exactly as before D4D8D."""
+        db = tmp_path / "t.db"
+        engine = _make_full_db(db)
+        airport_id, ids = _add_fh_d4_group(engine, 3)
+        a, b, c = ids
+        result = run_review(SignalDispositionReviewConfig(database=db, signal_ids=(a, b)))
+        assert result.subgroup_mode is False
+        assert result.blockers == (TARGET_GROUP_NOT_CURRENT_BLOCKER,)  # {a,b} alone is not a current raw group
+        assert result.parent_found is None
