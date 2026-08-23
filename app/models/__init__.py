@@ -11,12 +11,15 @@ from app.models.physical_installation_identity import InstallationAssertionLink,
 from app.models.reviewer_action import ReviewerAction
 from app.models.signal_disposition import SignalDisposition, SignalDispositionMember
 from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
+from app.models.source_assertion_evidence_bag import SourceAssertionEvidenceBag
+from app.models.identity_guard_evaluation import IdentityGuardEvaluation
 
 __all__ = [
     "Airport",
     "AcquisitionRun",
     "AcquisitionRunStatus",
     "AcquisitionSource",
+    "IdentityGuardEvaluation",
     "Incident",
     "Installation",
     "InstallationAssertionLink",
@@ -30,6 +33,7 @@ __all__ = [
     "SignalDispositionMember",
     "Source",
     "SourceAssertion",
+    "SourceAssertionEvidenceBag",
     "Snapshot",
     "UnknownAirportCandidate",
     "UnknownAirportCandidateReview",

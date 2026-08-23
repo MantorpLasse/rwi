@@ -7,6 +7,7 @@ from app.models import (
     AcquisitionRun,
     AcquisitionSource,
     Airport,
+    IdentityGuardEvaluation,
     Incident,
     Installation,
     InstallationAssertionLink,
@@ -20,6 +21,7 @@ from app.models import (
     SignalDispositionMember,
     Source,
     SourceAssertion,
+    SourceAssertionEvidenceBag,
     Snapshot,
     UnknownAirportCandidate,
     UnknownAirportCandidateReview,
@@ -293,6 +295,24 @@ EXPECTED_COLUMNS = {
         "created_at": ("DATETIME", False, ("callable",), None),
         "supersedes_review_id": ("INTEGER", True, None, None),
     },
+    "source_assertion_evidence_bags": {
+        "id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+        "evidence_bag_json": ("TEXT", False, None, None),
+        "evidence_bag_hash": ("VARCHAR(64)", False, None, None),
+        "schema_version": ("INTEGER", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+    },
+    "identity_guard_evaluations": {
+        "id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+        "evidence_bag_snapshot_id": ("INTEGER", False, None, None),
+        "evaluated_against_airport_id": ("INTEGER", False, None, None),
+        "triggering_review_id": ("INTEGER", True, None, None),
+        "outcome": ("VARCHAR(30)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -358,6 +378,19 @@ EXPECTED_FOREIGN_KEYS = {
         ("candidate_id", "unknown_airport_candidates.id"),
         ("matched_airport_id", "airports.id"),
         ("supersedes_review_id", "unknown_airport_candidate_reviews.id"),
+    },
+    "source_assertion_evidence_bags": {("source_assertion_id", "source_assertions.id")},
+    "identity_guard_evaluations": {
+        ("source_assertion_id", "source_assertions.id"),
+        # Composite FK (adversarial-review addition): source_assertion_id
+        # ALSO participates in the composite
+        # (evidence_bag_snapshot_id, source_assertion_id) ->
+        # (source_assertion_evidence_bags.id, source_assertion_evidence_bags.source_assertion_id)
+        # constraint, so this column carries two independent FK targets.
+        ("source_assertion_id", "source_assertion_evidence_bags.source_assertion_id"),
+        ("evidence_bag_snapshot_id", "source_assertion_evidence_bags.id"),
+        ("evaluated_against_airport_id", "airports.id"),
+        ("triggering_review_id", "unknown_airport_candidate_reviews.id"),
     },
 }
 
@@ -457,6 +490,15 @@ EXPECTED_INDEXES = {
         ("ix_unknown_airport_candidate_reviews_candidate_id", ("candidate_id",), False),
         ("ix_unknown_airport_candidate_reviews_matched_airport_id", ("matched_airport_id",), False),
         ("ix_unknown_airport_candidate_reviews_supersedes_review_id", ("supersedes_review_id",), False),
+    },
+    "source_assertion_evidence_bags": {
+        ("ix_source_assertion_evidence_bags_evidence_bag_hash", ("evidence_bag_hash",), False),
+    },
+    "identity_guard_evaluations": {
+        ("ix_identity_guard_evaluations_source_assertion_id", ("source_assertion_id",), False),
+        ("ix_identity_guard_evaluations_evidence_bag_snapshot_id", ("evidence_bag_snapshot_id",), False),
+        ("ix_identity_guard_evaluations_evaluated_against_airport_id", ("evaluated_against_airport_id",), False),
+        ("ix_identity_guard_evaluations_triggering_review_id", ("triggering_review_id",), False),
     },
 }
 
@@ -564,6 +606,15 @@ EXPECTED_RELATIONSHIPS = {
         "matched_airport": ("Airport", None, DEFAULT_CASCADE),
         "supersedes": ("UnknownAirportCandidateReview", None, DEFAULT_CASCADE),
     },
+    "SourceAssertionEvidenceBag": {
+        "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+    },
+    "IdentityGuardEvaluation": {
+        "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+        "evidence_bag_snapshot": ("SourceAssertionEvidenceBag", None, DEFAULT_CASCADE),
+        "evaluated_against_airport": ("Airport", None, DEFAULT_CASCADE),
+        "triggering_review": ("UnknownAirportCandidateReview", None, DEFAULT_CASCADE),
+    },
 }
 
 
@@ -582,6 +633,7 @@ def test_all_current_models_are_exported_from_app_models():
         Airport.__name__,
         AcquisitionRun.__name__,
         AcquisitionSource.__name__,
+        IdentityGuardEvaluation.__name__,
         Incident.__name__,
         Installation.__name__,
         InstallationAssertionLink.__name__,
@@ -595,6 +647,7 @@ def test_all_current_models_are_exported_from_app_models():
         SignalDispositionMember.__name__,
         Source.__name__,
         SourceAssertion.__name__,
+        SourceAssertionEvidenceBag.__name__,
         Snapshot.__name__,
         UnknownAirportCandidate.__name__,
         UnknownAirportCandidateReview.__name__,
@@ -602,6 +655,7 @@ def test_all_current_models_are_exported_from_app_models():
         "Airport",
         "AcquisitionRun",
         "AcquisitionSource",
+        "IdentityGuardEvaluation",
         "Incident",
         "Installation",
         "InstallationAssertionLink",
@@ -615,6 +669,7 @@ def test_all_current_models_are_exported_from_app_models():
         "SignalDispositionMember",
         "Source",
         "SourceAssertion",
+        "SourceAssertionEvidenceBag",
         "Snapshot",
         "UnknownAirportCandidate",
         "UnknownAirportCandidateReview",
