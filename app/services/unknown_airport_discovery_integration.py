@@ -160,6 +160,11 @@ class DiscoveryIdentityResolutionResult:
     attached_airport_id: Optional[int] = None
     unknown_airport_candidate_id: Optional[int] = None
     unknown_airport_candidate_created: Optional[bool] = None
+    # EB3 (docs/architecture/rwi-eb3-evidencebag-discovery-persistence-report.md):
+    # propagated straight from whichever persistence function's own
+    # DiscoveryPersistenceResult.attached_evidence_bag_snapshot_id was
+    # returned - never recomputed here.
+    evidence_bag_snapshot_id: Optional[int] = None
 
 
 def _extract_unknown_airport_candidate_seed(fragment: CandidateFragment) -> "Optional[dict]":
@@ -291,6 +296,7 @@ def resolve_or_persist_discovery_identity(
             source_assertion_id=persisted.source_assertion_id,
             source_assertion_created=persisted.source_assertion_created,
             attached_airport_id=persisted.attached_airport_id,
+            evidence_bag_snapshot_id=persisted.attached_evidence_bag_snapshot_id,
         )
 
     seed = _extract_unknown_airport_candidate_seed(fragment)
@@ -309,6 +315,7 @@ def resolve_or_persist_discovery_identity(
             source_created=persisted.source_created,
             source_assertion_id=persisted.source_assertion_id,
             source_assertion_created=persisted.source_assertion_created,
+            evidence_bag_snapshot_id=persisted.attached_evidence_bag_snapshot_id,
         )
 
     candidate_result = find_or_create_unknown_airport_candidate(session, **seed)
@@ -329,4 +336,5 @@ def resolve_or_persist_discovery_identity(
         source_assertion_created=linked.source_assertion_created,
         unknown_airport_candidate_id=candidate_result.candidate.id,
         unknown_airport_candidate_created=candidate_result.created,
+        evidence_bag_snapshot_id=linked.attached_evidence_bag_snapshot_id,
     )
