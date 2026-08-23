@@ -678,12 +678,47 @@ class TestDownstreamContinuationNote:
             assert reloaded.identity_guard_decision == "INSUFFICIENT_IDENTITY"
         engine2.dispose()
 
-    def test_no_reevaluation_service_exists(self):
-        """UAC5B finding: guard replay is architecturally blocked (see the
-        UAC5 report) - no such service module was created."""
-        import importlib
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module("app.services.resolved_candidate_evidence_reevaluation")
+    def test_reevaluation_service_now_exists_and_closes_the_uac5b_gap(self, tmp_path):
+        """UAC5B originally found guard replay architecturally blocked (see
+        the UAC5 report): a historical SourceAssertion's identity_guard_decision
+        could never be safely re-run because the full EvidenceBag it was
+        computed from was never persisted. EB1-EB4
+        (docs/architecture/rwi-eb4-resolved-evidence-reevaluation-report.md)
+        closed that prerequisite for modern-discovery assertions and built
+        the re-evaluation service itself - this test replaces the old
+        "no such service exists" regression marker with a positive proof
+        that the gap is actually closed: the exact resolved,
+        INSUFFICIENT_IDENTITY-decided scenario from
+        test_resolved_candidate_shows_honest_continuation_note_and_insufficient_identity_persists
+        above can now be genuinely re-evaluated, where UAC5B could only
+        document it as blocked."""
+        from app.services.resolved_candidate_evidence_reevaluation import reevaluate_resolved_candidate_evidence
+
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        real_id = _seed_airport(engine)
+        review_id = _record_review(
+            engine, candidate_id, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+            matched_airport_id=real_id,
+        )
+        engine.dispose()
+
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=review_id, allow_database_write=True,
+        ))
+
+        engine2 = create_engine(f"sqlite:///{db}")
+        with Session(engine2) as session:
+            reloaded = session.get(SourceAssertion, assertion_ids[0])
+            assert reloaded.identity_guard_decision == "INSUFFICIENT_IDENTITY"
+            result = reevaluate_resolved_candidate_evidence(session, source_assertion_id=assertion_ids[0])
+            session.commit()
+            # the ORIGINAL historical decision remains untouched even though
+            # a real re-evaluation now genuinely ran against it
+            assert reloaded.identity_guard_decision == "INSUFFICIENT_IDENTITY"
+            assert result.evaluated_against_airport_id == real_id
+        engine2.dispose()
 
 
 # ---------------------------------------------------------------------------
