@@ -619,31 +619,40 @@ class TestCanonicalSideEffectFirewall:
 
 
 class TestDownstreamContinuationIsNotYetReachable:
-    """Adversarial-review finding: the original UAC4 implementation
+    """Adversarial-review finding (UAC4): the original UAC4 implementation
     report's own "downstream continuation" claim ("no second code path
-    is needed... the existing pipeline can resume unmodified") is
+    is needed... the existing pipeline can resume unmodified") was
     OVERSTATED. resolve_candidate_to_existing_airport()/
     create_airport_from_approved_candidate() correctly and safely set
     SourceAssertion.airport_id, but never touch identity_guard_decision -
-    and app.services.intelligence_review_persistence._identity_decision_from_assertion()
-    treats ANY value other than the literal string "ATTACH_CONFIRMED"
+    and (at the time this class was written)
+    app.services.intelligence_review_persistence._identity_decision_from_assertion()
+    treated ANY value other than the literal string "ATTACH_CONFIRMED"
     (which a candidate-linked assertion never carries - it is always
     "INSUFFICIENT_IDENTITY", set once at
     persist_candidate_linked_source_assertion() time and never revisited)
-    as IDENTITY_NOT_CONFIRMED, which fails the entire downstream chain
-    closed. A resolved assertion is therefore NOT YET structurally
-    equivalent to ordinary known-airport evidence for downstream
-    promotion/Signal-eligibility purposes - only for direct airport_id
-    attribution (static export, direct Airport.source_assertions queries,
-    etc.). This is judged non-blocking for THIS mission (design doc §11
-    already named "whether the identity guard should be re-run
-    post-resolution" as an open, unresolved implementation choice, not a
-    UAC4 requirement; re-running the guard is a nontrivial, separately-
-    scoped design decision of its own - what should happen if a re-run
-    guard produces something other than ATTACH_CONFIRMED even after human
-    resolution is exactly the kind of question "do not widen into UAC5"
-    forbids deciding here) - but the original report's claim is corrected
-    by this test and the review addendum."""
+    as IDENTITY_NOT_CONFIRMED, which failed the entire downstream chain
+    closed. Design doc §11 named "whether the identity guard should be
+    re-run post-resolution" as an open, unresolved implementation choice.
+
+    EB1-EB5 (docs/architecture/rwi-eb5-downstream-identity-consumption-report.md)
+    is that separately-scoped answer: EB4 re-runs the guard against the
+    exact original preserved EvidenceBag and the resolved canonical
+    Airport, and EB5 wires `_identity_decision_from_assertion()` to
+    consult the latest such re-evaluation (app.services.effective_identity_guard_decision)
+    when one validly exists, falling back to exactly the behavior this
+    class originally documented when none does. THIS test's own scenario
+    (resolution with no re-evaluation ever run) is therefore still exactly
+    correct and unchanged - see tests/test_effective_identity_guard_decision.py
+    and the EB5-integration tests in test_intelligence_review_persistence.py/
+    test_promotion_policy_persistence.py for the now-reachable positive
+    case. Signal creation itself (governed_signal_creation.py) remains a
+    separate, deliberately un-widened firewall: it still checks the
+    permanent HISTORICAL identity_guard_decision column directly, so an
+    assertion whose original decision was negative can never reach
+    Signal creation through the current pipeline no matter what a later
+    re-evaluation says - see
+    TestGovernedSignalCreationFirewall in test_effective_identity_guard_decision.py."""
 
     def test_resolved_assertion_identity_guard_decision_remains_insufficient_identity(self):
         with Session(_engine()) as session:
@@ -668,7 +677,7 @@ class TestDownstreamContinuationIsNotYetReachable:
             from app.services.intelligence_review_persistence import _identity_decision_from_assertion
             from app.services.evidence_attachment_guard import AttachmentOutcome
 
-            assert _identity_decision_from_assertion(reloaded) == AttachmentOutcome.INSUFFICIENT_IDENTITY
+            assert _identity_decision_from_assertion(session, reloaded) == AttachmentOutcome.INSUFFICIENT_IDENTITY
 
 
 # ---------------------------------------------------------------------------

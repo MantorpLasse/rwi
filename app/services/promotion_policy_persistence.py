@@ -20,12 +20,18 @@ COMPOSES THE COMMITTED CORES, NEVER DUPLICATES THEM: this module calls
 `evaluate_signal_candidate()` (Slice 3, unmodified) and
 `evaluate_promotion_policy()` (Slice 6, unmodified) directly - it contains no
 materiality logic and no promotion-eligibility logic of its own. The one
-small piece of shared logic it needs - mapping a SourceAssertion's persisted,
-free-text `identity_guard_decision` column to a real `AttachmentOutcome`,
-fail-closed - is reused verbatim from
+small piece of shared logic it needs - mapping a SourceAssertion to the
+identity decision that should currently govern it, fail-closed - is reused
+verbatim from
 `app.services.intelligence_review_persistence._identity_decision_from_assertion()`
 rather than re-implemented a second time (a single source of truth for that
-mapping; if it is ever changed, both slices stay in sync automatically).
+mapping; if it is ever changed, both slices stay in sync automatically). As
+of EB5 (docs/architecture/rwi-eb5-downstream-identity-consumption-report.md),
+that shared helper itself forwards the EFFECTIVE identity decision - the
+latest governed IdentityGuardEvaluation (EB4) when one validly exists,
+otherwise the original historical `identity_guard_decision` column exactly
+as before - so this module automatically stays in sync with EB5 too,
+without needing its own copy of that precedence logic.
 
 DELIBERATELY DOES NOT CALL `persist_intelligence_review()`: that function
 always (re-)writes `intelligence_review_decision`/`intelligence_review_reason`
@@ -127,7 +133,7 @@ def persist_promotion_policy(
     immediately. Never writes intelligence_review_decision/
     intelligence_review_reason - see module docstring.
     """
-    identity_decision = _identity_decision_from_assertion(source_assertion)
+    identity_decision = _identity_decision_from_assertion(session, source_assertion)
     signal_candidate = evaluate_signal_candidate(claims, SignalCandidateContext(identity_decision=identity_decision))
     decision = evaluate_promotion_policy(signal_candidate, claims, context)
 

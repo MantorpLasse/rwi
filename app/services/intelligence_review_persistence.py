@@ -42,6 +42,19 @@ AttachmentOutcome.INSUFFICIENT_IDENTITY before evaluation, which
 IDENTITY_NOT_CONFIRMED. This module adds no new identity logic of its
 own; it only ever forwards the already-governed decision.
 
+EB5 (docs/architecture/rwi-eb5-downstream-identity-consumption-report.md,
+Slice 5 of docs/architecture/rwi-full-evidencebag-persistence-design.md):
+`_identity_decision_from_assertion()` now forwards the EFFECTIVE identity
+decision (app.services.effective_identity_guard_decision.resolve_effective_identity_guard_decision(),
+unmodified, imported not reimplemented) rather than the raw historical
+column directly - a later, governed IdentityGuardEvaluation (EB4) is
+authoritative for CURRENT eligibility when one validly exists for this
+assertion's own current canonical Airport, falling back to exactly the
+historical column read above when none does. This is the ONLY change EB5
+makes here: SourceAssertion.identity_guard_decision/identity_guard_reason
+are still never read anywhere but inside that resolver, still never
+written by this module, and still the permanent historical record.
+
 IDEMPOTENCY: `claims` and `source_assertion.identity_guard_decision`
 together fully determine the decision (evaluate_signal_candidate is pure
 and deterministic - Slice 3, unmodified). This service always recomputes
@@ -61,6 +74,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.models import SourceAssertion
+from app.services.effective_identity_guard_decision import resolve_effective_identity_guard_decision
 from app.services.evidence_attachment_guard import AttachmentOutcome
 from app.services.evidence_claim_semantics import Claim
 from app.services.signal_candidate_evaluation import (
@@ -93,34 +107,39 @@ class IntelligenceReviewResult:
         return self.decision.reason
 
 
-def _identity_decision_from_assertion(source_assertion: SourceAssertion) -> AttachmentOutcome:
-    """Fail-closed mapping from the persisted, free-text
-    identity_guard_decision column to a real AttachmentOutcome. Never
-    raises: None, an unrecognized string, or anything other than the
-    literal ATTACH_CONFIRMED value all resolve to INSUFFICIENT_IDENTITY -
-    the conservative "identity unknown/unconfirmed" member -
-    which evaluate_signal_candidate() (unmodified) already turns into
-    IDENTITY_NOT_CONFIRMED."""
-    raw = source_assertion.identity_guard_decision
-    if not raw:
-        return AttachmentOutcome.INSUFFICIENT_IDENTITY
-    try:
-        return AttachmentOutcome(raw)
-    except ValueError:
-        return AttachmentOutcome.INSUFFICIENT_IDENTITY
+def _identity_decision_from_assertion(session: Session, source_assertion: SourceAssertion) -> AttachmentOutcome:
+    """EB5: forwards resolve_effective_identity_guard_decision()'s own
+    effective_decision - a later, currently-trustworthy IdentityGuardEvaluation
+    (EB4) is authoritative when one exists for this assertion's own
+    current canonical Airport; otherwise this falls back to exactly the
+    same fail-closed mapping of the historical identity_guard_decision
+    column this function has always applied (None, an unrecognized
+    string, or anything other than a real AttachmentOutcome member all
+    resolve to INSUFFICIENT_IDENTITY, the conservative "identity unknown/
+    unconfirmed" member - which evaluate_signal_candidate(), unmodified,
+    already turns into IDENTITY_NOT_CONFIRMED). Never raises for a
+    malformed/inconsistent evaluation - resolve_effective_identity_guard_decision()
+    itself never does either, except for a source_assertion_id that does
+    not exist, which cannot happen here since `source_assertion` is
+    already a live, loaded row."""
+    return resolve_effective_identity_guard_decision(
+        session, source_assertion_id=source_assertion.id,
+    ).effective_decision
 
 
 def persist_intelligence_review(
     session: Session, source_assertion: SourceAssertion, claims: "tuple[Claim, ...]",
 ) -> IntelligenceReviewResult:
-    """Evaluates `claims` against `source_assertion`'s own already-governed
-    identity decision and persists the result onto the same row. Never
+    """Evaluates `claims` against `source_assertion`'s own EFFECTIVE
+    identity decision (EB5 - the latest governed re-evaluation when one
+    validly exists, otherwise the original historical decision; see
+    module docstring) and persists the result onto the same row. Never
     commits (task's own explicit "caller owns transaction" requirement);
     calls `session.flush()` only so a constraint violation surfaces
     immediately, matching app.services.discovery_evidence_persistence's
     own established discipline.
     """
-    context = SignalCandidateContext(identity_decision=_identity_decision_from_assertion(source_assertion))
+    context = SignalCandidateContext(identity_decision=_identity_decision_from_assertion(session, source_assertion))
     decision = evaluate_signal_candidate(claims, context)
 
     source_assertion.intelligence_review_decision = decision.outcome.value

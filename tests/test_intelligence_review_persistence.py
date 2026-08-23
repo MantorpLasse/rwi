@@ -292,3 +292,64 @@ class TestTransactionOwnership:
         monkeypatch.setattr(session, "commit", lambda: commits.append(1) or original_commit())
         persist_intelligence_review(session, assertion, claims)
         assert commits == []
+
+
+# --- EB5: effective identity decision (latest IdentityGuardEvaluation,
+# when one validly exists, is authoritative over the historical column) ---
+
+class TestEB5EffectiveIdentityIntegration:
+    def _confirmed_evaluation(self, session, assertion, airport_id):
+        from app.models.source_assertion_evidence_bag import SourceAssertionEvidenceBag
+        from app.models.identity_guard_evaluation import IdentityGuardEvaluation
+        from app.services.evidence_bag_serialization import serialize_evidence_bag, hash_serialized_evidence_bag
+        from app.services.evidence_attachment_guard import EvidenceBag
+
+        payload = serialize_evidence_bag(EvidenceBag(identifiers=frozenset({"FOO"})))
+        snapshot = SourceAssertionEvidenceBag(
+            source_assertion_id=assertion.id, evidence_bag_json=payload,
+            evidence_bag_hash=hash_serialized_evidence_bag(payload), schema_version=1,
+        )
+        session.add(snapshot)
+        session.flush()
+        evaluation = IdentityGuardEvaluation(
+            source_assertion_id=assertion.id, evidence_bag_snapshot_id=snapshot.id,
+            evaluated_against_airport_id=airport_id, outcome="ATTACH_CONFIRMED", reason="synthetic",
+        )
+        session.add(evaluation)
+        session.flush()
+        return evaluation
+
+    def test_historical_insufficient_latest_confirmed_now_reaches_evaluate_signal_candidate(self, session):
+        airport = Airport(name="Foo Regional Airport", country="USA")
+        session.add(airport)
+        session.flush()
+        assertion = _bare_assertion(session, identity_guard_decision="INSUFFICIENT_IDENTITY")
+        assertion.airport_id = airport.id
+        session.flush()
+        self._confirmed_evaluation(session, assertion, airport.id)
+
+        claims = (
+            Claim(
+                category=ClaimCategory.EXPLICIT_DOCUMENT_FACT, subject="bed", statement="fact",
+                provenance=_prov(), relationship=RelationshipFact(party="Acme", role="sole_source_vendor"),
+            ),
+        )
+        result = persist_intelligence_review(session, assertion, claims)
+        assert result.outcome != SignalCandidateOutcome.IDENTITY_NOT_CONFIRMED
+        # historical field untouched
+        assert assertion.identity_guard_decision == "INSUFFICIENT_IDENTITY"
+
+    def test_candidate_linked_unresolved_assertion_remains_identity_not_confirmed(self, session):
+        """§13/§34: even with a malformed evaluation present, an assertion
+        with no canonical airport_id must never become identity-confirmed
+        through intelligence review."""
+        assertion = _bare_assertion(session, identity_guard_decision="INSUFFICIENT_IDENTITY")
+        assert assertion.airport_id is None
+        claims = (
+            Claim(
+                category=ClaimCategory.EXPLICIT_DOCUMENT_FACT, subject="bed", statement="fact",
+                provenance=_prov(), relationship=RelationshipFact(party="Acme", role="sole_source_vendor"),
+            ),
+        )
+        result = persist_intelligence_review(session, assertion, claims)
+        assert result.outcome == SignalCandidateOutcome.IDENTITY_NOT_CONFIRMED

@@ -489,3 +489,45 @@ class TestPersistenceModulePurity:
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 assert node.func.attr not in forbidden_calls
+
+
+# --- EB5: promotion policy automatically stays in sync with the shared
+# effective-identity-decision helper, without its own copy of the
+# precedence logic (docs/architecture/rwi-eb5-downstream-identity-consumption-report.md) ---
+
+class TestEB5EffectiveIdentityIntegration:
+    def test_historical_insufficient_latest_confirmed_reaches_promotion_policy(self, session):
+        from app.models.source_assertion_evidence_bag import SourceAssertionEvidenceBag
+        from app.models.identity_guard_evaluation import IdentityGuardEvaluation
+        from app.services.evidence_bag_serialization import serialize_evidence_bag, hash_serialized_evidence_bag
+        from app.services.evidence_attachment_guard import EvidenceBag
+
+        airport = Airport(name="Foo Regional Airport", country="USA")
+        session.add(airport)
+        session.flush()
+        assertion = _bare_assertion(session, identity_guard_decision="INSUFFICIENT_IDENTITY")
+        assertion.airport_id = airport.id
+        session.flush()
+
+        payload = serialize_evidence_bag(EvidenceBag(identifiers=frozenset({"FOO"})))
+        snapshot = SourceAssertionEvidenceBag(
+            source_assertion_id=assertion.id, evidence_bag_json=payload,
+            evidence_bag_hash=hash_serialized_evidence_bag(payload), schema_version=1,
+        )
+        session.add(snapshot)
+        session.flush()
+        session.add(IdentityGuardEvaluation(
+            source_assertion_id=assertion.id, evidence_bag_snapshot_id=snapshot.id,
+            evaluated_against_airport_id=airport.id, outcome="ATTACH_CONFIRMED", reason="synthetic",
+        ))
+        session.flush()
+
+        claim = _completion_claim()
+        result = persist_promotion_policy(session, assertion, (claim,), TIER_1)
+        from app.services.signal_candidate_evaluation import SignalCandidateOutcome
+
+        assert result.signal_candidate.outcome != SignalCandidateOutcome.IDENTITY_NOT_CONFIRMED
+        # historical field untouched, and intelligence_review_decision
+        # (a column this module never writes) remains untouched too
+        assert assertion.identity_guard_decision == "INSUFFICIENT_IDENTITY"
+        assert assertion.intelligence_review_decision is None
