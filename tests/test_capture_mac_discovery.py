@@ -512,7 +512,14 @@ def test_apply_creates_source_and_source_assertion_only(migrated_db):
         apply=True, allow_database_write=True, expected_fingerprint=dry["plan_fingerprint"], skip_backup=True,
     ))
     assert applied["applied"] is True
-    assert applied["apply_result"][0]["outcome"] == "ATTACH_CONFIRMED"
+    # UAC7: routing_outcome is the UAC3 orchestrator's own routing
+    # decision (DiscoveryIdentityOutcome); attachment_outcome is the
+    # underlying guard AttachmentOutcome it was made from - both exposed
+    # so a known-airport attach is never collapsed into a generic
+    # "persisted=True" (task S12).
+    assert applied["apply_result"][0]["routing_outcome"] == "KNOWN_CANONICAL_ATTACHMENT"
+    assert applied["apply_result"][0]["attachment_outcome"] == "ATTACH_CONFIRMED"
+    assert applied["apply_result"][0]["unknown_airport_candidate_id"] is None
 
     engine = build_engine(migrated_db)
     with Session(engine) as session:
@@ -522,6 +529,7 @@ def test_apply_creates_source_and_source_assertion_only(migrated_db):
         assert assertion.identity_guard_decision == "ATTACH_CONFIRMED"
         assert assertion.identity_guard_reason
         assert assertion.airport_id is not None
+        assert assertion.unknown_airport_candidate_id is None
     engine.dispose()
 
 

@@ -10,11 +10,25 @@ Orchestrates the already-committed, unmodified pipeline:
         -> alternate-airport topology enrichment (app.services.candidate_fragment_enrichment)
         -> EvidenceBag (app.services.discovery_candidate_fragment.candidate_fragment_to_evidence_bag)
         -> Evidence Attachment Guard (app.services.evidence_attachment_guard)
-        -> governed persistence (app.services.discovery_evidence_persistence)
+        -> UAC3 discovery-identity orchestration
+           (app.services.unknown_airport_discovery_integration.resolve_or_persist_discovery_identity)
+           -> exactly one of: known-canonical attachment / ambiguous-known
+              identity / governed UnknownAirportCandidate formation /
+              unresolved identity (app.services.discovery_evidence_persistence,
+              app.services.unknown_airport_candidate_persistence - both
+              composed, not reimplemented, by the orchestrator itself)
 
-This module implements NO new pipeline logic - it only wires the above
-components together, plus a small amount of genuinely new orchestration
-(candidate-airport selection, planning, fingerprinting, CLI safety gates).
+UAC7 (docs/architecture/rwi-uac7-capture-mac-uac3-wiring-report.md) wired
+the apply phase to the UAC3 orchestrator - before UAC7 this runner called
+app.services.discovery_evidence_persistence.persist_discovery_fragment()
+directly, which has no code path to
+app.services.unknown_airport_candidate_persistence.find_or_create_unknown_airport_candidate()
+and therefore could never route a fragment naming an airport RWI does not
+already know into the governed UnknownAirportCandidate pipeline. This
+module still implements NO new pipeline logic of its own beyond that
+routing swap - it only wires the above components together, plus a small
+amount of genuinely new orchestration (candidate-airport selection,
+planning, fingerprinting, CLI safety gates).
 
 SAFETY MODEL (default-closed):
   - No live network unless --allow-live-network.
@@ -67,11 +81,7 @@ from app.models import Airport, AcquisitionRun, AcquisitionSource, PublishingSou
 from app.services.acquisition import AcquisitionService
 from app.services.candidate_fragment_enrichment import enrich_with_alternate_airport_topology
 from app.services.discovery_candidate_fragment import CandidateFragment, candidate_fragment_to_evidence_bag
-from app.services.discovery_evidence_persistence import (
-    DiscoveryPersistenceResult,
-    DiscoverySourceMetadata,
-    persist_discovery_fragment,
-)
+from app.services.discovery_evidence_persistence import DiscoverySourceMetadata
 # Reused directly, never duplicated - see module docstring.
 from app.services.discovery_evidence_persistence import _select_primary
 from app.services.evidence_attachment_guard import (
@@ -80,6 +90,15 @@ from app.services.evidence_attachment_guard import (
     candidate_airport_from_airport_like,
     evaluate_attachment_for_candidates,
 )
+from app.services.unknown_airport_discovery_integration import (
+    DiscoveryIdentityResolutionResult,
+    resolve_or_persist_discovery_identity,
+)
+# Reused directly, never duplicated - see module docstring and
+# plan_governed_persistence()'s own docstring for why the PREVIEW path
+# needs this exact, pure, read-only formability rule (never a
+# runner-specific reimplementation of it).
+from app.services.unknown_airport_discovery_integration import _extract_unknown_airport_candidate_seed
 from app.services.runway_identity import AmbiguousRunwayDesignationError, normalize_end, normalize_pair
 from scripts.migrate_discovery_governed_evidence_slice1 import BACKUP_DIRECTORY, backup_database, inspect as inspect_discovery_schema
 
@@ -290,6 +309,12 @@ class PlannedGovernedEvidence:
     source_id_if_existing: "int | None"
     source_assertion_would_be_created: bool
     source_assertion_id_if_existing: "int | None"
+    # UAC7: whether apply would route this fragment into UAC3's governed
+    # UnknownAirportCandidate branch instead of the known-airport/
+    # ambiguous/unresolved path - see plan_governed_persistence()'s own
+    # docstring. Defaulted so existing direct-construction callers/tests
+    # that predate UAC7 remain valid.
+    would_form_unknown_airport_candidate: bool = False
 
 
 def plan_governed_persistence(
@@ -302,11 +327,31 @@ def plan_governed_persistence(
     function works correctly whether or not the discovery migration has
     been applied to `session`'s target database. Never calls
     session.add()/flush()/commit() - zero ORM mutations, provably (see
-    tests/test_capture_mac_discovery.py)."""
+    tests/test_capture_mac_discovery.py).
+
+    UAC7: also previews whether apply would route this fragment into
+    UAC3's UnknownAirportCandidate branch - reusing (never duplicating)
+    resolve_or_persist_discovery_identity()'s own routing rule: no known
+    candidate accepted the evidence (REJECT_CROSS_AIRPORT or
+    INSUFFICIENT_IDENTITY - `_select_primary`'s priority ordering already
+    ranks CONFIRMED/PROVISIONAL/REVIEW_REQUIRED strictly ahead of both, so
+    reaching either one here means the same "no known match" bucket the
+    orchestrator itself checks) AND the fragment's own extracted identity
+    is independently formable (_extract_unknown_airport_candidate_seed() -
+    a pure function of `fragment` alone, no I/O, imported not
+    reimplemented). This is included in the fingerprint below precisely
+    so a state change between preview and apply that would flip this
+    routing decision is detected as a plan mismatch, never applied
+    silently under a stale preview (task S16/S17)."""
     if decisions:
         candidate_id, outcome, reason = _select_primary(decisions)
     else:
         candidate_id, outcome, reason = None, AttachmentOutcome.INSUFFICIENT_IDENTITY, "No candidate airports were supplied for evaluation."
+
+    would_form_unknown_airport_candidate = (
+        outcome in (AttachmentOutcome.REJECT_CROSS_AIRPORT, AttachmentOutcome.INSUFFICIENT_IDENTITY)
+        and _extract_unknown_airport_candidate_seed(fragment) is not None
+    )
 
     attached_code = None
     if candidate_id is not None:
@@ -339,21 +384,33 @@ def plan_governed_persistence(
         source_id_if_existing=existing_source.id if existing_source else None,
         source_assertion_would_be_created=existing_assertion is None,
         source_assertion_id_if_existing=existing_assertion.id if existing_assertion else None,
+        would_form_unknown_airport_candidate=would_form_unknown_airport_candidate,
     )
 
 
 def compute_plan_fingerprint(planned: Sequence[PlannedGovernedEvidence]) -> str:
     """Deterministic over the UPSTREAM-CONTENT-DERIVED fields only
     (document/fragment identity, guard outcome, attached airport code,
-    Source external id) - deliberately excludes target-DB-state fields
+    Source external id, UAC7's would_form_unknown_airport_candidate
+    routing flag) - deliberately excludes target-DB-state fields
     (would_be_created/existing ids) so the same real upstream content
     fingerprints identically regardless of which database it is planned
     against, and identically across repeated runs while upstream content
-    is unchanged (task S10)."""
+    is unchanged (task S10). would_form_unknown_airport_candidate is
+    itself content-derived (guard_outcome, already in this tuple, plus a
+    pure function of the fragment alone - see plan_governed_persistence()),
+    not DB-state-derived, so including it does not reintroduce the
+    DB-state dependency this fingerprint deliberately avoids; it is
+    included explicitly, as its own field, rather than left as an
+    implication of guard_outcome alone, so a future change to either
+    signal's derivation cannot silently stop being covered by the
+    fingerprint (task S16 - the apply-time UAC3 routing decision must
+    never be able to drift from what was previewed without detection)."""
     rows = sorted(
         (
             p.document_identity, p.fragment_identity[0], p.fragment_identity[1], p.fragment_identity[2],
             p.guard_outcome, p.attached_airport_code or "", p.source_external_id,
+            p.would_form_unknown_airport_candidate,
         )
         for p in planned
     )
@@ -634,6 +691,7 @@ def run_capture(config: CaptureConfig, *, client: "httpx.Client | None" = None) 
                 "source_external_id": p.source_external_id,
                 "source_would_be_created": p.source_would_be_created,
                 "source_assertion_would_be_created": p.source_assertion_would_be_created,
+                "would_form_unknown_airport_candidate": p.would_form_unknown_airport_candidate,
             }
             for p in planned
         ]
@@ -668,21 +726,44 @@ def run_capture(config: CaptureConfig, *, client: "httpx.Client | None" = None) 
             for dc, _candidates, _fragment, _decisions in evaluated:
                 acquire_document_for_apply(session, http_client, dc.item)
 
-        apply_results: list[DiscoveryPersistenceResult] = []
+        # UAC7: routed through the single UAC3 orchestration entry point
+        # (app.services.unknown_airport_discovery_integration.resolve_or_persist_discovery_identity),
+        # never persist_discovery_fragment() directly - this is the exact
+        # seam that used to make this runner structurally unable to reach
+        # the UnknownAirportCandidate branch (see module docstring). This
+        # runner still implements none of that routing logic itself - it
+        # only calls the one already-reviewed, already-tested orchestrator
+        # function, exactly as every other caller of this pipeline does.
+        apply_results: list[DiscoveryIdentityResolutionResult] = []
         for dc, candidates, enriched_fragment, _decisions in evaluated:
             meta = DiscoverySourceMetadata(
                 document_identity=enriched_fragment.artifact_identity, title=dc.item.item_title,
                 publisher=PUBLISHER_NAME, url=dc.item.document_url,
             )
-            apply_results.append(persist_discovery_fragment(session, meta, enriched_fragment, candidates))
+            apply_results.append(resolve_or_persist_discovery_identity(session, meta, enriched_fragment, candidates))
 
         session.commit()
         report["applied"] = True
         report["apply_result"] = [
             {
+                # DiscoveryIdentityOutcome (KNOWN_CANONICAL_ATTACHMENT /
+                # AMBIGUOUS_KNOWN_IDENTITY / UNKNOWN_AIRPORT_CANDIDATE /
+                # UNRESOLVED_IDENTITY) - the UAC3 routing decision itself,
+                # never collapsed into a generic "persisted=True" (task S12).
+                "routing_outcome": r.outcome.value,
+                # The underlying AttachmentOutcome the routing decision was
+                # made from (ATTACH_CONFIRMED / ATTACH_PROVISIONAL /
+                # REVIEW_REQUIRED / REJECT_CROSS_AIRPORT / INSUFFICIENT_IDENTITY) -
+                # always populated, for audit/debugging (matches
+                # DiscoveryIdentityResolutionResult.attachment_outcome's own
+                # docstring).
+                "attachment_outcome": r.attachment_outcome.value,
                 "source_id": r.source_id, "source_created": r.source_created,
                 "source_assertion_id": r.source_assertion_id, "source_assertion_created": r.source_assertion_created,
-                "outcome": r.outcome.value, "attached_airport_id": r.attached_airport_id,
+                "attached_airport_id": r.attached_airport_id,
+                "unknown_airport_candidate_id": r.unknown_airport_candidate_id,
+                "unknown_airport_candidate_created": r.unknown_airport_candidate_created,
+                "evidence_bag_snapshot_id": r.evidence_bag_snapshot_id,
             }
             for r in apply_results
         ]
