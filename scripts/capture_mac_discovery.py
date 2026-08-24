@@ -99,6 +99,10 @@ from app.services.unknown_airport_discovery_integration import (
 # needs this exact, pure, read-only formability rule (never a
 # runner-specific reimplementation of it).
 from app.services.unknown_airport_discovery_integration import _extract_unknown_airport_candidate_seed
+# Identity-precedence Option 3 mirror (docs/architecture/rwi-uac3-
+# identity-precedence-review.md) - reused directly, same convention as
+# the seed-formability import immediately above.
+from app.services.unknown_airport_discovery_integration import _any_candidate_has_explicit_identity_match
 from app.services.runway_identity import AmbiguousRunwayDesignationError, normalize_end, normalize_pair
 from scripts.migrate_discovery_governed_evidence_slice1 import BACKUP_DIRECTORY, backup_database, inspect as inspect_discovery_schema
 
@@ -342,16 +346,43 @@ def plan_governed_persistence(
     reimplemented). This is included in the fingerprint below precisely
     so a state change between preview and apply that would flip this
     routing decision is detected as a plan mismatch, never applied
-    silently under a stale preview (task S16/S17)."""
+    silently under a stale preview (task S16/S17).
+
+    IDENTITY-PRECEDENCE OPTION 3 mirror (docs/architecture/rwi-uac3-
+    identity-precedence-review.md S14/S16): the orchestrator's own known-
+    or-ambiguous bucket is ALSO bypassed here when the fragment carries a
+    formable name claim that no supplied candidate's positive evidence
+    corroborates (_any_candidate_has_explicit_identity_match(), reused -
+    not reimplemented). When this override applies, `candidate_id` is
+    reset to None - apply will not attach to that airport, so the preview
+    must not claim it would, and the resulting `attached_airport_id`/
+    `attached_airport_code` fields (both part of the fingerprint below)
+    must not silently disagree with what resolve_or_persist_discovery_identity()
+    will actually do. `outcome`/`reason` (guard_outcome/guard_reason in the
+    returned plan) are deliberately left as the raw, unmodified guard
+    result - exactly like DiscoveryIdentityResolutionResult.attachment_outcome
+    does for the same case - so a human reading the preview can see both
+    the underlying guard verdict and the fact that the override changed
+    the routing."""
     if decisions:
         candidate_id, outcome, reason = _select_primary(decisions)
     else:
         candidate_id, outcome, reason = None, AttachmentOutcome.INSUFFICIENT_IDENTITY, "No candidate airports were supplied for evaluation."
 
-    would_form_unknown_airport_candidate = (
-        outcome in (AttachmentOutcome.REJECT_CROSS_AIRPORT, AttachmentOutcome.INSUFFICIENT_IDENTITY)
-        and _extract_unknown_airport_candidate_seed(fragment) is not None
+    seed_formable = _extract_unknown_airport_candidate_seed(fragment) is not None
+    known_or_ambiguous = outcome in (
+        AttachmentOutcome.ATTACH_CONFIRMED, AttachmentOutcome.ATTACH_PROVISIONAL, AttachmentOutcome.REVIEW_REQUIRED,
     )
+    if (
+        known_or_ambiguous
+        and decisions
+        and seed_formable
+        and not _any_candidate_has_explicit_identity_match(decisions)
+    ):
+        known_or_ambiguous = False
+        candidate_id = None
+
+    would_form_unknown_airport_candidate = not known_or_ambiguous and seed_formable
 
     attached_code = None
     if candidate_id is not None:

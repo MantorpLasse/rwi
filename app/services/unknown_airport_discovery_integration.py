@@ -82,8 +82,10 @@ from app.services.discovery_evidence_persistence import (
     persist_discovery_fragment,
 )
 from app.services.evidence_attachment_guard import (
+    AttachmentDecision,
     AttachmentOutcome,
     CandidateAirport,
+    EvidenceCategory,
     evaluate_attachment_for_candidates,
 )
 from app.services.unknown_airport_candidate_persistence import find_or_create_unknown_airport_candidate
@@ -121,6 +123,36 @@ _AMBIGUOUS_KNOWN_OUTCOME = AttachmentOutcome.REVIEW_REQUIRED
 # call actually produced - this module does not collapse that
 # information, only their ROUTING consequence.
 _NO_KNOWN_MATCH_OUTCOMES = (AttachmentOutcome.REJECT_CROSS_AIRPORT, AttachmentOutcome.INSUFFICIENT_IDENTITY)
+
+# Identity-precedence Option 3 (docs/architecture/rwi-uac3-identity-
+# precedence-review.md S14/S16): the two guard evidence categories that
+# represent an EXPLICIT identity claim about which specific airport this
+# evidence concerns - as opposed to RUNWAY_TOPOLOGY/ISSUER/LOCATION, which
+# are corroborating-but-not-identity-asserting (a runway heading, a
+# publisher, or a city are all shared by many real airports; a name or a
+# coded identifier is what a source actually SAYS the airport is).
+# IDENTIFIER is included alongside NAME - not just NAME alone - precisely
+# so an identifier-confirmed match (already correctly untouchable per the
+# guard's own "identifier evidence is definitive alone" rule) can never be
+# overridden by this check merely because the SAME fragment also happens
+# to carry an unrelated, non-matching name (S9's own required non-
+# regression: "exact identifier known match + unrelated name" must be
+# preserved unchanged).
+_EXPLICIT_IDENTITY_CATEGORIES = (EvidenceCategory.NAME, EvidenceCategory.IDENTIFIER)
+
+
+def _any_candidate_has_explicit_identity_match(decisions: "dict[object, AttachmentDecision]") -> bool:
+    """True if at least one supplied candidate's OWN positive evidence
+    (as already computed by the guard - never a parallel or fuzzy name
+    comparison of any kind) includes a NAME or IDENTIFIER match. Reused
+    exactly as-is by both the real routing decision below and
+    scripts/capture_mac_discovery.py's own preview-side mirror
+    (plan_governed_persistence()) - see that module's own import comment
+    for why it is imported directly rather than duplicated."""
+    return any(
+        any(item.category in _EXPLICIT_IDENTITY_CATEGORIES for item in decision.positive_evidence)
+        for decision in decisions.values()
+    )
 
 
 class DiscoveryIdentityOutcome(str, Enum):
@@ -261,6 +293,27 @@ def resolve_or_persist_discovery_identity(
     append-only-evidence discipline persist_discovery_fragment() and
     persist_candidate_linked_source_assertion() already independently
     establish, not a new rule this module invents.
+
+    IDENTITY-PRECEDENCE OPTION 3 (docs/architecture/rwi-uac3-identity-
+    precedence-review.md S14/S16): a known-match or ambiguous-known
+    bucket result is prevented from winning when BOTH (a) the fragment
+    carries a formable explicit airport-name claim
+    (_extract_unknown_airport_candidate_seed() - unmodified, the same
+    rule already gating unknown-candidate formation below) and (b) NO
+    supplied candidate's own positive evidence includes a NAME or
+    IDENTIFIER match (_any_candidate_has_explicit_identity_match() -
+    reuses the guard's own already-computed facts, never a parallel or
+    fuzzy name comparison of any kind). This is what keeps a merely
+    coincidental runway-topology (or issuer, or location) match from
+    silently claiming evidence that explicitly names a different
+    airport - the real, motivating case
+    (docs/architecture/rwi-source-identity-evidence-5f-report.md):
+    "Anoka County-Blaine Airport" + a runway heading shared by several
+    unrelated known airports, none of them named Anoka. The override
+    never fires when no name evidence exists at all (seed is None) or
+    when the name (or an identifier) DOES corroborate some candidate -
+    both cases fall through to the unmodified, pre-existing behavior
+    below, exactly as before this addition.
     """
     evidence = candidate_fragment_to_evidence_bag(fragment)
     decisions = (
@@ -280,7 +333,19 @@ def resolve_or_persist_discovery_identity(
     else:
         best_outcome = AttachmentOutcome.INSUFFICIENT_IDENTITY
 
-    if best_outcome in _KNOWN_MATCH_OUTCOMES or best_outcome == _AMBIGUOUS_KNOWN_OUTCOME:
+    seed = _extract_unknown_airport_candidate_seed(fragment)
+
+    known_or_ambiguous = best_outcome in _KNOWN_MATCH_OUTCOMES or best_outcome == _AMBIGUOUS_KNOWN_OUTCOME
+    uncorroborated_name_override = (
+        known_or_ambiguous
+        and bool(decisions)
+        and seed is not None
+        and not _any_candidate_has_explicit_identity_match(decisions)
+    )
+    if uncorroborated_name_override:
+        known_or_ambiguous = False
+
+    if known_or_ambiguous:
         persisted = persist_discovery_fragment(session, source_metadata, fragment, candidate_airports)
         outcome = (
             DiscoveryIdentityOutcome.KNOWN_CANONICAL_ATTACHMENT
@@ -299,7 +364,6 @@ def resolve_or_persist_discovery_identity(
             evidence_bag_snapshot_id=persisted.attached_evidence_bag_snapshot_id,
         )
 
-    seed = _extract_unknown_airport_candidate_seed(fragment)
     if seed is None:
         persisted = persist_discovery_fragment(session, source_metadata, fragment, candidate_airports)
         return DiscoveryIdentityResolutionResult(
@@ -322,12 +386,21 @@ def resolve_or_persist_discovery_identity(
     linked = persist_candidate_linked_source_assertion(
         session, source_metadata, fragment, unknown_airport_candidate_id=candidate_result.candidate.id,
     )
+    if uncorroborated_name_override:
+        match_summary = (
+            f"An otherwise {best_outcome.value} known-candidate match/ambiguity exists, but no supplied "
+            "candidate's own evidence corroborated this name (or an identifier) - an uncorroborated "
+            "explicit source-provided name is not allowed to be silently overridden by a merely "
+            "coincidental runway-topology, issuer, or location match (identity-precedence Option 3)"
+        )
+    else:
+        match_summary = f"No known Airport candidate matched ({best_outcome.value})"
     return DiscoveryIdentityResolutionResult(
         outcome=DiscoveryIdentityOutcome.UNKNOWN_AIRPORT_CANDIDATE,
         reason=(
-            f"No known Airport candidate matched ({best_outcome.value}); evidence carries exactly one "
-            f"claimed airport name ({seed['raw_name']!r}), sufficient to form a governed, non-canonical "
-            f"unknown-airport candidate pending human resolution."
+            f"{match_summary}; evidence carries exactly one claimed airport name "
+            f"({seed['raw_name']!r}), sufficient to form a governed, non-canonical unknown-airport "
+            f"candidate pending human resolution."
         ),
         attachment_outcome=best_outcome,
         source_id=linked.source_id,

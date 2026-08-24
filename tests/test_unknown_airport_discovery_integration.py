@@ -399,6 +399,246 @@ class TestAmbiguousKnownMatch:
 
 
 # ---------------------------------------------------------------------------
+# Identity-precedence Option 3 (docs/architecture/rwi-uac3-identity-
+# precedence-review.md S14/S16): an explicit, well-formed source-provided
+# airport-name claim that no supplied candidate's own positive evidence
+# corroborates must not let a merely coincidental runway-topology, issuer,
+# or location match silently claim the evidence - routing must fall
+# through to the existing, unmodified UnknownAirportCandidate path
+# instead. Every test here reuses the guard's own already-computed
+# positive_evidence facts (via resolve_or_persist_discovery_identity())-
+# never a parallel or fuzzy name comparison.
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityPrecedenceOption3:
+    def test_real_anoka_shape_multi_topology_forms_unknown_candidate(self):
+        """The exact real-world motivating case (Controlled Live Pilot
+        5E/5F): an explicit airport name matching NEITHER of two
+        topology-ambiguous known candidates must route to
+        UNKNOWN_AIRPORT_CANDIDATE, not AMBIGUOUS_KNOWN_IDENTITY."""
+        with Session(_engine()) as session:
+            clinton = _seed_airport(session, name="Bill and Hillary Clinton National")
+            waterbury = _seed_airport(session, name="Waterbury-Oxford")
+            clinton_c = _candidate(clinton, canonical_runway_pairs=frozenset({"18/36"}))
+            waterbury_c = _candidate(waterbury, canonical_runway_pairs=frozenset({"18/36"}))
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("anoka"), source_locator="item-3.1",
+                raw_text="Anoka County-Blaine Airport Runway 18-36 Pavement Reconstruction.",
+                airport_names=frozenset({"Anoka County-Blaine Airport"}),
+                runway_ends=frozenset({"18", "36"}), runway_pairs=frozenset({"18/36"}),
+                issuers=frozenset({"Metropolitan Airports Commission"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("anoka-doc"), fragment, [clinton_c, waterbury_c])
+
+            assert result.outcome == DiscoveryIdentityOutcome.UNKNOWN_AIRPORT_CANDIDATE
+            assert result.attachment_outcome == AttachmentOutcome.REVIEW_REQUIRED
+            assert result.attached_airport_id is None
+            assert result.unknown_airport_candidate_id is not None
+            candidate_row = session.get(UnknownAirportCandidate, result.unknown_airport_candidate_id)
+            assert candidate_row.raw_name == "Anoka County-Blaine Airport"
+            assert session.query(Airport).count() == 2  # only the two pre-seeded known airports
+
+    def test_single_wrong_topology_candidate_no_longer_silently_attaches(self):
+        """S11 HIGH PRIORITY: the more serious defect the design review
+        found - a SINGLE, non-ambiguous topology match with an explicit,
+        unmatched name previously reached ATTACH_PROVISIONAL and silently
+        attached to the wrong airport, with no human review at all. Must
+        now route to UNKNOWN_AIRPORT_CANDIDATE instead."""
+        with Session(_engine()) as session:
+            unrelated = _seed_airport(session, name="Different Existing Airport")
+            unrelated_c = _candidate(unrelated, canonical_runway_pairs=frozenset({"18/36"}))
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("wrong-topology"), source_locator="p1",
+                raw_text="Example New Airport Runway 18-36 Reconstruction.",
+                airport_names=frozenset({"Example New Airport"}), runway_pairs=frozenset({"18/36"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("wrong-doc"), fragment, [unrelated_c])
+
+            assert result.outcome == DiscoveryIdentityOutcome.UNKNOWN_AIRPORT_CANDIDATE
+            assert result.attachment_outcome == AttachmentOutcome.ATTACH_PROVISIONAL
+            assert result.attached_airport_id is None  # MUST NOT silently attach to `unrelated`
+            assert result.unknown_airport_candidate_id is not None
+            assertion = session.get(SourceAssertion, result.source_assertion_id)
+            assert assertion.airport_id is None
+
+    def test_exact_known_name_with_unrelated_topology_collisions_unaffected(self):
+        """Non-regression (S6/S9 item D): an EXACT name match on candidate
+        X, with topology also matching unrelated Y, is deliberately left
+        unchanged by Option 3 - X's own positive evidence includes NAME,
+        so the override never engages, and cross-candidate ambiguity
+        resolution (a separate, un-touched layer) still downgrades both
+        to REVIEW_REQUIRED exactly as before."""
+        with Session(_engine()) as session:
+            alpha = _seed_airport(session, name="Alpha Field")
+            beta = _seed_airport(session, name="Beta Field")
+            alpha_c = _candidate(alpha, canonical_runway_pairs=frozenset({"18/36"}))
+            beta_c = _candidate(beta, canonical_runway_pairs=frozenset({"18/36"}))
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("exact-name-collision"), source_locator="p1",
+                raw_text="Alpha Field Runway 18-36 Reconstruction.",
+                airport_names=frozenset({"Alpha Field"}), runway_pairs=frozenset({"18/36"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("exact-doc"), fragment, [alpha_c, beta_c])
+
+            assert result.outcome == DiscoveryIdentityOutcome.AMBIGUOUS_KNOWN_IDENTITY
+            assert result.unknown_airport_candidate_id is None
+            assert session.query(UnknownAirportCandidate).count() == 0
+
+    def test_identifier_contradiction_veto_unaffected_by_uncorroborated_name(self):
+        """S9: explicit unknown name + an identifier that CONTRADICTS the
+        one supplied candidate + topology match - the identifier's
+        existing, unconditional veto (REJECT_CROSS_AIRPORT) must fire
+        exactly as before; Option 3's override never even gets a chance
+        to engage, since REJECT_CROSS_AIRPORT was never in its trigger
+        set. The fragment's own uncorroborated name still independently
+        makes it formable, so it still reaches UNKNOWN_AIRPORT_CANDIDATE -
+        via the pre-existing, unmodified REJECT_CROSS_AIRPORT path, not
+        Option 3's new one."""
+        with Session(_engine()) as session:
+            known = _seed_airport(session, faa_code="ABC", name="Alpha Field")
+            known_c = _candidate(known, identifiers=frozenset({"ABC"}), canonical_runway_pairs=frozenset({"18/36"}))
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("identifier-contradiction"), source_locator="p1",
+                raw_text="Example New Airport identifier XYZ runway 18-36.",
+                airport_names=frozenset({"Example New Airport"}),
+                airport_identifiers=frozenset({"XYZ"}), runway_pairs=frozenset({"18/36"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("id-contra-doc"), fragment, [known_c])
+
+            assert result.attachment_outcome == AttachmentOutcome.REJECT_CROSS_AIRPORT
+            assert result.outcome == DiscoveryIdentityOutcome.UNKNOWN_AIRPORT_CANDIDATE
+            assert result.attached_airport_id is None
+            assert "identity-precedence Option 3" not in result.reason  # pre-existing path, not the new override
+
+    def test_exact_identifier_known_match_with_unrelated_name_unaffected(self):
+        """S9: an exact identifier match must remain untouchable by
+        Option 3, even when the same fragment carries an unrelated,
+        non-matching name - identifiers are the one category the design
+        review's own verdict says needs no change (already correctly
+        outranks name/issuer/location, including auto-veto on mismatch)."""
+        with Session(_engine()) as session:
+            alpha = _seed_airport(session, faa_code="ABC", name="Alpha Field")
+            alpha_c = _candidate(alpha, identifiers=frozenset({"ABC"}))
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("identifier-known-match"), source_locator="p1",
+                raw_text="Gamma Field ABC identifier reference.",
+                airport_identifiers=frozenset({"ABC"}), airport_names=frozenset({"Gamma Field"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("id-known-doc"), fragment, [alpha_c])
+
+            assert result.outcome == DiscoveryIdentityOutcome.KNOWN_CANONICAL_ATTACHMENT
+            assert result.attached_airport_id == alpha.id
+            assert result.unknown_airport_candidate_id is None
+
+    def test_issuer_and_topology_confirmed_with_unrelated_name_no_longer_silently_attaches(self):
+        """S9 item I: the deeper risk found while empirically testing the
+        design review's own precedence matrix (row L) - issuer + topology
+        alone can reach ATTACH_CONFIRMED, silently ignoring an unrelated,
+        uncorroborated explicit name in the same evidence bag. Must now
+        route to UNKNOWN_AIRPORT_CANDIDATE instead."""
+        with Session(_engine()) as session:
+            alpha = _seed_airport(session, name="Alpha Field")
+            alpha_c = _candidate(alpha, canonical_runway_pairs=frozenset({"18/36"}), known_issuers=frozenset({"Metropolitan Airports Commission"}))
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("issuer-topology-unrelated-name"), source_locator="p1",
+                raw_text="Gamma Field runway 18-36 Metropolitan Airports Commission project.",
+                issuers=frozenset({"Metropolitan Airports Commission"}), runway_pairs=frozenset({"18/36"}),
+                airport_names=frozenset({"Gamma Field"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("issuer-topo-doc"), fragment, [alpha_c])
+
+            assert result.outcome == DiscoveryIdentityOutcome.UNKNOWN_AIRPORT_CANDIDATE
+            assert result.attachment_outcome == AttachmentOutcome.ATTACH_CONFIRMED
+            assert result.attached_airport_id is None
+            assert "identity-precedence Option 3" in result.reason
+
+    def test_location_only_with_topology_no_unintended_override(self):
+        """S6 item J / mission's own location edge case: a location match
+        plus topology reaching ATTACH_CONFIRMED, with NO competing name
+        evidence at all in the fragment - the override must never engage
+        merely because location (not name) was the second category, since
+        there is no uncorroborated name claim to protect against here."""
+        with Session(_engine()) as session:
+            alpha = _seed_airport(session, name="Alpha Field", city="Springfield")
+            alpha_c = _candidate(alpha, canonical_runway_pairs=frozenset({"18/36"}), city_location="Springfield")
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("location-only"), source_locator="p1",
+                raw_text="Springfield runway 18-36 improvement project.",
+                locations=frozenset({"Springfield"}), runway_pairs=frozenset({"18/36"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("location-doc"), fragment, [alpha_c])
+
+            assert result.outcome == DiscoveryIdentityOutcome.KNOWN_CANONICAL_ATTACHMENT
+            assert result.attached_airport_id == alpha.id
+            assert result.unknown_airport_candidate_id is None
+
+    def test_two_explicit_names_no_unknown_candidate_formed(self):
+        """S8 multiple-name firewall: with no known candidate accepting
+        the evidence at all (best_outcome already in the "no known match"
+        bucket, so Option 3's override never needs to engage), UAC3's own
+        pre-existing "exactly one name is formable" rule still fails
+        closed for two names - Option 3 never widens that rule."""
+        with Session(_engine()) as session:
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("two-names"), source_locator="p1",
+                raw_text="Example Regional Airport and Sample Municipal Airport runway 18-36.",
+                airport_names=frozenset({"Example Regional Airport", "Sample Municipal Airport"}),
+                runway_pairs=frozenset({"18/36"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("two-names-doc"), fragment, [])
+
+            assert result.outcome == DiscoveryIdentityOutcome.UNRESOLVED_IDENTITY
+            assert result.unknown_airport_candidate_id is None
+            assert session.query(UnknownAirportCandidate).count() == 0
+
+    def test_two_explicit_names_with_topology_match_still_attaches_known_unaffected(self):
+        """Companion case: when topology DOES genuinely match a supplied
+        candidate, that known-match path proceeds exactly as before,
+        completely independent of the fragment's own name multiplicity -
+        multi-name ambiguity is a "no known match" branch concern only,
+        never inspected on the known-match path either before or after
+        Option 3."""
+        with Session(_engine()) as session:
+            unrelated = _seed_airport(session, name="Different Existing Airport")
+            unrelated_c = _candidate(unrelated, canonical_runway_pairs=frozenset({"18/36"}))
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("two-names-topology"), source_locator="p1",
+                raw_text="Example Regional Airport and Sample Municipal Airport runway 18-36.",
+                airport_names=frozenset({"Example Regional Airport", "Sample Municipal Airport"}),
+                runway_pairs=frozenset({"18/36"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("two-names-topo-doc"), fragment, [unrelated_c])
+
+            assert result.outcome == DiscoveryIdentityOutcome.KNOWN_CANONICAL_ATTACHMENT
+            assert result.attached_airport_id == unrelated.id
+            assert result.unknown_airport_candidate_id is None
+
+    def test_no_downstream_side_effects_from_override(self):
+        """S12 EMAS relevance firewall / information firewall: the
+        override, when it fires, still only ever produces the same
+        UnknownAirportCandidate + candidate-linked SourceAssertion +
+        EvidenceBag snapshot shape as any other UNKNOWN_AIRPORT_CANDIDATE
+        outcome - no Airport, no Signal, no EB4/EB5, no intelligence
+        review, no promotion, no publish, no invented relevance field."""
+        with Session(_engine()) as session:
+            unrelated = _seed_airport(session, name="Different Existing Airport")
+            unrelated_c = _candidate(unrelated, canonical_runway_pairs=frozenset({"18/36"}))
+            fragment = CandidateFragment(
+                artifact_identity=_artifact("no-side-effects"), source_locator="p1",
+                raw_text="Example New Airport Runway 18-36 Reconstruction.",
+                airport_names=frozenset({"Example New Airport"}), runway_pairs=frozenset({"18/36"}),
+            )
+            result = resolve_or_persist_discovery_identity(session, _meta("no-side-effects-doc"), fragment, [unrelated_c])
+
+            assert result.outcome == DiscoveryIdentityOutcome.UNKNOWN_AIRPORT_CANDIDATE
+            assert session.query(Airport).count() == 1  # only the pre-seeded known airport
+            assert session.query(Signal).count() == 0
+            candidate_row = session.get(UnknownAirportCandidate, result.unknown_airport_candidate_id)
+            assert not hasattr(candidate_row, "emas_relevant")
+
+
+# ---------------------------------------------------------------------------
 # F/G. Repeated exact discovery / near-duplicate (no fuzzy merge)
 # ---------------------------------------------------------------------------
 

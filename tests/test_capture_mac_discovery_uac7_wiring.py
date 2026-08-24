@@ -214,6 +214,10 @@ def test_weak_identity_through_runner_stays_unresolved_no_candidate(tmp_path, mo
 
 
 def test_ambiguous_known_identity_through_runner_never_forms_candidate(tmp_path, monkeypatch):
+    """No explicit airport-name evidence at all - the pure "no name +
+    ambiguous topology" case (identity-precedence review row G / mission
+    S18 item F), which Option 3 leaves completely unaffected, since the
+    override only ever engages when a formable name claim exists."""
     database = _migrated_db(tmp_path, "ambiguous.db")
     # Two known airports independently share the identical runway pair -
     # a single positive category (runway_topology) qualifies both, which
@@ -227,7 +231,8 @@ def test_ambiguous_known_identity_through_runner_never_forms_candidate(tmp_path,
         artifact_identity="uac7-ambiguous-1", source_locator="loc-1",
         raw_text="Runway 4/22 EMAS project.",
         runway_pairs=frozenset({"4/22"}),
-        airport_names=frozenset({"Ambiguous Regional Airport"}),  # matches neither seeded name
+        # No airport_names at all - deliberately distinct from the
+        # uncorroborated-name test below.
     )
     _install_fake_extractor(monkeypatch, {"uac7-ambiguous-1": fragment})
 
@@ -252,6 +257,148 @@ def test_ambiguous_known_identity_through_runner_never_forms_candidate(tmp_path,
         assert assertion.unknown_airport_candidate_id is None
         assert assertion.identity_guard_decision == "REVIEW_REQUIRED"
     engine.dispose()
+
+
+def test_ambiguous_topology_with_uncorroborated_explicit_name_forms_unknown_candidate_through_runner(tmp_path, monkeypatch):
+    """UAC3 identity-precedence Option 3 (docs/architecture/rwi-uac3-
+    identity-precedence-review.md), through the real runner: the exact
+    real-world shape of the Anoka County-Blaine case - an explicit,
+    well-formed source-provided airport name that matches NEITHER
+    topology-ambiguous known candidate must route to
+    UNKNOWN_AIRPORT_CANDIDATE, not AMBIGUOUS_KNOWN_IDENTITY."""
+    database = _migrated_db(tmp_path, "ambiguous_named.db")
+    _seed_airport(database, name="Ambiguous North Field", code="ANF", runway_pairs={"4/22": ("4", "22")})
+    _seed_airport(database, name="Ambiguous South Field", code="ASF", runway_pairs={"4/22": ("4", "22")})
+
+    fragment = CandidateFragment(
+        artifact_identity="uac7-ambiguous-named-1", source_locator="loc-1",
+        raw_text="Ambiguous Regional Airport Runway 4/22 EMAS project.",
+        runway_pairs=frozenset({"4/22"}),
+        airport_names=frozenset({"Ambiguous Regional Airport"}),  # matches neither seeded candidate
+    )
+    _install_fake_extractor(monkeypatch, {"uac7-ambiguous-named-1": fragment})
+
+    dry = run_capture(CaptureConfig(database=database, fixture_documents=(_fixture_for("uac7-ambiguous-named-1"),)))
+    assert dry["planned_governed_evidence"][0]["would_form_unknown_airport_candidate"] is True
+    assert dry["planned_governed_evidence"][0]["attached_airport_id"] is None
+
+    applied = run_capture(CaptureConfig(
+        database=database, fixture_documents=(_fixture_for("uac7-ambiguous-named-1"),),
+        apply=True, allow_database_write=True, expected_fingerprint=dry["plan_fingerprint"], skip_backup=True,
+    ))
+    result = applied["apply_result"][0]
+    assert result["routing_outcome"] == "UNKNOWN_AIRPORT_CANDIDATE"
+    assert result["attachment_outcome"] == "REVIEW_REQUIRED"
+    assert result["unknown_airport_candidate_id"] is not None
+    assert result["attached_airport_id"] is None
+
+    counts = _counts(database)
+    assert counts["unknown_airport_candidates"] == 1
+    assert counts["airports"] == 2  # only the two pre-seeded known candidates; no new canonical Airport
+
+    engine = build_engine(database)
+    with Session(engine) as session:
+        assertion = session.scalar(select(SourceAssertion))
+        assert assertion.airport_id is None
+        assert assertion.unknown_airport_candidate_id is not None
+    engine.dispose()
+
+
+def test_single_wrong_topology_candidate_through_runner_no_silent_attach(tmp_path, monkeypatch):
+    """Identity-precedence Option 3, HIGH PRIORITY case, through the real
+    runner: a single, non-ambiguous topology match with an explicit,
+    unmatched name must no longer silently attach to the wrong airport -
+    this is the more serious defect the design review found (worse than
+    the ambiguous case, since it previously never reached human review at
+    all)."""
+    database = _migrated_db(tmp_path, "wrong_topology.db")
+    _seed_airport(database, name="Different Existing Airport", code="DEA", runway_pairs={"18/36": ("18", "36")})
+
+    fragment = CandidateFragment(
+        artifact_identity="uac7-wrong-topology-1", source_locator="loc-1",
+        raw_text="Example New Airport Runway 18-36 Reconstruction.",
+        airport_names=frozenset({"Example New Airport"}), runway_pairs=frozenset({"18/36"}),
+    )
+    _install_fake_extractor(monkeypatch, {"uac7-wrong-topology-1": fragment})
+
+    dry = run_capture(CaptureConfig(database=database, fixture_documents=(_fixture_for("uac7-wrong-topology-1"),)))
+    assert dry["planned_governed_evidence"][0]["would_form_unknown_airport_candidate"] is True
+    assert dry["planned_governed_evidence"][0]["attached_airport_id"] is None
+
+    applied = run_capture(CaptureConfig(
+        database=database, fixture_documents=(_fixture_for("uac7-wrong-topology-1"),),
+        apply=True, allow_database_write=True, expected_fingerprint=dry["plan_fingerprint"], skip_backup=True,
+    ))
+    result = applied["apply_result"][0]
+    assert result["routing_outcome"] == "UNKNOWN_AIRPORT_CANDIDATE"
+    assert result["attachment_outcome"] == "ATTACH_PROVISIONAL"
+    assert result["attached_airport_id"] is None
+    assert result["unknown_airport_candidate_id"] is not None
+
+    counts = _counts(database)
+    assert counts["unknown_airport_candidates"] == 1
+    assert counts["airports"] == 1  # only the pre-seeded "Different Existing Airport"; never attached to it
+
+    engine = build_engine(database)
+    with Session(engine) as session:
+        assertion = session.scalar(select(SourceAssertion))
+        assert assertion.airport_id is None
+        assert assertion.unknown_airport_candidate_id is not None
+    engine.dispose()
+
+
+def test_fingerprint_changes_when_option3_flips_routing(tmp_path, monkeypatch):
+    """S15 HIGH PRIORITY: the preview fingerprint must change when
+    Option 3 flips a fragment's routing (proving the fingerprint's own
+    would_form_unknown_airport_candidate/attached_airport_id material
+    genuinely reflects the new rule, not a stale pre-Option-3 value) -
+    and, separately, that applying the STALE fingerprint from before a
+    canonical-state change is still correctly refused, exactly as UAC7's
+    own TOCTOU protection already requires."""
+    database = _migrated_db(tmp_path, "fingerprint_option3.db")
+    fragment = CandidateFragment(
+        artifact_identity="uac7-fp-option3-1", source_locator="loc-1",
+        raw_text="Example New Airport Runway 18-36 Reconstruction.",
+        airport_names=frozenset({"Example New Airport"}), runway_pairs=frozenset({"18/36"}),
+    )
+    fixture = _fixture_for("uac7-fp-option3-1")
+    _install_fake_extractor(monkeypatch, {"uac7-fp-option3-1": fragment})
+
+    # State A: no known candidate exists at all - zero supplied candidates
+    # means the pre-existing INSUFFICIENT_IDENTITY path already forms a
+    # candidate here (Option 3's own override never needs to engage for
+    # this state). The interesting transition is state B below.
+    dry_before = run_capture(CaptureConfig(database=database, fixture_documents=(fixture,)))
+    assert dry_before["planned_governed_evidence"][0]["would_form_unknown_airport_candidate"] is True
+    fingerprint_before = dry_before["plan_fingerprint"]
+
+    # State B: a known candidate now exists whose NAME exactly matches the
+    # fragment's own explicit name - Option 3's override must NOT apply
+    # here (name corroborated), so routing flips to KNOWN_CANONICAL_ATTACHMENT.
+    _seed_airport(database, name="Example New Airport", code="ENA", runway_pairs={"18/36": ("18", "36")})
+    dry_after = run_capture(CaptureConfig(database=database, fixture_documents=(fixture,)))
+    assert dry_after["planned_governed_evidence"][0]["would_form_unknown_airport_candidate"] is False
+    assert dry_after["plan_fingerprint"] != fingerprint_before
+
+    # The stale (state A) fingerprint must be refused against the new
+    # (state B) canonical data - zero writes.
+    before_counts = _counts(database)
+    stale_applied = run_capture(CaptureConfig(
+        database=database, fixture_documents=(fixture,),
+        apply=True, allow_database_write=True, expected_fingerprint=fingerprint_before, skip_backup=True,
+    ))
+    assert stale_applied["applied"] is False
+    assert any("FINGERPRINT_MISMATCH" in b for b in stale_applied["blockers"])
+    assert _counts(database) == before_counts
+
+    # Applying the fresh (state B) fingerprint succeeds and correctly
+    # attaches to the now-matching known candidate.
+    applied = run_capture(CaptureConfig(
+        database=database, fixture_documents=(fixture,),
+        apply=True, allow_database_write=True, expected_fingerprint=dry_after["plan_fingerprint"], skip_backup=True,
+    ))
+    assert applied["applied"] is True
+    assert applied["apply_result"][0]["routing_outcome"] == "KNOWN_CANONICAL_ATTACHMENT"
 
 
 # --- G. all known candidates conflict, coherent new identity present ------
