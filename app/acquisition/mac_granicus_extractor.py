@@ -50,7 +50,11 @@ PARSER_VERSION = "mac-granicus-emas-memo/0.1"
 # its own copy (not imported) so this module has zero dependency on the
 # acquisition-boundary module, matching the existing repository convention
 # of extraction modules never importing their own provider module (e.g.
-# faa_emas_parser.py does not import faa.py).
+# faa_emas_parser.py does not import faa.py). Kept as the full, unchanged
+# historical vocabulary (informational/back-compat) - see
+# app.acquisition.mac_granicus's own identical comment for why the actual
+# matching logic below (also an independent copy, same reasoning) splits
+# it into two differently-matched vocabularies.
 RELEVANT_KEYWORDS = (
     "emas",
     "engineered material arresting",
@@ -62,6 +66,21 @@ RELEVANT_KEYWORDS = (
     "runway resurfacing",
     "runway repair",
 )
+
+_STANDALONE_RELEVANCE_PHRASES = (
+    "emas",
+    "engineered material arresting",
+    "arresting system",
+    "runway safety area",
+)
+
+# 5D fix (Controlled Live Pilot 5C/5D) - see app.acquisition.mac_granicus's
+# identical constant for the full rationale (independent copy, same
+# reasoning, matching this module's own zero-cross-import convention).
+_RUNWAY_WORK_CONCEPTS = frozenset({"reconstruction", "rehabilitation", "replacement", "resurfacing", "repair"})
+_DESIGNATION_TOKEN = re.compile(r"^\d{1,2}[lrc]?$")
+_MAX_RUNWAY_WORK_GAP_TOKENS = 8
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
 class MACGranicusExtractionErrorCode(str, Enum):
@@ -76,9 +95,39 @@ class MACGranicusExtractionError(ValueError):
         self.code = code.value
 
 
+def _tokenize(text: str) -> list[str]:
+    return _TOKEN_RE.findall(text.lower())
+
+
+def _has_proximate_runway_work_mention(tokens: list[str]) -> bool:
+    """See app.acquisition.mac_granicus._has_proximate_runway_work_mention()
+    for the full rationale (independent copy, identical logic, same
+    zero-cross-import convention this module already follows for
+    RELEVANT_KEYWORDS)."""
+    for index, token in enumerate(tokens):
+        if token != "runway":
+            continue
+        if index + 1 >= len(tokens):
+            continue
+        next_token = tokens[index + 1]
+        if next_token in _RUNWAY_WORK_CONCEPTS:
+            return True
+        if not _DESIGNATION_TOKEN.match(next_token):
+            continue
+        window = tokens[index + 1 : index + 2 + _MAX_RUNWAY_WORK_GAP_TOKENS]
+        if any(candidate in _RUNWAY_WORK_CONCEPTS for candidate in window):
+            return True
+    return False
+
+
 def is_relevant_text(text: str) -> bool:
+    """5D: also recognizes a "runway" mention structurally near (not just
+    contiguous with) a runway-work concept - see
+    _has_proximate_runway_work_mention()."""
     lowered = text.lower()
-    return any(keyword in lowered for keyword in RELEVANT_KEYWORDS)
+    if any(phrase in lowered for phrase in _STANDALONE_RELEVANCE_PHRASES):
+        return True
+    return _has_proximate_runway_work_mention(_tokenize(text))
 
 
 _RUNWAY_PAIR = re.compile(r"\bRunway\s+(\d{1,2}[LRC]?)\s*-\s*(\d{1,2}[LRC]?)\b", re.IGNORECASE)

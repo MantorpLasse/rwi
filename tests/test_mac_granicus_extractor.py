@@ -15,6 +15,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.acquisition.mac_granicus_extractor import (
     MACGranicusExtractionError,
     _extract_text,
@@ -97,6 +99,39 @@ def test_non_relevant_text_produces_no_candidate_fragment():
 def test_empty_text_produces_no_candidate_fragment():
     assert _fragment_from_text("", artifact_identity="x", source_locator="y") is None
     assert _fragment_from_text("   \n  ", artifact_identity="x", source_locator="y") is None
+
+
+# --- 5D (Controlled Live Pilot 5C/5D): is_relevant_text independently
+# verified against the same real-world corpus as
+# tests/test_mac_granicus_provider.py's is_relevant_title matrix -
+# app.acquisition.mac_granicus_extractor.RELEVANT_KEYWORDS and its matching
+# logic are an independent, zero-cross-import copy of
+# app.acquisition.mac_granicus's own (deliberate repository convention -
+# see both modules' own comments), so both copies must be independently
+# proven, not assumed identical merely because the source was copy-pasted.
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Engineered Material Arresting Systems (EMAS) Procurement Advance Deposit", True),
+        ("Runway Safety Area Improvement - Design Phase", True),
+        ("Runway Reconstruction", True),
+        ("Runway 14-32 Reconstruction", True),
+        ("Runway 14/32 Reconstruction", True),
+        ("2026 Anoka County-Blaine Airport Runway 18-36 Pavement Reconstruction and Electrical Vault Improvements", True),  # 5C real title
+        ("2026 Anoka County-Blaine Airport Runway 9-27 Edge Lighting and PAPI Replacement", True),  # 5C real title
+        ("RUNWAY 14-32 RECONSTRUCTION", True),  # case-insensitivity
+        ("2026 Añoka County — Runway 14-32 Reconstruction — Café Update", True),  # unicode surrounding text
+        ("2026 Crystal Airport Eastside Service Road and East Taxilanes Pavement Reconstruction", False),  # 5C real title - no "runway"
+        ("Airport Terminal Building Reconstruction", False),
+        ("Runway 14-32 Closure Notice", False),  # runway present, no work concept
+        ("Parking-Ramp Reconstruction With an Unrelated Runway Reference Elsewhere", False),  # the core adversarial trap
+        ("2026 Airside Roadway Pavement Restoration, Taxiway R Pavement Reconstruction, and Bituminous Shoulder Reconstruction", False),  # 5C real title - taxiway, not runway
+    ],
+)
+def test_is_relevant_text_recognizes_runway_designation_between_runway_and_work_concept(text, expected):
+    assert is_relevant_text(text) is expected
 
 
 # --- 5. raw text preserved ---

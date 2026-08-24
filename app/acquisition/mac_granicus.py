@@ -47,7 +47,10 @@ BASE_URL = "https://metroairports.granicus.com"
 # hardcoded to "find Runway Safe"). Reused identically by the extractor's
 # own document-level relevance check
 # (app.acquisition.mac_granicus_extractor.RELEVANT_KEYWORDS) so an agenda
-# item judged relevant here is judged the same way there.
+# item judged relevant here is judged the same way there. Kept as the full,
+# unchanged historical vocabulary (informational/back-compat) - the actual
+# matching logic below splits it into the two vocabularies immediately
+# following, which are matched differently (see is_relevant_title()).
 RELEVANT_KEYWORDS = (
     "emas",
     "engineered material arresting",
@@ -60,15 +63,101 @@ RELEVANT_KEYWORDS = (
     "runway repair",
 )
 
+# The four phrases above that are precise enough to match as a standalone
+# substring anywhere in the text, with no further structural check needed -
+# unchanged behavior from before Controlled Live Pilot 5D.
+_STANDALONE_RELEVANCE_PHRASES = (
+    "emas",
+    "engineered material arresting",
+    "arresting system",
+    "runway safety area",
+)
+
+# 5D fix (Controlled Live Pilot 5C/5D): the five single-word work concepts
+# from RELEVANT_KEYWORDS's remaining "runway <concept>" phrases. Matched
+# structurally via _has_proximate_runway_work_mention() below, rather than
+# as an exact contiguous substring - real MAC agenda titles observed live
+# during Pilot 5C consistently place a runway designation (and sometimes a
+# short equipment/modifier phrase) between "runway" and the work concept,
+# e.g. "Runway 14-32 Reconstruction", "Runway 9-27 Edge Lighting and PAPI
+# Replacement" - neither of which contains "runway reconstruction" or
+# "runway replacement" as a contiguous substring, so the old exact-phrase
+# check missed 100% of 18 real, clearly runway-relevant titles found in a
+# 20-meeting/436-item live sample.
+_RUNWAY_WORK_CONCEPTS = frozenset({"reconstruction", "rehabilitation", "replacement", "resurfacing", "repair"})
+
+# A runway DESIGNATION token shape - one or two digits, optionally with a
+# single L/R/C side letter (e.g. "14", "09", "9", "32", "14l", "9r").
+# Structural only - never a specific hardcoded runway number - this is what
+# lets "Runway 14-32 Reconstruction" and "Runway 09-27 Replacement" match
+# the same rule without hardcoding either designation.
+_DESIGNATION_TOKEN = re.compile(r"^\d{1,2}[lrc]?$")
+
+# How many tokens of "designation + short modifier phrase" (e.g.
+# "9-27 Edge Lighting and PAPI") are allowed between "runway" and a
+# qualifying work concept before the two are considered structurally
+# unrelated, rather than the same runway-work mention. Justified directly
+# by Controlled Live Pilot 5C's own real-world MAC title corpus: the
+# widest real gap observed there ("Runway 9-27 Edge Lighting and PAPI
+# Replacement") is 6 intervening tokens; 8 keeps a small, explicit margin
+# without becoming an unbounded "runway...anywhere...work-word...anywhere"
+# match (see tests/test_mac_granicus_provider.py's boundary test, and the
+# adversarial false-positive tests this exact bound is checked against).
+_MAX_RUNWAY_WORK_GAP_TOKENS = 8
+
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _tokenize(text: str) -> list[str]:
+    return _TOKEN_RE.findall(text.lower())
+
+
+def _has_proximate_runway_work_mention(tokens: list[str]) -> bool:
+    """True if some occurrence of the token "runway" is immediately
+    followed by EITHER a runway-work concept word directly (the original,
+    unchanged "runway reconstruction"-style exact-adjacency case, at zero
+    gap) OR a designation-shaped token (e.g. "14-32", tokenized as "14",
+    "32"), with a qualifying work concept then found within
+    _MAX_RUNWAY_WORK_GAP_TOKENS tokens after that.
+
+    Requiring the token IMMEDIATELY after "runway" to be either the work
+    concept itself or a designation shape - rather than simply searching
+    for both words within N tokens of each other anywhere in the text - is
+    what keeps this from matching a false positive like "parking-ramp
+    reconstruction with an unrelated runway reference elsewhere" (there,
+    "runway" is followed by "reference": neither a designation nor a work
+    concept). A bounded distance check ALONE would incorrectly match that
+    case; this additional adjacency requirement is why it does not."""
+    for index, token in enumerate(tokens):
+        if token != "runway":
+            continue
+        if index + 1 >= len(tokens):
+            continue
+        next_token = tokens[index + 1]
+        if next_token in _RUNWAY_WORK_CONCEPTS:
+            return True
+        if not _DESIGNATION_TOKEN.match(next_token):
+            continue
+        window = tokens[index + 1 : index + 2 + _MAX_RUNWAY_WORK_GAP_TOKENS]
+        if any(candidate in _RUNWAY_WORK_CONCEPTS for candidate in window):
+            return True
+    return False
+
 
 def is_relevant_title(title: str) -> bool:
     """Coarse, topical relevance judgment on an agenda item's own title -
     the extraction-layer 'is this even worth looking at' decision
     (docs/architecture/ai-discovery-candidate-envelope-lifecycle.md S7),
     kept separate from the guard's airport-identity decision. Deliberately
-    keyword-based and inspectable, not AI-scored."""
+    keyword/structure-based and inspectable, not AI-scored.
+
+    5D: also recognizes a "runway" mention structurally near (not just
+    contiguous with) a runway-work concept - see
+    _has_proximate_runway_work_mention()."""
     lowered = title.lower()
-    return any(keyword in lowered for keyword in RELEVANT_KEYWORDS)
+    if any(phrase in lowered for phrase in _STANDALONE_RELEVANCE_PHRASES):
+        return True
+    return _has_proximate_runway_work_mention(_tokenize(title))
 
 
 class MACGranicusAcquisitionError(ValueError):

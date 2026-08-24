@@ -144,6 +144,85 @@ def test_is_relevant_title_uses_topical_not_vendor_keywords(title, expected):
     assert is_relevant_title(title) is expected
 
 
+# --- 5D (Controlled Live Pilot 5C/5D): runway-designation-tolerant relevance ---
+#
+# Real MAC agenda titles place a runway designation (and sometimes a short
+# equipment/modifier phrase) between "runway" and the work concept, e.g.
+# "Runway 14-32 Reconstruction" - the exact-contiguous-phrase filter these
+# titles were checked against in Controlled Live Pilot 5C matched ZERO of
+# 436 real agenda items across 20 real MAC meetings, including 18 titles
+# unambiguously about runway reconstruction/rehabilitation/replacement work.
+# Real titles marked "(5C real title)" below were observed live during that
+# reconnaissance (docs/architecture/rwi-mac-relevance-filter-5d-report.md).
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        # A/B: existing strong standalone phrases still match unchanged.
+        ("Engineered Material Arresting Systems (EMAS) Procurement Advance Deposit", True),
+        ("Runway Safety Area Improvement - Design Phase", True),
+        # C: existing bare "runway <concept>" phrase still matches.
+        ("Runway Reconstruction", True),
+        # D-G: the four required real-world-shaped examples.
+        ("Runway 14-32 Reconstruction", True),
+        ("Runway 14/32 Reconstruction", True),
+        ("Runway 09-27 Rehabilitation", True),  # leading-zero two-digit designation
+        ("2026 Anoka County-Blaine Airport Runway 18-36 Pavement Reconstruction and Electrical Vault Improvements", True),  # 5C real title
+        ("2026 Anoka County-Blaine Airport Runway 9-27 Edge Lighting and PAPI Replacement", True),  # 5C real title, widest real gap (6 tokens)
+        ("STP Runway 14-32 Reconstruction", True),  # 5C real title
+        ("St. Paul Downtown Airport: Runway 14/32 Reconstruction Project", True),  # 5C real title
+        # H: case-insensitivity.
+        ("RUNWAY 14-32 RECONSTRUCTION", True),
+        ("runway 14-32 reconstruction", True),
+        # I: reasonable punctuation differences.
+        ("Runway 14-32, Reconstruction Project", True),
+        ("Runway: 14-32 Reconstruction (Design Phase)", True),
+        # J: unicode/non-ASCII surrounding text does not break matching or crash.
+        ("2026 Añoka County — Runway 14-32 Reconstruction — Café Update", True),
+        # K/L/M: realistic false positives that must stay irrelevant.
+        ("2024 Restroom Upgrade Program Phase 2", False),  # generic terminal/facility work
+        ("2026 34th Avenue Surface Reconstruction", False),  # 5C real title - road, no "runway" at all
+        ("2026 Crystal Airport Eastside Service Road and East Taxilanes Pavement Reconstruction", False),  # 5C real title - road/taxilane, no "runway"
+        ("Airport Terminal Building Reconstruction", False),  # generic airport construction, no "runway"
+        # N: runway mention without relevant work.
+        ("Runway 14-32 Closure Notice", False),
+        ("October - January Runway Use System (RUS) Reports", False),  # 5C real title - "runway" present, no work concept
+        # O: work term without runway context.
+        ("Equipment Replacement Program", False),
+        # The core adversarial trap this design exists to defeat: "runway"
+        # and a work concept both present and even fairly close together,
+        # but structurally unrelated (runway is not immediately followed by
+        # the work concept or a designation).
+        ("Parking-Ramp Reconstruction With an Unrelated Runway Reference Elsewhere", False),
+        ("Equipment replacement unrelated to runway work", False),
+        # Taxiway is deliberately NOT part of the relevance vocabulary
+        # (see the 5D report's own explicit finding) - a taxiway-only
+        # mention must not accidentally become relevant as a side effect
+        # of this fix.
+        ("2026 Airside Roadway Pavement Restoration, Taxiway R Pavement Reconstruction, and Bituminous Shoulder Reconstruction", False),  # 5C real title
+    ],
+)
+def test_is_relevant_title_recognizes_runway_designation_between_runway_and_work_concept(title, expected):
+    assert is_relevant_title(title) is expected
+
+
+def test_is_relevant_title_gap_boundary_is_enforced():
+    """Explicit boundary test (mission task P) for
+    _MAX_RUNWAY_WORK_GAP_TOKENS - proves the bound is real and enforced,
+    not accidentally unbounded. Constructs a title with exactly the
+    maximum allowed number of filler tokens between the runway designation
+    and the work concept (must match) and one more than that (must not)."""
+    from app.acquisition.mac_granicus import _MAX_RUNWAY_WORK_GAP_TOKENS
+
+    filler = " ".join(f"word{i}" for i in range(_MAX_RUNWAY_WORK_GAP_TOKENS - 1))  # -1: designation token itself counts
+    at_boundary = f"Runway 14 {filler} Reconstruction"  # exactly 8 tokens between "runway" and "reconstruction"
+    beyond_boundary = f"Runway 14 {filler} wordextra Reconstruction"  # exactly 9 tokens - one past the limit
+
+    assert is_relevant_title(at_boundary) is True
+    assert is_relevant_title(beyond_boundary) is False
+
+
 # --- 14. search-query firewall ---
 
 
