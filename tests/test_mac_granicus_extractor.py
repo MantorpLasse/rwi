@@ -19,6 +19,7 @@ import pytest
 
 from app.acquisition.mac_granicus_extractor import (
     MACGranicusExtractionError,
+    _extract_airport_names_from_title,
     _extract_text,
     _fragment_from_text,
     extract_candidate_fragment,
@@ -27,6 +28,17 @@ from app.acquisition.mac_granicus_extractor import (
 from app.services.discovery_candidate_fragment import DiscoveryContext
 
 FIXTURE_PDF = (Path(__file__).parent / "fixtures" / "mac_granicus_emas_procurement_memo_sample.pdf").read_bytes()
+
+# 5F (RWI Controlled Live Pilot 5F): the real MAC PD&E memo behind
+# Controlled Live Pilot 5E's own governed preview (clip_id=2559,
+# meta_id=127029, "PD&E 07/07/2026, Business Item 3.1") - fetched once,
+# read-only, no --apply, no database write, during the 5F investigation.
+ANOKA_FIXTURE_PDF = (Path(__file__).parent / "fixtures" / "mac_granicus_anoka_runway_18_36_bid_memo_sample.pdf").read_bytes()
+ANOKA_REAL_AGENDA_TITLE = (
+    "Bids Received with Capital Improvement Program Adjustment - MAC Contracts - "
+    "2026 Anoka County-Blaine Airport Runway 18-36 Pavement Reconstruction and "
+    "Electrical Vault Improvements - Ashley Vlasak, Senior Project Manager - Airport Development"
+)
 
 REAL_SHAPED_TEXT = """PD&E 09/03/2024
 Consent Item 2.3.2.
@@ -274,6 +286,153 @@ def test_real_fixture_pdf_extracts_the_genuine_msp_evidence():
     assert fragment.contract_identifiers == frozenset({"Consent Item 2.3.2"})
     assert Decimal("1590000.00") in {m.numeric_value for m in fragment.money_values}
     assert Decimal("19000000.00") in {m.numeric_value for m in fragment.money_values}
+
+
+# --- 5F: preserve source-provided airport-name evidence (title-only) ---
+#
+# Controlled Live Pilot 5E found a real MAC document whose agenda title
+# explicitly names "Anoka County-Blaine Airport" but whose extracted
+# CandidateFragment carried no airport_names claim at all, forcing the
+# guard into REVIEW_REQUIRED across five topology-matched candidates with
+# no way to break the tie. 5F traced this to CandidateFragment.airport_names
+# never being populated by this extractor from ANY source (title or PDF
+# body) - not a bug in any existing test, a genuine capability gap.
+
+
+def test_real_anoka_fixture_pdf_preserves_source_provided_airport_name():
+    """The exact 5E regression, through the REAL production path (real
+    PDF bytes -> pdfplumber -> _fragment_from_text), not a private
+    regex/helper called in isolation."""
+    result = extract_candidate_fragment(
+        ANOKA_FIXTURE_PDF, "application/pdf",
+        artifact_identity="mac.granicus.document.4.2559.127029", source_locator="item-3.1",
+        document_title=ANOKA_REAL_AGENDA_TITLE,
+        url="https://metroairports.granicus.com/MetaViewer.php?view_id=4&clip_id=2559&meta_id=127029",
+    )
+    assert result is not None
+    fragment, _vendors = result
+    assert fragment.airport_names == frozenset({"Anoka County-Blaine Airport"})
+    # Everything else the 5E preview already observed remains unchanged.
+    assert fragment.runway_ends == frozenset({"18", "36"})
+    assert fragment.runway_pairs == frozenset({"18/36"})
+    assert fragment.issuers == frozenset({"Metropolitan Airports Commission"})
+    # Deliberately NOT extended to identifiers/locations in this mission -
+    # "(ANE)" only appears in the PDF body, which is explicitly out of
+    # scope (see the multi-airport-body-contamination tests below).
+    assert fragment.airport_identifiers == frozenset()
+    assert fragment.locations == frozenset()
+
+
+def test_real_anoka_fixture_without_title_still_has_no_airport_name():
+    """No document_title supplied (matching the pre-5F MSP fixture test's
+    own convention, and proving the fix is title-driven, not a body-text
+    side effect) - airport_names stays empty, exactly like before 5F."""
+    result = extract_candidate_fragment(
+        ANOKA_FIXTURE_PDF, "application/pdf",
+        artifact_identity="mac.granicus.document.4.2559.127029", source_locator="item-3.1",
+    )
+    assert result is not None
+    fragment, _vendors = result
+    assert fragment.airport_names == frozenset()
+
+
+def test_real_anoka_fixture_body_independently_mentions_other_airports_but_title_only_scoping_ignores_them():
+    """Ground truth, independently confirmed during 5F: the real PDF body
+    ALSO mentions "Minneapolis-St. Paul International Airport" (background
+    context) and "Flying Cloud Airport" (an unrelated funding
+    cross-reference) - neither is this document's own subject. Proves the
+    title-only design decision actually holds in practice against the
+    real document that motivated it, not just in the abstract."""
+    text = _extract_text(ANOKA_FIXTURE_PDF, "application/pdf")
+    assert "Minneapolis-St. Paul International Airport" in text
+    assert "Flying Cloud Airport" in text
+
+    result = extract_candidate_fragment(
+        ANOKA_FIXTURE_PDF, "application/pdf",
+        artifact_identity="mac.granicus.document.4.2559.127029", source_locator="item-3.1",
+        document_title=ANOKA_REAL_AGENDA_TITLE,
+    )
+    fragment, _vendors = result
+    # Only the title's own subject - the body's other two mentions never
+    # contaminate the evidence.
+    assert fragment.airport_names == frozenset({"Anoka County-Blaine Airport"})
+    assert "Minneapolis-St. Paul International Airport" not in fragment.airport_names
+    assert "Flying Cloud Airport" not in fragment.airport_names
+
+
+# --- 5F generalization: structural, not Anoka-specific ---
+
+
+@pytest.mark.parametrize(
+    "title,expected_names",
+    [
+        ("2026 Example Regional Airport Runway 04L-22R Reconstruction", frozenset({"Example Regional Airport"})),
+        ("Example Municipal Airport Runway 9-27 Pavement Rehabilitation", frozenset({"Example Municipal Airport"})),
+        ("St. Paul Downtown Airport: Runway 14/32 Reconstruction Project", frozenset({"St. Paul Downtown Airport"})),
+        ("STP Runway 14-32 Reconstruction", frozenset()),  # no "<Name> Airport" pattern present at all
+        # real-world multi-word names (5F review attack matrix, S5)
+        ("Los Angeles International Airport Runway 18-36 Reconstruction", frozenset({"Los Angeles International Airport"})),
+        ("John F. Kennedy International Airport Runway 18-36 Reconstruction", frozenset({"John F. Kennedy International Airport"})),
+        ("Salt Lake City International Airport Runway 18-36 Reconstruction", frozenset({"Salt Lake City International Airport"})),
+        # the exact real candidate airport from the 5E/5F scenario itself -
+        # found truncated to "Hillary Clinton National Airport" during the
+        # review (the lowercase connector "and" broke the capitalized-token
+        # chain and the regex silently restarted mid-name); fixed by
+        # allowing "and" as an interior connector token.
+        ("Bill and Hillary Clinton National Airport Runway 18-36 Reconstruction", frozenset({"Bill and Hillary Clinton National Airport"})),
+        # false positives (5F mission's own adversarial examples)
+        ("Airport Road Reconstruction", frozenset()),
+        ("Airport Drive Reconstruction", frozenset()),
+        ("Airport Boulevard Reconstruction", frozenset()),
+        ("Airport Commission Runway 18-36 Reconstruction", frozenset()),
+        ("Airport Authority Runway 18-36 Reconstruction", frozenset()),
+        ("Airport Development Runway 18-36 Reconstruction", frozenset()),
+        ("Airport Improvement Program Runway 18-36 Reconstruction", frozenset()),
+        ("Runway 18-36 Reconstruction near Example Airport Road", frozenset()),
+        ("Metropolitan Airports Commission Runway 18-36 Reconstruction", frozenset()),
+        # the "and" tolerance's own adversarial traps: "and" adjacent to
+        # "Airport" must never itself be swallowed into a fabricated name.
+        ("Roads and Airport Improvements", frozenset()),
+        ("Terminal and Airport Road Improvements", frozenset()),
+    ],
+)
+def test_airport_name_extraction_is_structural_not_anoka_specific(title, expected_names):
+    fragment, _vendors = _fragment_from_text(
+        f"Runway 18-36 Reconstruction. {title}",  # ensure relevance regardless of which title case is under test
+        artifact_identity="x", source_locator="y", document_title=title,
+    )
+    assert fragment.airport_names == expected_names
+
+
+def test_two_distinct_airport_names_in_one_title_are_both_preserved_not_chosen():
+    """5F mission S7: a title genuinely naming two different airports must
+    preserve BOTH claims - never silently pick one, never merge them into
+    a single bogus combined name (the second defect found and fixed during
+    the 5F review)."""
+    title = "Example Regional Airport and Sample Municipal Airport Runway 18-36 Reconstruction"
+    fragment, _vendors = _fragment_from_text(
+        f"Runway 18-36 Reconstruction. {title}",
+        artifact_identity="x", source_locator="y", document_title=title,
+    )
+    assert fragment.airport_names == frozenset({"Example Regional Airport", "Sample Municipal Airport"})
+
+
+def test_two_distinct_airport_names_make_unknown_airport_candidate_unformable():
+    """Confirms UAC3's own, pre-existing, unmodified formability rule
+    (_extract_unknown_airport_candidate_seed()) remains authoritative over
+    this extractor's output: exactly one name is formable, two is not -
+    "never blend two identities into one candidate row." This extractor
+    never re-implements or second-guesses that rule."""
+    from app.services.unknown_airport_discovery_integration import _extract_unknown_airport_candidate_seed
+
+    title = "Example Regional Airport and Sample Municipal Airport Runway 18-36 Reconstruction"
+    fragment, _vendors = _fragment_from_text(
+        f"Runway 18-36 Reconstruction. {title}",
+        artifact_identity="x", source_locator="y", document_title=title,
+    )
+    assert len(fragment.airport_names) == 2
+    assert _extract_airport_names_from_title(title) == fragment.airport_names
+    assert _extract_unknown_airport_candidate_seed(fragment) is None  # 2 names = not formable, by UAC3's own rule
 
 
 def test_real_fixture_pdf_text_extraction_is_deterministic():

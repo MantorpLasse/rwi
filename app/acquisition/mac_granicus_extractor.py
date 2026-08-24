@@ -132,6 +132,70 @@ def is_relevant_text(text: str) -> bool:
 
 _RUNWAY_PAIR = re.compile(r"\bRunway\s+(\d{1,2}[LRC]?)\s*-\s*(\d{1,2}[LRC]?)\b", re.IGNORECASE)
 _RUNWAY_END = re.compile(r"\bR(?:unway|WY|/W)\.?\s+(\d{1,2}[LRC]?)\b(?!\s*-\s*\d)", re.IGNORECASE)
+
+# 5F (RWI Controlled Live Pilot 5F): a generic, structural "<capitalized
+# name phrase> Airport" pattern, matched ONLY against `document_title` -
+# never against the PDF body text (see the module-level note above
+# extract_candidate_fragment() for exactly why the body is deliberately
+# excluded: a single real MAC memo, independently inspected during 5F,
+# was found to mention THREE distinct airports for three different,
+# non-identity reasons - the document's own subject ("The Anoka
+# County-Blaine Airport (ANE) is part of..."), background/purpose context
+# ("...to reduce congestion at the Minneapolis-St. Paul International
+# Airport..."), and an unrelated funding cross-reference ("...funds from
+# the 2026 Flying Cloud Airport (FCM) ... project be reallocated...").
+# Naively scanning the body would extract all three (plus a newline-
+# corrupted PDF-extraction artifact) as if they were equally valid subject
+# claims - exactly the kind of contamination the guard's own contradiction
+# machinery exists to arbitrate, not something this regex can safely
+# pre-judge. The agenda TITLE, by contrast, is MAC's own short, single-
+# subject, structured description of what this ONE specific consent item
+# concerns - every real title observed across Pilot 5C/5E's own
+# reconnaissance names at most one airport, never more.
+#
+# Structural, not airport-specific: matches capitalized tokens (allowing
+# internal periods/apostrophes/hyphens, e.g. "St." or "County-Blaine"),
+# plus the single lowercase connector "and" (5F review fix - see below),
+# immediately followed by the singular word "Airport" - `\bAirport\b`
+# already excludes the plural "Airports" (no word boundary between
+# "Airport" and a directly-following "s"), which is what keeps
+# "Metropolitan Airports Commission" (the issuer, not an airport name)
+# from ever matching. The trailing negative lookahead rejects "Airport"
+# immediately followed by a common street-suffix word (e.g. "Example
+# Airport Road") - a real street naming convention near many airports,
+# not itself an airport identity claim.
+#
+# 5F REVIEW FIX: the original 5F implementation used a pure
+# `(?:[A-Z][\w.'-]*\s+){1,5}` repetition, which truncated real,
+# legitimate dual-named airports containing the lowercase connector
+# "and" - e.g. "Bill and Hillary Clinton National Airport" matched only
+# as "Hillary Clinton National Airport" (silently dropping "Bill and ").
+# Fixed by allowing "and" as an interior connector, but ONLY when NOT
+# immediately followed by "Airport" itself (`and(?!\s+Airport\b)`) - this
+# is what keeps a genuinely two-airport title ("Roads and Airport
+# Improvements", or a title naming two distinct real airports joined by
+# "and") from being misread as "and" being part of a single airport's
+# name. Separately, "Airport" is explicitly excluded from matching the
+# generic capitalized-filler alternative (`(?!Airport\b)[A-Z][\w.'-]*`) -
+# without this, a title naming two airports back-to-back ("Example
+# Regional Airport and Sample Municipal Airport") would greedily merge
+# them into one bogus combined name instead of two independent claims,
+# since the regex would otherwise treat the FIRST "Airport" as just
+# another filler word on the way to the LAST one. Both defects were
+# found and closed during the 5F adversarial review, before commit -
+# neither was present in the originally-implemented, pre-review version.
+_AIRPORT_NAME_IN_TITLE = re.compile(
+    r"\b([A-Z][\w.'-]*(?:\s+(?:(?!Airport\b)[A-Z][\w.'-]*|and(?!\s+Airport\b)))*\s+Airport)\b"
+    r"(?!\s+(?:Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|Way|Street|St\.?|Avenue|Ave\.?)\b)"
+)
+
+
+def _extract_airport_names_from_title(document_title: "str | None") -> frozenset[str]:
+    if not document_title:
+        return frozenset()
+    return frozenset(match.group(1) for match in _AIRPORT_NAME_IN_TITLE.finditer(document_title))
+
+
 # The full name and the bare "MAC" self-reference are both genuinely
 # observed in real MAC memos - this document itself never spells out
 # "Metropolitan Airports Commission," only ever referring to itself as
@@ -254,6 +318,16 @@ def _fragment_from_text(
     for match in _RUNWAY_END.finditer(text):
         runway_ends.add(match.group(1).upper())
 
+    # 5F: source-provided airport-name evidence from the agenda title only
+    # (never the PDF body - see _AIRPORT_NAME_IN_TITLE's own docstring for
+    # why). Deliberately no dedup/single-pick logic here: if the title
+    # happens to name more than one airport, all are preserved as
+    # independent name claims and the existing, unmodified guard/UAC3
+    # machinery (which already has its own explicit "exactly one name is
+    # formable, zero or many is not" rule) is left to arbitrate - this
+    # extractor never chooses one.
+    airport_names = _extract_airport_names_from_title(document_title)
+
     is_mac_issuer = bool(
         _ISSUER_FULL_NAME.search(text)
         or _ISSUER_ABBREVIATION.search(text)
@@ -305,6 +379,7 @@ def _fragment_from_text(
         source_locator=source_locator,
         raw_text=text,
         issuers=issuers,
+        airport_names=airport_names,
         runway_ends=frozenset(runway_ends),
         runway_pairs=frozenset(runway_pairs),
         # Vendor/organization names found in explicit procurement-action
