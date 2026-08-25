@@ -178,6 +178,7 @@ from app.services.unknown_airport_candidate_persistence import (
 from app.services.unknown_airport_candidate_resolution import (
     AlreadyResolvedError,
     InconsistentCandidateStateError,
+    RelevanceGateRefusedError,
     StaleReviewError,
     create_airport_from_approved_candidate,
     resolve_candidate_to_existing_airport,
@@ -566,7 +567,10 @@ def _run_execute(
                 iata_code=config.new_airport_iata_code, icao_code=config.new_airport_icao_code,
                 faa_code=config.new_airport_faa_code,
             )
-        except (AlreadyResolvedError, StaleReviewError, InconsistentCandidateStateError, ValueError) as exc:
+        except (
+            AlreadyResolvedError, StaleReviewError, InconsistentCandidateStateError,
+            RelevanceGateRefusedError, ValueError,
+        ) as exc:
             session.rollback()
             return UnknownAirportCandidateReviewResult(**kwargs, execute_eligible=False, execute_refusal_reason=str(exc))
         if not config.allow_database_write:

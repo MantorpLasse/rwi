@@ -23,8 +23,15 @@ from app.models.source_assertion_evidence_bag import SourceAssertionEvidenceBag
 from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
 from app.services.discovery_candidate_fragment import CandidateFragment
 from app.services.discovery_evidence_persistence import DiscoverySourceMetadata
+from app.services.emas_relevance_evaluation import EmasEvidenceObservation, EvidenceClass
 from app.services.evidence_attachment_guard import AttachmentOutcome
 from app.services.unknown_airport_candidate_persistence import record_unknown_airport_candidate_review
+from app.services.unknown_airport_candidate_relevance_persistence import (
+    persist_unknown_airport_candidate_relevance_assessment,
+)
+from app.services.unknown_airport_candidate_relevance_review_persistence import (
+    record_unknown_airport_candidate_relevance_review,
+)
 from app.services.unknown_airport_candidate_resolution import (
     create_airport_from_approved_candidate,
     resolve_candidate_to_existing_airport,
@@ -865,6 +872,20 @@ class TestMigrationChainFullLifecycle:
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="new airport", reviewer="tester",
             )
             session.flush()
+            # ERG4 precondition: current admission-relevant automatic
+            # assessment + current human CONFIRM, before
+            # create_airport_from_approved_candidate() will proceed.
+            erg2_result = persist_unknown_airport_candidate_relevance_assessment(
+                session, candidate,
+                observations=(EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="erg4 fixture"),),
+                source_assertion_ids=(discovered.source_assertion_id,),
+            )
+            session.commit()
+            record_unknown_airport_candidate_relevance_review(
+                session, candidate, basis_assessment_id=erg2_result.assessment.id,
+                action="CONFIRM_EMAS_RELEVANT", reviewer="human:erg4-fixture", reason="erg4 fixture confirm",
+            )
+            session.commit()
             created = create_airport_from_approved_candidate(
                 session, candidate_id=candidate.id, review_id=review.id, name="Brand New Airport", country="USA",
             )

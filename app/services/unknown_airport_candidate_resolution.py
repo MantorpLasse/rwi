@@ -83,6 +83,26 @@ this module - mutates the caller-supplied `Session` and flushes only so
 a constraint violation surfaces immediately; the caller owns the
 transaction boundary entirely, matching every other persistence service
 in this pipeline.
+
+ERG4 CANONICAL-ADMISSION RELEVANCE GATE
+(docs/architecture/rwi-erg4-canonical-airport-admission-gate-report.md):
+`create_airport_from_approved_candidate()` is THE authoritative
+enforcement point for the ERG4 rule - there is no other code path in the
+repository that inserts an `Airport` row from an `UnknownAirportCandidate`.
+Immediately after the pre-existing identity-review gate
+(`_require_current_review()`, UNCHANGED, still the first check - ERG4
+is an ADDITIONAL precondition, never a replacement for identity
+governance), this function calls the pure, read-only
+`evaluate_unknown_airport_candidate_admission_eligibility()`
+(app.services.unknown_airport_candidate_admission_eligibility, ERG4) and
+refuses with `RelevanceGateRefusedError` unless it reports
+`eligible=True`. That function composes ERG2's current-assessment and
+ERG3's current-human-review helpers UNMODIFIED - this module still
+contains no relevance-classification or review-state logic of its own,
+exactly the same "identity governance vs. relevance governance, never
+blurred" separation ERG1-ERG3 already established. A direct Python
+caller of this function - not just the UAC5 CLI - is bound by this gate;
+there is no separate, weaker code path.
 """
 from __future__ import annotations
 
@@ -93,12 +113,16 @@ from sqlalchemy.orm import Session
 
 from app.models import Airport, SourceAssertion
 from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
+from app.services.unknown_airport_candidate_admission_eligibility import (
+    evaluate_unknown_airport_candidate_admission_eligibility,
+)
 from app.services.unknown_airport_candidate_persistence import get_latest_unknown_airport_candidate_review
 
 __all__ = [
     "AlreadyResolvedError",
     "StaleReviewError",
     "InconsistentCandidateStateError",
+    "RelevanceGateRefusedError",
     "MatchExistingAirportResult",
     "CreateNewAirportResult",
     "resolve_candidate_to_existing_airport",
@@ -167,6 +191,26 @@ class InconsistentCandidateStateError(RuntimeError):
         )
 
 
+class RelevanceGateRefusedError(RuntimeError):
+    """Raised by `create_airport_from_approved_candidate()` (ONLY - never
+    `resolve_candidate_to_existing_airport()`, which links to an existing
+    Airport rather than creating a new one and is out of ERG4's scope) when
+    `evaluate_unknown_airport_candidate_admission_eligibility()` reports
+    `eligible=False`. The candidate, its SourceAssertions, its relevance
+    assessment history, and its relevance review history are all left
+    completely untouched - this is a precondition refusal raised before
+    any mutation, exactly like `AlreadyResolvedError`/`StaleReviewError`/
+    `InconsistentCandidateStateError`."""
+
+    def __init__(self, candidate_id: int, *, reason: str, detail: str) -> None:
+        self.candidate_id = candidate_id
+        self.reason = reason
+        super().__init__(
+            f"UnknownAirportCandidate {candidate_id} is not canonical-admission-eligible "
+            f"(reason={reason}): {detail}"
+        )
+
+
 def _linked_assertions(session: Session, candidate_id: int) -> "list[SourceAssertion]":
     return (
         session.query(SourceAssertion)
@@ -212,6 +256,33 @@ def _require_no_linked_assertion_already_canonical(candidate_id: int, assertions
                     "functions; only reachable via a direct schema bypass."
                 ),
             )
+
+
+_ADMISSION_REASON_DETAIL = {
+    "NO_RELEVANCE_ASSESSMENT": "no ERG2 automatic relevance assessment has ever been recorded for this candidate",
+    "AUTOMATIC_RELEVANCE_NOT_ADMISSION_ELIGIBLE": (
+        "the current automatic relevance assessment shows is_inventory_relevant=False and "
+        "is_watch_worthy=False - a human relevance review, even CONFIRM_EMAS_RELEVANT, cannot "
+        "manufacture EMAS relevance the automatic evaluator did not find"
+    ),
+    "NO_CURRENT_HUMAN_REVIEW": "no human relevance review has ever been recorded for the current assessment",
+    "HUMAN_REVIEW_STALE": (
+        "the latest human relevance review was recorded against an earlier assessment, not the "
+        "current one - a newer automatic assessment has been recorded since; a new, current review "
+        "is required"
+    ),
+    "HUMAN_REVIEW_DEFERRED": "the current human relevance review action is DEFER_RELEVANCE_REVIEW, not CONFIRM_EMAS_RELEVANT",
+    "HUMAN_REVIEW_MARKED_NOT_RELEVANT": (
+        "the current human relevance review action is MARK_NOT_EMAS_RELEVANT, not CONFIRM_EMAS_RELEVANT"
+    ),
+}
+
+
+def _require_admission_eligible(session: Session, candidate_id: int) -> None:
+    result = evaluate_unknown_airport_candidate_admission_eligibility(session, candidate_id)
+    if not result.eligible:
+        detail = _ADMISSION_REASON_DETAIL.get(result.reason.value, "eligibility evaluation reported ineligible")
+        raise RelevanceGateRefusedError(candidate_id, reason=result.reason.value, detail=detail)
 
 
 @dataclass(frozen=True)
@@ -332,13 +403,19 @@ def create_airport_from_approved_candidate(
     Fails closed (before any mutation) for the same set of reasons
     `resolve_candidate_to_existing_airport()` does, replacing the
     "matched Airport must exist" check with the duplicate-code check
-    above.
+    above - PLUS one additional, ERG4-specific precondition
+    (`RelevanceGateRefusedError`): the candidate's current automatic
+    relevance assessment must show canonical-admission relevance
+    (`is_inventory_relevant OR is_watch_worthy`) AND its current human
+    relevance review must be CONFIRM_EMAS_RELEVANT against that exact
+    assessment. See module docstring's own ERG4 section.
     """
     candidate = session.get(UnknownAirportCandidate, candidate_id)
     if candidate is None:
         raise ValueError(f"UnknownAirportCandidate {candidate_id} does not exist")
     _require_unresolved(candidate)
     _require_current_review(session, candidate, review_id=review_id, expected_action=_CREATE_ACTION)
+    _require_admission_eligible(session, candidate_id)
 
     if not name or not name.strip():
         raise ValueError("name is required")

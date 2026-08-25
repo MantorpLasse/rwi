@@ -19,11 +19,18 @@ from app.models import Airport, Installation, PhysicalInstallationIdentity, Runw
 from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
 from app.services.discovery_candidate_fragment import CandidateFragment
 from app.services.discovery_evidence_persistence import DiscoverySourceMetadata, persist_candidate_linked_source_assertion
+from app.services.emas_relevance_evaluation import EmasEvidenceObservation, EvidenceClass
 from app.services.fleet_health_check import _build_source_assertion_review_states
 from app.services.fleet_health_review_rules import evaluate_fh_f2, evaluate_fh_f3
 from app.services.unknown_airport_candidate_persistence import (
     find_or_create_unknown_airport_candidate,
     record_unknown_airport_candidate_review,
+)
+from app.services.unknown_airport_candidate_relevance_persistence import (
+    persist_unknown_airport_candidate_relevance_assessment,
+)
+from app.services.unknown_airport_candidate_relevance_review_persistence import (
+    record_unknown_airport_candidate_relevance_review,
 )
 import scripts.migrate_source_assertion_unknown_airport_uac2b as uac2b_migration
 import scripts.migrate_unknown_airport_candidates_uac2a as uac2a_migration
@@ -107,6 +114,28 @@ def _record_review(engine, candidate_id, **kwargs):
         review = record_unknown_airport_candidate_review(session, candidate, **kwargs)
         session.commit()
         return review.id
+
+
+def _make_admission_eligible(engine, candidate_id, assertion_ids):
+    """ERG4 fixture helper: persists an ERG2 A-class (admission-relevant)
+    assessment linked to the given SourceAssertions, then records an ERG3
+    CONFIRM_EMAS_RELEVANT review against it - the minimal state
+    create_airport_from_approved_candidate()'s ERG4 gate requires before
+    proceeding to its pre-existing UAC4 checks. `assertion_ids` must be
+    non-empty."""
+    with Session(engine) as session:
+        candidate = session.get(UnknownAirportCandidate, candidate_id)
+        assessment = persist_unknown_airport_candidate_relevance_assessment(
+            session, candidate,
+            observations=(EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="erg4 fixture"),),
+            source_assertion_ids=tuple(assertion_ids),
+        ).assessment
+        session.commit()
+        record_unknown_airport_candidate_relevance_review(
+            session, candidate, basis_assessment_id=assessment.id,
+            action="CONFIRM_EMAS_RELEVANT", reviewer="human:erg4-fixture", reason="erg4 fixture confirm",
+        )
+        session.commit()
 
 
 def _canonical_counts(engine):
@@ -379,6 +408,7 @@ class TestExecuteCreate:
         engine = _make_full_db(db)
         candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
         review_id = _record_review(engine, candidate_id, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x")
+        _make_admission_eligible(engine, candidate_id, assertion_ids)
         engine.dispose()
 
         dry = run_review(UnknownAirportCandidateReviewConfig(
@@ -569,8 +599,9 @@ class TestCanonicalSideEffectFirewall:
     def test_create_execute_touches_only_airport_count(self, tmp_path):
         db = tmp_path / "db.sqlite"
         engine = _make_full_db(db)
-        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
         review_id = _record_review(engine, candidate_id, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x")
+        _make_admission_eligible(engine, candidate_id, assertion_ids)
         before = _canonical_counts(engine)
         engine.dispose()
 
@@ -807,6 +838,7 @@ class TestMigrationChainParity:
         engine = create_engine(f"sqlite:///{db}")
         candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
         review_id = _record_review(engine, candidate_id, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x")
+        _make_admission_eligible(engine, candidate_id, assertion_ids)
         engine.dispose()
 
         inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))

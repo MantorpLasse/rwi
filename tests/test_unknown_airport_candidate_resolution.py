@@ -20,18 +20,31 @@ from app.database import Base
 from app import models as _models  # noqa: F401
 from app.models import Airport, Installation, PhysicalInstallationIdentity, ReviewerAction, Runway, RunwayEnd, Signal, Source, SourceAssertion
 from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
+from app.models.unknown_airport_candidate_relevance_assessment import UnknownAirportCandidateRelevanceAssessment
 from app.services.discovery_candidate_fragment import CandidateFragment
 from app.services.discovery_evidence_persistence import DiscoverySourceMetadata, persist_candidate_linked_source_assertion
+from app.services.emas_relevance_evaluation import EmasEvidenceObservation, EvidenceClass
+from app.services.unknown_airport_candidate_admission_eligibility import (
+    AdmissionEligibilityReason,
+    evaluate_unknown_airport_candidate_admission_eligibility,
+)
 from app.services.unknown_airport_candidate_persistence import (
     find_or_create_unknown_airport_candidate,
     get_latest_unknown_airport_candidate_review,
     record_unknown_airport_candidate_review,
+)
+from app.services.unknown_airport_candidate_relevance_persistence import (
+    persist_unknown_airport_candidate_relevance_assessment,
+)
+from app.services.unknown_airport_candidate_relevance_review_persistence import (
+    record_unknown_airport_candidate_relevance_review,
 )
 from app.services.unknown_airport_candidate_resolution import (
     AlreadyResolvedError,
     CreateNewAirportResult,
     InconsistentCandidateStateError,
     MatchExistingAirportResult,
+    RelevanceGateRefusedError,
     StaleReviewError,
     create_airport_from_approved_candidate,
     resolve_candidate_to_existing_airport,
@@ -67,6 +80,29 @@ def _seed_candidate_with_n_assertions(session, *, n=1, raw_name="Foo Regional Ai
         )
         assertions.append(session.get(SourceAssertion, linked.source_assertion_id))
     return candidate, assertions
+
+
+def _make_admission_eligible(session, candidate, assertions):
+    """ERG4 fixture helper: persists an ERG2 A-class (admission-relevant)
+    assessment linked to the candidate's own SourceAssertions, then
+    records an ERG3 CONFIRM_EMAS_RELEVANT review against it - the minimal
+    state create_airport_from_approved_candidate()'s new ERG4 gate
+    requires before it will proceed to its pre-existing UAC4 checks.
+    `assertions` must be non-empty (ERG2's own evidence-traceability rule
+    - a non-empty-observations assessment must be linked to at least one
+    real SourceAssertion belonging to this candidate)."""
+    assessment = persist_unknown_airport_candidate_relevance_assessment(
+        session, candidate,
+        observations=(EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="erg4 fixture"),),
+        source_assertion_ids=tuple(a.id for a in assertions),
+    ).assessment
+    session.commit()
+    review = record_unknown_airport_candidate_relevance_review(
+        session, candidate, basis_assessment_id=assessment.id,
+        action="CONFIRM_EMAS_RELEVANT", reviewer="human:erg4-fixture", reason="erg4 fixture confirm",
+    )
+    session.commit()
+    return assessment, review
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +265,7 @@ class TestCreateNewAirport:
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="genuinely new", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
 
             result = create_airport_from_approved_candidate(
                 session, candidate_id=candidate.id, review_id=review.id,
@@ -249,12 +286,13 @@ class TestCreateNewAirport:
     def test_create_deterministic_code_conflict_blocked(self):
         with Session(_engine()) as session:
             existing = _seed_airport(session, name="Existing", icao_code="KABC")
-            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
             session.commit()
             review = record_unknown_airport_candidate_review(
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
 
             with pytest.raises(ValueError, match="already has icao_code"):
                 create_airport_from_approved_candidate(
@@ -277,12 +315,13 @@ class TestCreateNewAirport:
         only in case."""
         with Session(_engine()) as session:
             _seed_airport(session, name="Existing", icao_code="KABC")
-            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
             session.commit()
             review = record_unknown_airport_candidate_review(
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
 
             with pytest.raises(ValueError, match="already has icao_code"):
                 create_airport_from_approved_candidate(
@@ -301,12 +340,13 @@ class TestCreateNewAirport:
         future duplicate-detection/lookup bug)."""
         with Session(_engine()) as session:
             _seed_airport(session, name="Existing", icao_code="KABC")
-            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
             session.commit()
             review = record_unknown_airport_candidate_review(
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
 
             with pytest.raises(ValueError, match="already has icao_code"):
                 create_airport_from_approved_candidate(
@@ -317,12 +357,13 @@ class TestCreateNewAirport:
 
             # A genuinely distinct, padded code is accepted but stored
             # stripped, not verbatim.
-            candidate2, _ = _seed_candidate_with_n_assertions(session, n=1, raw_name="Bar Field")
+            candidate2, assertions2 = _seed_candidate_with_n_assertions(session, n=1, raw_name="Bar Field")
             session.commit()
             review2 = record_unknown_airport_candidate_review(
                 session, candidate2, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate2, assertions2)
             result = create_airport_from_approved_candidate(
                 session, candidate_id=candidate2.id, review_id=review2.id,
                 name="Bar Field", country="XX", icao_code="  KDEF  ",
@@ -335,12 +376,13 @@ class TestCreateNewAirport:
         exact canonical code collisions do."""
         with Session(_engine()) as session:
             _seed_airport(session, name="Foo Regional Airport")
-            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
             session.commit()
             review = record_unknown_airport_candidate_review(
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
             result = create_airport_from_approved_candidate(
                 session, candidate_id=candidate.id, review_id=review.id, name="Foo Regional Airport", country="XX",
             )
@@ -367,12 +409,13 @@ class TestCreateNewAirport:
 
     def test_create_already_resolved_refused(self):
         with Session(_engine()) as session:
-            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
             session.commit()
             review = record_unknown_airport_candidate_review(
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
             create_airport_from_approved_candidate(
                 session, candidate_id=candidate.id, review_id=review.id, name="Foo", country="XX",
             )
@@ -386,12 +429,13 @@ class TestCreateNewAirport:
 
     def test_missing_name_or_country_rejected(self):
         with Session(_engine()) as session:
-            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
             session.commit()
             review = record_unknown_airport_candidate_review(
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
             with pytest.raises(ValueError, match="name is required"):
                 create_airport_from_approved_candidate(session, candidate_id=candidate.id, review_id=review.id, name="", country="XX")
             with pytest.raises(ValueError, match="country is required"):
@@ -530,6 +574,7 @@ class TestFailureAtomicity:
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
             airports_before = session.query(Airport).count()
 
             import app.services.unknown_airport_candidate_resolution as resolution_module
@@ -565,12 +610,13 @@ class TestFailureAtomicity:
 class TestCanonicalSideEffectFirewall:
     def test_create_new_airport_touches_only_airport_count(self):
         with Session(_engine()) as session:
-            candidate, _ = _seed_candidate_with_n_assertions(session, n=2)
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=2)
             session.commit()
             review = record_unknown_airport_candidate_review(
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
             before = {
                 "runways": session.query(Runway).count(),
                 "runway_ends": session.query(RunwayEnd).count(),
@@ -696,12 +742,13 @@ class TestInternationalCreateNewAirport:
     )
     def test_international_airport_creation_no_faa_lid_required(self, name, country, city):
         with Session(_engine()) as session:
-            candidate, _ = _seed_candidate_with_n_assertions(session, n=1, raw_name=name)
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1, raw_name=name)
             session.commit()
             review = record_unknown_airport_candidate_review(
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
             result = create_airport_from_approved_candidate(
                 session, candidate_id=candidate.id, review_id=review.id, name=name, country=country, city=city,
             )
@@ -749,6 +796,7 @@ class TestMigrationChainParity:
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
+            _make_admission_eligible(session, candidate, assertions)
             result = create_airport_from_approved_candidate(
                 session, candidate_id=candidate.id, review_id=review.id, name="Foo Regional Airport", country="Fictionland",
             )
@@ -946,7 +994,18 @@ class TestZeroAssertionCandidate:
             session.refresh(candidate)
             assert candidate.resolved_airport_id == real.id
 
-    def test_create_zero_assertions_succeeds(self):
+    def test_create_zero_assertions_now_blocked_by_erg4_no_assessment(self):
+        """ERG4 behavior change (mission's own S7 "no-assessment attack"):
+        before ERG4, UAC4's own mechanics alone let a zero-evidence
+        candidate through (this test used to assert success). A candidate
+        with zero linked SourceAssertions structurally can never have an
+        ERG2 relevance assessment (ERG2 itself requires evidence
+        traceability - no assessment can be linked to zero evidence),
+        so it can never become ERG4-eligible either. This is not a UAC4
+        regression - it is the exact, intended consequence of ERG4's own
+        product rule, proven directly (TestZeroAssessmentAttack in
+        tests/test_unknown_airport_candidate_admission_eligibility.py
+        covers the pure-evaluator side of the same fact)."""
         with Session(_engine()) as session:
             candidate = find_or_create_unknown_airport_candidate(session, raw_name="No Evidence Airport").candidate
             session.commit()
@@ -954,12 +1013,13 @@ class TestZeroAssertionCandidate:
                 session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
             )
             session.commit()
-            result = create_airport_from_approved_candidate(
-                session, candidate_id=candidate.id, review_id=review.id, name="No Evidence Airport", country="XX",
-            )
-            assert result.moved_source_assertion_ids == ()
-            new_airport = session.get(Airport, result.created_airport_id)
-            assert new_airport.name == "No Evidence Airport"
+            with pytest.raises(RelevanceGateRefusedError, match="NO_RELEVANCE_ASSESSMENT"):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=review.id, name="No Evidence Airport", country="XX",
+                )
+            session.refresh(candidate)
+            assert candidate.resolved_airport_id is None
+            assert session.query(Airport).count() == 0
 
 
 class TestCrossCandidateReviewBinding:
@@ -1022,3 +1082,307 @@ class TestNonexistentCandidate:
         with Session(_engine()) as session:
             with pytest.raises(ValueError, match="does not exist"):
                 create_airport_from_approved_candidate(session, candidate_id=999999, review_id=1, name="Foo", country="XX")
+
+
+# ---------------------------------------------------------------------------
+# ERG4 - authoritative-enforcement-point tests (the pure evaluator's own
+# reason-derivation tests live in
+# tests/test_unknown_airport_candidate_admission_eligibility.py; these
+# tests prove create_airport_from_approved_candidate() itself - the ONLY
+# code path that ever inserts an Airport row from an UnknownAirportCandidate
+# - actually enforces that evaluator's verdict, including via a direct
+# Python call that bypasses the UAC5 CLI entirely).
+# ---------------------------------------------------------------------------
+
+
+class TestErg4AnokaRegressionViaAuthoritativeService:
+    """Anoka County-Blaine: RUNWAY_ONLY_NOT_EMAS_RELEVANT, inventory=false,
+    watch=false. ALL FOUR human states must block canonical creation via
+    the real, authoritative create_airport_from_approved_candidate() -
+    especially CONFIRM (mission's own central product rule: human
+    confirmation cannot manufacture EMAS relevance)."""
+
+    def _seed_anoka_like(self, session, *, action):
+        candidate, assertions = _seed_candidate_with_n_assertions(session, n=1, raw_name="Anoka County-Blaine Airport")
+        session.commit()
+        assessment = persist_unknown_airport_candidate_relevance_assessment(
+            session, candidate,
+            observations=(EmasEvidenceObservation(EvidenceClass.G_GENERIC_RUNWAY_WORK, basis="runway resurfacing"),),
+            source_assertion_ids=(assertions[0].id,),
+        ).assessment
+        session.commit()
+        assert assessment.is_inventory_relevant is False
+        assert assessment.is_watch_worthy is False
+        if action is not None:
+            record_unknown_airport_candidate_relevance_review(
+                session, candidate, basis_assessment_id=assessment.id,
+                action=action, reviewer="human:x", reason="x",
+            )
+            session.commit()
+        review = record_unknown_airport_candidate_review(
+            session, candidate, action="CREATE_NEW_AIRPORT", reason="genuinely new", reviewer="human:x",
+        )
+        session.commit()
+        return candidate, review
+
+    def test_a_no_relevance_review_blocks(self):
+        """Automatic relevance (locked rule step 2) is checked before
+        review-currency (step 3) - so even with zero relevance reviews at
+        all, the reported reason is AUTOMATIC_RELEVANCE_NOT_ADMISSION_ELIGIBLE,
+        the same as every other Anoka sub-case (B/C/D below), since
+        is_automatic_admission_relevant is already false regardless."""
+        with Session(_engine()) as session:
+            candidate, review = self._seed_anoka_like(session, action=None)
+            with pytest.raises(RelevanceGateRefusedError, match="AUTOMATIC_RELEVANCE_NOT_ADMISSION_ELIGIBLE"):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=review.id, name="Anoka County-Blaine Airport", country="US",
+                )
+            assert session.query(Airport).count() == 0
+            session.refresh(candidate)
+            assert candidate.resolved_airport_id is None
+
+    def test_b_defer_blocks(self):
+        with Session(_engine()) as session:
+            candidate, review = self._seed_anoka_like(session, action="DEFER_RELEVANCE_REVIEW")
+            with pytest.raises(RelevanceGateRefusedError):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=review.id, name="Anoka County-Blaine Airport", country="US",
+                )
+            assert session.query(Airport).count() == 0
+
+    def test_c_mark_not_blocks(self):
+        with Session(_engine()) as session:
+            candidate, review = self._seed_anoka_like(session, action="MARK_NOT_EMAS_RELEVANT")
+            with pytest.raises(RelevanceGateRefusedError):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=review.id, name="Anoka County-Blaine Airport", country="US",
+                )
+            assert session.query(Airport).count() == 0
+
+    def test_d_confirm_still_blocks_central_product_rule(self):
+        """Automatic false + human CONFIRM == BLOCK, via the real
+        authoritative service, not just the pure evaluator."""
+        with Session(_engine()) as session:
+            candidate, review = self._seed_anoka_like(session, action="CONFIRM_EMAS_RELEVANT")
+            with pytest.raises(RelevanceGateRefusedError, match="AUTOMATIC_RELEVANCE_NOT_ADMISSION_ELIGIBLE"):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=review.id, name="Anoka County-Blaine Airport", country="US",
+                )
+            assert session.query(Airport).count() == 0
+            session.refresh(candidate)
+            assert candidate.resolved_airport_id is None
+
+
+class TestErg4EligibleAdmissionSucceeds:
+    def test_watch_only_eligible_admission_succeeds(self):
+        with Session(_engine()) as session:
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            review = record_unknown_airport_candidate_review(
+                session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
+            )
+            session.commit()
+            _make_admission_eligible(session, candidate, assertions)
+            result = create_airport_from_approved_candidate(
+                session, candidate_id=candidate.id, review_id=review.id, name="Foo Regional Airport", country="XX",
+            )
+            assert isinstance(result, CreateNewAirportResult)
+            new_airport = session.get(Airport, result.created_airport_id)
+            assert new_airport is not None
+
+
+class TestErg4IdentityReviewStillRequired:
+    """ERG4 is an ADDITIONAL precondition, never a replacement for UAC4's
+    own pre-existing identity-review gate - a candidate can be fully
+    ERG4-eligible (automatic relevance + current human CONFIRM) and still
+    correctly blocked because the identity review itself is not a valid
+    CREATE_NEW_AIRPORT authority."""
+
+    def test_erg4_eligible_but_no_identity_review_still_blocked_by_uac4(self):
+        with Session(_engine()) as session:
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            _make_admission_eligible(session, candidate, assertions)
+            # No UnknownAirportCandidateReview (identity review) recorded at all.
+            with pytest.raises(StaleReviewError, match="no review has ever been recorded"):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=999999, name="Foo", country="XX",
+                )
+            assert session.query(Airport).count() == 0
+
+    def test_erg4_eligible_but_identity_review_is_defer_still_blocked_by_uac4(self):
+        with Session(_engine()) as session:
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            _make_admission_eligible(session, candidate, assertions)
+            identity_review = record_unknown_airport_candidate_review(
+                session, candidate, action="DEFER", reason="still checking", reviewer="human:x",
+            )
+            session.commit()
+            with pytest.raises(StaleReviewError, match="not the required"):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=identity_review.id, name="Foo", country="XX",
+                )
+            assert session.query(Airport).count() == 0
+
+
+class TestErg4CrossCandidateViaAuthoritativeService:
+    def test_candidate_a_positive_assessment_candidate_b_confirm_never_combine(self):
+        with Session(_engine()) as session:
+            candidate_a, assertions_a = _seed_candidate_with_n_assertions(session, n=1, raw_name="Candidate A Airport")
+            candidate_b, assertions_b = _seed_candidate_with_n_assertions(session, n=1, raw_name="Candidate B Airport")
+            session.commit()
+            review_a = record_unknown_airport_candidate_review(
+                session, candidate_a, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
+            )
+            session.commit()
+
+            # candidate_a gets a positive automatic assessment but NO review.
+            persist_unknown_airport_candidate_relevance_assessment(
+                session, candidate_a,
+                observations=(EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),),
+                source_assertion_ids=(assertions_a[0].id,),
+            )
+            session.commit()
+            # candidate_b independently becomes fully ERG4-eligible.
+            _make_admission_eligible(session, candidate_b, assertions_b)
+
+            with pytest.raises(RelevanceGateRefusedError, match="NO_CURRENT_HUMAN_REVIEW"):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate_a.id, review_id=review_a.id, name="Foo", country="XX",
+                )
+            assert session.query(Airport).count() == 0
+            session.refresh(candidate_a)
+            assert candidate_a.resolved_airport_id is None
+
+
+class TestErg4NoAutoflush:
+    """ERG4's OWN precondition phase (_require_admission_eligible(), which
+    calls evaluate_unknown_airport_candidate_admission_eligibility()) is
+    directly, exhaustively proven safe against every no-autoflush attack
+    shape in tests/test_unknown_airport_candidate_admission_eligibility.py::TestNoAutoflush
+    (unrelated pending candidate object, unrelated pending review object,
+    expired candidate attributes - all passing).
+
+    ADVERSARIAL-REVIEW-STYLE FINDING, NOT FIXED HERE (mission's own
+    explicit "if a genuine blocking defect outside ERG4's scope is found:
+    STOP and report rather than scope-creep" instruction): attempting the
+    SAME attack at the full create_airport_from_approved_candidate()
+    entry point (add an unrelated invalid pending object, then call the
+    function) reliably leaks a raw sqlite3.IntegrityError - but NOT from
+    anything ERG4 added. `_require_current_review()` (pre-existing UAC4
+    code, unmodified) calls
+    app.services.unknown_airport_candidate_persistence.get_latest_unknown_airport_candidate_review()
+    (pre-existing UAC1 code, unmodified), which performs a bare
+    `session.query(...)` with NO `session.no_autoflush` wrapper - unlike
+    every "latest" helper ERG2/ERG3 added, which learned this exact
+    lesson. This UAC1 gap pre-dates ERG4 entirely, is unrelated to
+    relevance governance, and is proven to affect
+    resolve_candidate_to_existing_airport() identically (confirmed
+    directly: the same attack against the MATCH_EXISTING_AIRPORT path,
+    which ERG4 never touches, leaks the identical error) - i.e. it is
+    reachable through `_require_current_review()` regardless of whether
+    ERG4 exists at all. Fixing UAC1's own `get_latest_unknown_airport_candidate_review()`
+    is out of ERG4's scope (module docstring's own information firewall:
+    "Do NOT redesign ... UAC3 identity discovery" / UAC1 is that same
+    identity-discovery-adjacent layer) and is not done here - flagged for
+    a future, separately-scoped fix mirroring ERG2/ERG3's own precedent."""
+
+
+class TestErg4FailureAtomicityAndHistoryPreservation:
+    def test_blocked_admission_leaves_zero_partial_canonical_objects(self):
+        with Session(_engine()) as session:
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1, raw_name="Anoka County-Blaine Airport")
+            session.commit()
+            assessment = persist_unknown_airport_candidate_relevance_assessment(
+                session, candidate,
+                observations=(EmasEvidenceObservation(EvidenceClass.G_GENERIC_RUNWAY_WORK, basis="x"),),
+                source_assertion_ids=(assertions[0].id,),
+            ).assessment
+            session.commit()
+            record_unknown_airport_candidate_relevance_review(
+                session, candidate, basis_assessment_id=assessment.id,
+                action="CONFIRM_EMAS_RELEVANT", reviewer="human:x", reason="x",
+            )
+            session.commit()
+            review = record_unknown_airport_candidate_review(
+                session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
+            )
+            session.commit()
+
+            with pytest.raises(RelevanceGateRefusedError):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=review.id, name="Foo", country="XX",
+                )
+
+            assert session.query(Airport).count() == 0
+            assert session.query(Runway).count() == 0
+            assert session.query(RunwayEnd).count() == 0
+            assert session.query(Installation).count() == 0
+            assert session.query(Signal).count() == 0
+
+    def test_anoka_candidate_and_full_history_remain_intact_after_blocked_admission(self):
+        """Mission's own requirement: a blocked canonical admission must
+        NOT delete/reject the candidate - it remains available as
+        governed discovery history, with its SourceAssertion, relevance
+        assessment, and relevance review all intact."""
+        with Session(_engine()) as session:
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1, raw_name="Anoka County-Blaine Airport")
+            session.commit()
+            assessment = persist_unknown_airport_candidate_relevance_assessment(
+                session, candidate,
+                observations=(EmasEvidenceObservation(EvidenceClass.G_GENERIC_RUNWAY_WORK, basis="x"),),
+                source_assertion_ids=(assertions[0].id,),
+            ).assessment
+            session.commit()
+            review = record_unknown_airport_candidate_relevance_review(
+                session, candidate, basis_assessment_id=assessment.id,
+                action="CONFIRM_EMAS_RELEVANT", reviewer="human:x", reason="x",
+            )
+            session.commit()
+            identity_review = record_unknown_airport_candidate_review(
+                session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
+            )
+            session.commit()
+
+            with pytest.raises(RelevanceGateRefusedError):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=identity_review.id, name="Foo", country="XX",
+                )
+
+            reloaded_candidate = session.get(UnknownAirportCandidate, candidate.id)
+            assert reloaded_candidate is not None
+            assert reloaded_candidate.resolved_airport_id is None
+            reloaded_assertion = session.get(SourceAssertion, assertions[0].id)
+            assert reloaded_assertion is not None
+            assert reloaded_assertion.unknown_airport_candidate_id == candidate.id
+            assert session.get(UnknownAirportCandidateRelevanceAssessment, assessment.id) is not None
+            assert (
+                evaluate_unknown_airport_candidate_admission_eligibility(session, candidate.id).latest_review_id
+                == review.id
+            )
+
+
+class TestErg4DirectServiceBypass:
+    """Calling the authoritative service directly - never through the
+    UAC5 CLI at all - and confirming every blocked case still blocks.
+    Every test in this module already does this (none of them import or
+    invoke scripts/review_unknown_airport_candidate.py), but this class
+    makes the property explicit and names it, per the review mission's
+    own S27."""
+
+    def test_direct_call_with_no_erg2_state_still_blocked(self):
+        with Session(_engine()) as session:
+            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            review = record_unknown_airport_candidate_review(
+                session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
+            )
+            session.commit()
+            import app.services.unknown_airport_candidate_resolution as resolution_module
+
+            assert "cli" not in resolution_module.__name__.lower()
+            with pytest.raises(RelevanceGateRefusedError):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate.id, review_id=review.id, name="Foo", country="XX",
+                )
