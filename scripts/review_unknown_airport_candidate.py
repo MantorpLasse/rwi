@@ -40,6 +40,40 @@ Slice 5 of docs/architecture/rwi-governed-new-airport-discovery-design.md).
            if that review is no longer current, with zero CLI-side
            reimplementation of that check.
 
+ERG5 OPERATOR GOVERNANCE FLOW (docs/architecture/rwi-erg5-operator-
+governance-flow-report.md): plain `--candidate-id` inspection now ALSO
+surfaces, alongside the identity-review state above, the full ERG2/ERG3/
+ERG4 governance chain - automatic EMAS relevance (outcome, evidence
+classes, is_inventory_relevant/is_watch_worthy, evaluator_version), the
+human EMAS relevance review's CURRENT/STALE/UNREVIEWED/NO_ASSESSMENT_YET
+state, and the ERG4 canonical-admission verdict (ELIGIBLE/BLOCKED + exact
+reason) - composed via `app.services.unknown_airport_candidate_governance_view`
+(read-only, never re-derives any of ERG2/ERG3/ERG4's own business rules).
+A FOURTH CLI mode, `--relevance-decision {CONFIRM_EMAS_RELEVANT,
+MARK_NOT_EMAS_RELEVANT,DEFER_RELEVANCE_REVIEW} --basis-assessment-id N
+--reviewer ... --reason ...`, records an ERG3 human relevance review -
+mutually exclusive with `--decision`/`--execute` (same MODE SEPARATION
+discipline below), same dry-run/write-gate convention, and wires
+`app.services.unknown_airport_candidate_relevance_review_persistence.record_unknown_airport_candidate_relevance_review()`
+directly (never reimplements its stale-basis/cross-candidate/action-
+vocabulary checks - a stale `--basis-assessment-id` is refused with that
+function's own error naming the current assessment id, never silently
+rebound). `--relevance-decision`/`--execute --new-airport-*` remain
+entirely separate, unmodified execution paths (see CANONICAL CREATE MODE
+below) - ERG5 adds no second admission gate.
+
+SCHEMA-ABSENT COMPATIBILITY: ERG2/ERG3 readiness is checked SEPARATELY
+from the pre-existing UAC2A/UAC2B identity-schema gate
+(`check_erg_schema_readiness()`, mirroring `check_schema_readiness()`'s
+own `inspect()`-reuse pattern) - the real production database may have
+the identity schema migrated while ERG2/ERG3 are not (true of this
+mission's own starting checkpoint). Plain inspection, `--decision`, and
+`--execute` all keep working unchanged when ERG2/ERG3 are absent (the
+governance-view fields are simply left `None`); only `--relevance-decision`
+hard-blocks with `ERG_RELEVANCE_SCHEMA_MIGRATION_REQUIRED`, since it
+structurally cannot function without those tables. No migration is ever
+executed by this module.
+
 MODE SEPARATION (mission §3/§6/§7, a locked design decision): recording a
 human review decision and executing its canonical consequence are always
 two SEPARATE CLI invocations (`--decision ...` XOR `--execute ...`, never
@@ -171,9 +205,19 @@ from app.models.unknown_airport_candidate import (
     UnknownAirportCandidate,
     UnknownAirportCandidateReview,
 )
+from app.models.unknown_airport_candidate_relevance_review import RELEVANCE_REVIEW_ACTIONS
+from app.services.unknown_airport_candidate_governance_view import (
+    AutomaticRelevanceView,
+    CanonicalAdmissionView,
+    HumanRelevanceReviewView,
+    get_unknown_airport_candidate_governance_view,
+)
 from app.services.unknown_airport_candidate_persistence import (
     get_latest_unknown_airport_candidate_review,
     record_unknown_airport_candidate_review,
+)
+from app.services.unknown_airport_candidate_relevance_review_persistence import (
+    record_unknown_airport_candidate_relevance_review,
 )
 from app.services.unknown_airport_candidate_resolution import (
     AlreadyResolvedError,
@@ -184,9 +228,12 @@ from app.services.unknown_airport_candidate_resolution import (
     resolve_candidate_to_existing_airport,
 )
 import scripts.migrate_source_assertion_unknown_airport_uac2b as uac2b_migration
+import scripts.migrate_unknown_airport_candidate_relevance_assessments_erg2 as erg2_migration
+import scripts.migrate_unknown_airport_candidate_relevance_reviews_erg3 as erg3_migration
 
 __all__ = [
     "SCHEMA_MIGRATION_REQUIRED_BLOCKER",
+    "ERG_SCHEMA_MIGRATION_REQUIRED_BLOCKER",
     "CANDIDATE_NOT_FOUND_BLOCKER",
     "ReviewSummary",
     "LinkedAssertionSummary",
@@ -194,6 +241,7 @@ __all__ = [
     "UnknownAirportCandidateReviewConfig",
     "UnknownAirportCandidateReviewResult",
     "check_schema_readiness",
+    "check_erg_schema_readiness",
     "build_engine",
     "run_review",
     "render_result",
@@ -201,6 +249,7 @@ __all__ = [
 ]
 
 SCHEMA_MIGRATION_REQUIRED_BLOCKER = "UNKNOWN_AIRPORT_SCHEMA_MIGRATION_REQUIRED"
+ERG_SCHEMA_MIGRATION_REQUIRED_BLOCKER = "ERG_RELEVANCE_SCHEMA_MIGRATION_REQUIRED"
 CANDIDATE_NOT_FOUND_BLOCKER = "CANDIDATE_NOT_FOUND"
 
 _MATCH_ACTION = "MATCH_EXISTING_AIRPORT"
@@ -261,6 +310,13 @@ class UnknownAirportCandidateReviewConfig:
     new_airport_faa_code: "str | None" = None
     allow_database_write: bool = False
 
+    # ERG5 relevance-review-recording mode (ERG3) - a THIRD, separate mode
+    # alongside --decision (identity review) and --execute (identity
+    # resolution execution); see MODE SEPARATION in the module docstring.
+    relevance_decision: "str | None" = None
+    basis_assessment_id: "int | None" = None
+    supersedes_relevance_review_id: "int | None" = None
+
 
 @dataclass(frozen=True)
 class UnknownAirportCandidateReviewResult:
@@ -271,6 +327,7 @@ class UnknownAirportCandidateReviewResult:
 
     database: str
     schema_readiness: dict
+    erg_schema_readiness: "dict | None" = None
     blockers: "tuple[str, ...]" = ()
 
     candidate_id: "int | None" = None
@@ -296,6 +353,15 @@ class UnknownAirportCandidateReviewResult:
     deterministic_code_matches: "tuple[DeterministicCodeMatch, ...]" = ()
     downstream_continuation_note: "str | None" = None
 
+    # ERG5 governance view (ERG2 automatic relevance / ERG3 human relevance
+    # review / ERG4 canonical admission) - composed via
+    # get_unknown_airport_candidate_governance_view(), never recomputed
+    # here. None (not an empty/default value) when the ERG2/ERG3 schema is
+    # not yet migrated - see erg_schema_readiness.
+    automatic_relevance: "AutomaticRelevanceView | None" = None
+    human_relevance_review: "HumanRelevanceReviewView | None" = None
+    canonical_admission: "CanonicalAdmissionView | None" = None
+
     mode: str = "inspect"
 
     # Review-recording mode.
@@ -318,6 +384,16 @@ class UnknownAirportCandidateReviewResult:
     execution_created_airport_id: "int | None" = None
     execution_moved_assertion_ids: "tuple[int, ...]" = ()
 
+    # ERG5 relevance-review-recording mode.
+    proposed_relevance_action: "str | None" = None
+    proposed_relevance_basis_assessment_id: "int | None" = None
+    proposed_relevance_reviewer: "str | None" = None
+    proposed_relevance_reason: "str | None" = None
+    relevance_action_eligible: "bool | None" = None
+    relevance_action_refusal_reason: "str | None" = None
+    relevance_written: bool = False
+    relevance_written_review_id: "int | None" = None
+
 
 def check_schema_readiness(database: Path) -> dict:
     """Read-only, via UAC2B's own already-proven `inspect()` (which itself
@@ -331,6 +407,26 @@ def check_schema_readiness(database: Path) -> dict:
         "unknown_airport_candidate_id_column_present": result["unknown_airport_candidate_id_column_present"],
         "matches_expected_schema": result["matches_expected_schema"],
         "ready": result["ready"],
+    }
+
+
+def check_erg_schema_readiness(database: Path) -> dict:
+    """Read-only, via ERG2's and ERG3's own already-proven `inspect()`
+    functions (reused verbatim, never reimplemented, migration EXECUTION
+    never imported here). Separate from `check_schema_readiness()`
+    (UAC2A/UAC2B, identity schema) deliberately: the real production
+    database may have the identity schema ready while the ERG2/ERG3
+    relevance schema is not yet migrated (confirmed true of the current
+    real database at this mission's own starting checkpoint) - old
+    identity-only inspection must keep working regardless of ERG2/ERG3's
+    own migration state, so this is checked and reported separately, not
+    folded into `check_schema_readiness()`'s own single `ready` gate."""
+    erg2 = erg2_migration.inspect(database)
+    erg3 = erg3_migration.inspect(database)
+    return {
+        "erg2_ready": erg2["ready"],
+        "erg3_ready": erg3["ready"],
+        "ready": erg2["ready"] and erg3["ready"],
     }
 
 
@@ -394,8 +490,39 @@ def _validate_config(config: UnknownAirportCandidateReviewConfig) -> None:
     elif config.supersedes_review_id is not None:
         raise ValueError("--supersedes-review-id is only valid when --decision is supplied")
 
-    if config.allow_database_write and config.decision is None and not config.execute:
-        raise ValueError("--allow-database-write requires --decision or --execute")
+    if config.execute and config.relevance_decision is not None:
+        raise ValueError(
+            "--execute cannot be combined with --relevance-decision - EMAS relevance review "
+            "recording and identity resolution execution are separate CLI invocations"
+        )
+    if config.decision is not None and config.relevance_decision is not None:
+        raise ValueError(
+            "--decision (identity review) cannot be combined with --relevance-decision (EMAS "
+            "relevance review) - these are two separate, independently governed review "
+            "vocabularies, never recorded in the same call"
+        )
+
+    if config.relevance_decision is not None:
+        if config.relevance_decision not in RELEVANCE_REVIEW_ACTIONS:
+            raise ValueError(
+                f"--relevance-decision must be one of {RELEVANCE_REVIEW_ACTIONS!r}, got {config.relevance_decision!r}"
+            )
+        if config.basis_assessment_id is None:
+            raise ValueError("--basis-assessment-id is required when --relevance-decision is supplied")
+        if not config.reviewer or not config.reviewer.strip():
+            raise ValueError("--reviewer is required when --relevance-decision is supplied")
+        if not config.reason or not config.reason.strip():
+            raise ValueError("--reason is required when --relevance-decision is supplied")
+    elif config.basis_assessment_id is not None:
+        raise ValueError("--basis-assessment-id is only valid when --relevance-decision is supplied")
+    elif config.supersedes_relevance_review_id is not None:
+        raise ValueError("--supersedes-relevance-review-id is only valid when --relevance-decision is supplied")
+
+    if (
+        config.allow_database_write and config.decision is None and not config.execute
+        and config.relevance_decision is None
+    ):
+        raise ValueError("--allow-database-write requires --decision, --execute, or --relevance-decision")
 
 
 def _summarize_review(review: UnknownAirportCandidateReview) -> ReviewSummary:
@@ -427,7 +554,9 @@ def _deterministic_code_matches(session: Session, candidate: UnknownAirportCandi
     return tuple(matches)
 
 
-def _read_candidate_state(session: Session, candidate: UnknownAirportCandidate) -> dict:
+def _read_candidate_state(
+    session: Session, candidate: UnknownAirportCandidate, *, erg_schema_ready: bool,
+) -> dict:
     # UAC-H1 no_autoflush hardening: this entire function is read-only
     # (inspect/preview only, never writes) - wraps it all in
     # session.no_autoflush so it can never trigger a premature flush of
@@ -479,6 +608,20 @@ def _read_candidate_state(session: Session, candidate: UnknownAirportCandidate) 
                 "slice addresses this."
             )
 
+        # ERG5 governance view (ERG2 automatic relevance / ERG3 human
+        # relevance review / ERG4 canonical admission) - composed via the
+        # authoritative read-only view service, never recomputed here.
+        # Only attempted when the ERG2/ERG3 schema is actually migrated
+        # (mission's own SCHEMA-ABSENT COMPATIBILITY requirement): old
+        # identity-only inspection must keep working even against the
+        # real database's own current, not-yet-migrated state.
+        automatic_relevance = human_relevance_review = canonical_admission = None
+        if erg_schema_ready:
+            governance = get_unknown_airport_candidate_governance_view(session, candidate.id)
+            automatic_relevance = governance.automatic_relevance
+            human_relevance_review = governance.human_relevance_review
+            canonical_admission = governance.canonical_admission
+
         result = dict(
             candidate_id=candidate.id, candidate_found=True,
             raw_name=candidate.raw_name, raw_city=candidate.raw_city, raw_state_region=candidate.raw_state_region,
@@ -491,16 +634,18 @@ def _read_candidate_state(session: Session, candidate: UnknownAirportCandidate) 
             linked_assertion_count=len(linked), linked_assertions=linked,
             deterministic_code_matches=_deterministic_code_matches(session, candidate),
             downstream_continuation_note=downstream_note,
+            automatic_relevance=automatic_relevance, human_relevance_review=human_relevance_review,
+            canonical_admission=canonical_admission,
         )
     return result
 
 
 def _run_review_write(
     session: Session, config: UnknownAirportCandidateReviewConfig, candidate: UnknownAirportCandidate,
-    base: dict, database_str: str, schema: dict,
+    base: dict, database_str: str, schema: dict, erg_schema: dict,
 ) -> UnknownAirportCandidateReviewResult:
     kwargs = dict(
-        database=database_str, schema_readiness=schema, **base,
+        database=database_str, schema_readiness=schema, erg_schema_readiness=erg_schema, **base,
         mode="write" if config.allow_database_write else "dry_run",
         proposed_action=config.decision, proposed_reviewer=config.reviewer, proposed_reason=config.reason,
         proposed_matched_airport_id=config.matched_airport_id,
@@ -524,12 +669,51 @@ def _run_review_write(
     )
 
 
+def _run_relevance_review_write(
+    session: Session, config: UnknownAirportCandidateReviewConfig, candidate: UnknownAirportCandidate,
+    base: dict, database_str: str, schema: dict, erg_schema: dict,
+) -> UnknownAirportCandidateReviewResult:
+    """Wires the real, authoritative ERG3
+    record_unknown_airport_candidate_relevance_review() - never
+    reimplemented, never pre-checked (no CLI-side stale-basis/cross-
+    candidate/action-vocabulary logic; the governed function's own
+    ValueError IS the authority, exactly mirroring _run_review_write()'s
+    own established dry-run/write-gate pattern for identity reviews."""
+    kwargs = dict(
+        database=database_str, schema_readiness=schema, erg_schema_readiness=erg_schema, **base,
+        mode="relevance_write" if config.allow_database_write else "relevance_dry_run",
+        proposed_relevance_action=config.relevance_decision,
+        proposed_relevance_basis_assessment_id=config.basis_assessment_id,
+        proposed_relevance_reviewer=config.reviewer, proposed_relevance_reason=config.reason,
+    )
+    try:
+        review = record_unknown_airport_candidate_relevance_review(
+            session, candidate, basis_assessment_id=config.basis_assessment_id, action=config.relevance_decision,
+            reviewer=config.reviewer, reason=config.reason,
+            supersedes_review_id=config.supersedes_relevance_review_id,
+        )
+    except ValueError as exc:
+        session.rollback()
+        return UnknownAirportCandidateReviewResult(
+            **kwargs, relevance_action_eligible=False, relevance_action_refusal_reason=str(exc),
+        )
+
+    if not config.allow_database_write:
+        session.rollback()
+        return UnknownAirportCandidateReviewResult(**kwargs, relevance_action_eligible=True)
+
+    session.commit()
+    return UnknownAirportCandidateReviewResult(
+        **kwargs, relevance_action_eligible=True, relevance_written=True, relevance_written_review_id=review.id,
+    )
+
+
 def _run_execute(
     session: Session, config: UnknownAirportCandidateReviewConfig, candidate: UnknownAirportCandidate,
-    base: dict, database_str: str, schema: dict,
+    base: dict, database_str: str, schema: dict, erg_schema: dict,
 ) -> UnknownAirportCandidateReviewResult:
     kwargs = dict(
-        database=database_str, schema_readiness=schema, **base,
+        database=database_str, schema_readiness=schema, erg_schema_readiness=erg_schema, **base,
         mode="execute_write" if config.allow_database_write else "execute_dry_run",
         execute_review_id=config.review_id,
     )
@@ -609,7 +793,21 @@ def run_review(config: UnknownAirportCandidateReviewConfig) -> UnknownAirportCan
             database=database_str, schema_readiness=schema, blockers=(SCHEMA_MIGRATION_REQUIRED_BLOCKER,),
         )
 
-    writable = config.decision is not None or config.execute
+    # ERG_SCHEMA_MIGRATION_REQUIRED: checked separately from the identity
+    # schema gate above (SCHEMA-ABSENT COMPATIBILITY - the real database
+    # may have the identity schema ready while ERG2/ERG3 are not yet
+    # migrated). Only a HARD blocker for --relevance-decision, which
+    # structurally cannot function without those tables; every other mode
+    # (inspect/--decision/--execute) proceeds regardless, with the
+    # governance-view fields simply left unset - see _read_candidate_state().
+    erg_schema = check_erg_schema_readiness(config.database)
+    if config.relevance_decision is not None and not erg_schema["ready"]:
+        return UnknownAirportCandidateReviewResult(
+            database=database_str, schema_readiness=schema, erg_schema_readiness=erg_schema,
+            blockers=(ERG_SCHEMA_MIGRATION_REQUIRED_BLOCKER,),
+        )
+
+    writable = config.decision is not None or config.execute or config.relevance_decision is not None
     engine = build_engine(config.database, writable=writable)
     try:
         with Session(engine) as session:
@@ -617,21 +815,24 @@ def run_review(config: UnknownAirportCandidateReviewConfig) -> UnknownAirportCan
             if candidate is None:
                 session.rollback()
                 return UnknownAirportCandidateReviewResult(
-                    database=database_str, schema_readiness=schema,
+                    database=database_str, schema_readiness=schema, erg_schema_readiness=erg_schema,
                     blockers=(CANDIDATE_NOT_FOUND_BLOCKER,),
                     candidate_id=config.candidate_id, candidate_found=False,
                 )
 
-            base = _read_candidate_state(session, candidate)
+            base = _read_candidate_state(session, candidate, erg_schema_ready=erg_schema["ready"])
 
             if config.execute:
-                return _run_execute(session, config, candidate, base, database_str, schema)
+                return _run_execute(session, config, candidate, base, database_str, schema, erg_schema)
             if config.decision is not None:
-                return _run_review_write(session, config, candidate, base, database_str, schema)
+                return _run_review_write(session, config, candidate, base, database_str, schema, erg_schema)
+            if config.relevance_decision is not None:
+                return _run_relevance_review_write(session, config, candidate, base, database_str, schema, erg_schema)
 
             session.rollback()
             return UnknownAirportCandidateReviewResult(
-                database=database_str, schema_readiness=schema, mode="inspect", **base,
+                database=database_str, schema_readiness=schema, erg_schema_readiness=erg_schema,
+                mode="inspect", **base,
             )
     finally:
         engine.dispose()
@@ -649,6 +850,8 @@ def _mode_label(result: UnknownAirportCandidateReviewResult) -> str:
         "write": "WRITE - review recorded (committed)",
         "execute_dry_run": "DRY RUN - execute resolution (no write)",
         "execute_write": "WRITE - resolution executed (committed)",
+        "relevance_dry_run": "DRY RUN - record EMAS relevance review (no write)",
+        "relevance_write": "WRITE - EMAS relevance review recorded (committed)",
     }
     return labels.get(result.mode, result.mode)
 
@@ -680,14 +883,14 @@ def render_result(result: UnknownAirportCandidateReviewResult) -> str:
     lines.append(f"  candidate_fingerprint: {result.candidate_fingerprint}")
 
     lines.append("")
-    lines.append("RESOLUTION STATE")
+    lines.append("RESOLUTION STATE (canonical Airport linkage, not relevance)")
     if result.resolved_airport_id is not None:
         lines.append(f"  RESOLVED -> Airport #{result.resolved_airport_id} ({result.resolved_airport_name})")
     else:
-        lines.append("  UNRESOLVED")
+        lines.append("  UNRESOLVED (known only as a candidate, not yet canonical)")
 
     lines.append("")
-    lines.append(f"LATEST REVIEW: {result.latest_review}")
+    lines.append(f"IDENTITY REVIEW STATE - LATEST: {result.latest_review}")
     lines.append(f"REVIEW HISTORY ({len(result.review_history)} total)")
     if not result.review_history:
         lines.append("  (none)")
@@ -707,6 +910,53 @@ def render_result(result: UnknownAirportCandidateReviewResult) -> str:
         )
         if a.raw_relevant_text_excerpt:
             lines.append(f"    text: {a.raw_relevant_text_excerpt!r}")
+
+    lines.append("")
+    if result.erg_schema_readiness is not None and not result.erg_schema_readiness["ready"]:
+        lines.append("AUTOMATIC EMAS RELEVANCE / HUMAN EMAS RELEVANCE REVIEW / CANONICAL ADMISSION (ERG2-4)")
+        lines.append(f"  UNAVAILABLE - {ERG_SCHEMA_MIGRATION_REQUIRED_BLOCKER}: {result.erg_schema_readiness}")
+    else:
+        ar = result.automatic_relevance
+        lines.append("AUTOMATIC EMAS RELEVANCE (ERG2 - machine evaluation, never recomputed here)")
+        if ar is None:
+            lines.append("  NO ASSESSMENT YET")
+        else:
+            lines.append(f"  assessment #{ar.assessment_id} outcome={ar.outcome}")
+            lines.append(f"  is_inventory_relevant: {ar.is_inventory_relevant}")
+            lines.append(f"  is_watch_worthy: {ar.is_watch_worthy}")
+            lines.append(f"  derived canonical-admission relevance (inventory OR watch): {ar.is_canonical_admission_relevant}")
+            lines.append(f"  evidence_classes_matched: {list(ar.evidence_classes_matched)}")
+            lines.append(f"  contradicting_evidence_classes: {list(ar.contradicting_evidence_classes)}")
+            lines.append(f"  evaluator_version: {ar.evaluator_version}")
+            lines.append(f"  created_at: {ar.created_at}")
+            lines.append(f"  linked_source_assertion_ids: {list(ar.linked_source_assertion_ids)}")
+
+        lines.append("")
+        hr = result.human_relevance_review
+        lines.append("HUMAN EMAS RELEVANCE REVIEW (ERG3 - separate from identity review above)")
+        if hr is not None:
+            lines.append(f"  state: {hr.state} (is_current={hr.is_current})")
+            if hr.latest_review_id is not None:
+                qualifier = "" if hr.is_current else " - STALE, NOT current authority"
+                lines.append(
+                    f"  latest recorded review #{hr.latest_review_id}: action={hr.action} "
+                    f"basis_assessment_id={hr.basis_assessment_id} reviewer={hr.reviewer!r} "
+                    f"reason={hr.reason!r} created_at={hr.created_at}{qualifier}"
+                )
+            else:
+                lines.append("  no relevance review has ever been recorded for this candidate")
+
+        lines.append("")
+        ca = result.canonical_admission
+        lines.append("CANONICAL ADMISSION (ERG4 relevance gate)")
+        if ca is not None:
+            lines.append(f"  {'ELIGIBLE' if ca.eligible else 'BLOCKED'} (reason={ca.reason})")
+            lines.append(
+                "  NOTE: ELIGIBLE means the ERG4 relevance gate allows canonical-admission "
+                "consideration - it does NOT mean an Airport has already been created, and does NOT "
+                "mean the separate UAC4 identity-review gate has also passed (see RESOLUTION STATE "
+                "and IDENTITY REVIEW STATE above - both are independently required)."
+            )
 
     lines.append("")
     lines.append(f"DETERMINISTIC CANONICAL-CODE MATCHES ({len(result.deterministic_code_matches)})")
@@ -755,6 +1005,22 @@ def render_result(result: UnknownAirportCandidateReviewResult) -> str:
         elif result.execute_eligible:
             lines.append("  DRY RUN - no write performed (pass --allow-database-write to execute this resolution)")
 
+    if result.proposed_relevance_action is not None:
+        lines.append("")
+        lines.append(f"Proposed EMAS relevance review: {result.proposed_relevance_action}")
+        lines.append(f"  basis_assessment_id: {result.proposed_relevance_basis_assessment_id}")
+        lines.append(f"  reviewer: {result.proposed_relevance_reviewer}")
+        lines.append(f"  reason: {result.proposed_relevance_reason}")
+        lines.append(f"  eligible: {result.relevance_action_eligible}")
+        if result.relevance_action_refusal_reason:
+            lines.append(f"  refused: {result.relevance_action_refusal_reason}")
+        if result.relevance_written:
+            lines.append(f"  WRITTEN: UnknownAirportCandidateRelevanceReview #{result.relevance_written_review_id}")
+        elif result.relevance_action_eligible:
+            lines.append(
+                "  DRY RUN - no write performed (pass --allow-database-write to record this relevance review)"
+            )
+
     return "\n".join(lines) + "\n"
 
 
@@ -785,6 +1051,22 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--new-airport-iata-code", type=str, default=None, dest="new_airport_iata_code")
     parser.add_argument("--new-airport-icao-code", type=str, default=None, dest="new_airport_icao_code")
     parser.add_argument("--new-airport-faa-code", type=str, default=None, dest="new_airport_faa_code")
+    parser.add_argument(
+        "--relevance-decision", choices=RELEVANCE_REVIEW_ACTIONS, default=None, dest="relevance_decision",
+        help="Record an ERG3 EMAS relevance review (separate mode from --decision/--execute - see "
+        "MODE SEPARATION). Requires --basis-assessment-id, --reviewer, --reason.",
+    )
+    parser.add_argument(
+        "--basis-assessment-id", type=int, default=None, dest="basis_assessment_id",
+        help="Required with --relevance-decision: the exact ERG2 assessment id this review is bound "
+        "to. Must be the candidate's CURRENT latest assessment or the governed service refuses "
+        "(StaleBasis) - never silently rebound to the current one.",
+    )
+    parser.add_argument(
+        "--supersedes-relevance-review-id", type=int, default=None, dest="supersedes_relevance_review_id",
+        help="Optional. Only valid with --relevance-decision. Audit annotation only, mirrors "
+        "--supersedes-review-id's own semantics for the separate ERG3 vocabulary.",
+    )
     parser.add_argument("--allow-database-write", action="store_true")
     return parser
 
@@ -800,6 +1082,8 @@ def main(argv: "list[str] | None" = None) -> int:
         new_airport_city=args.new_airport_city, new_airport_state_region=args.new_airport_state_region,
         new_airport_iata_code=args.new_airport_iata_code, new_airport_icao_code=args.new_airport_icao_code,
         new_airport_faa_code=args.new_airport_faa_code,
+        relevance_decision=args.relevance_decision, basis_assessment_id=args.basis_assessment_id,
+        supersedes_relevance_review_id=args.supersedes_relevance_review_id,
         allow_database_write=args.allow_database_write,
     )
     result = run_review(config)
@@ -809,6 +1093,8 @@ def main(argv: "list[str] | None" = None) -> int:
     if result.proposed_action is not None and not result.action_eligible:
         return 1
     if result.execute_review_id is not None and not result.execute_eligible:
+        return 1
+    if result.proposed_relevance_action is not None and not result.relevance_action_eligible:
         return 1
     return 0
 

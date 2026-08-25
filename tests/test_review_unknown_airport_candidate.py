@@ -19,7 +19,7 @@ from app.models import Airport, Installation, PhysicalInstallationIdentity, Runw
 from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
 from app.services.discovery_candidate_fragment import CandidateFragment
 from app.services.discovery_evidence_persistence import DiscoverySourceMetadata, persist_candidate_linked_source_assertion
-from app.services.emas_relevance_evaluation import EmasEvidenceObservation, EvidenceClass
+from app.services.emas_relevance_evaluation import EmasEvidenceObservation, EvidenceClass, ObservationPolarity
 from app.services.fleet_health_check import _build_source_assertion_review_states
 from app.services.fleet_health_review_rules import evaluate_fh_f2, evaluate_fh_f3
 from app.services.unknown_airport_candidate_persistence import (
@@ -37,13 +37,21 @@ import scripts.migrate_unknown_airport_candidates_uac2a as uac2a_migration
 import scripts.review_unknown_airport_candidate as cli_module
 from scripts.review_unknown_airport_candidate import (
     CANDIDATE_NOT_FOUND_BLOCKER,
+    ERG_SCHEMA_MIGRATION_REQUIRED_BLOCKER,
     SCHEMA_MIGRATION_REQUIRED_BLOCKER,
     UnknownAirportCandidateReviewConfig,
     build_engine,
+    check_erg_schema_readiness,
     main,
     render_result,
     run_review,
 )
+import scripts.migrate_unknown_airport_candidate_relevance_assessments_erg2 as erg2_migration
+import scripts.migrate_unknown_airport_candidate_relevance_reviews_erg3 as erg3_migration
+
+CONFIRM = "CONFIRM_EMAS_RELEVANT"
+MARK_NOT = "MARK_NOT_EMAS_RELEVANT"
+DEFER_RELEVANCE = "DEFER_RELEVANCE_REVIEW"
 
 
 def _make_full_db(path):
@@ -138,6 +146,44 @@ def _make_admission_eligible(engine, candidate_id, assertion_ids):
         session.commit()
 
 
+def _persist_assessment(engine, candidate_id, observations, assertion_ids=(), context=None):
+    with Session(engine) as session:
+        candidate = session.get(UnknownAirportCandidate, candidate_id)
+        kwargs = dict(session=session, candidate=candidate, observations=observations, source_assertion_ids=tuple(assertion_ids))
+        result = persist_unknown_airport_candidate_relevance_assessment(**kwargs)
+        session.commit()
+        return result.assessment.id
+
+
+def _record_relevance_review(engine, candidate_id, **kwargs):
+    with Session(engine) as session:
+        candidate = session.get(UnknownAirportCandidate, candidate_id)
+        review = record_unknown_airport_candidate_relevance_review(session, candidate, **kwargs)
+        session.commit()
+        return review.id
+
+
+def _make_erg_pre_migration_db(path):
+    """UAC2A/UAC2B ready, but ERG2/ERG3 tables absent - the exact real
+    production database's own current state at this mission's starting
+    checkpoint (independently confirmed via direct PRAGMA inspection).
+    Builds the full current schema first, then drops only the two ERG
+    tables, leaving everything else (including the ERG2 evidence-link
+    table, which must also go since it FK-references the assessments
+    table) intact."""
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("DROP TABLE unknown_airport_candidate_relevance_assessment_evidence_links")
+    conn.execute("DROP TABLE unknown_airport_candidate_relevance_reviews")
+    conn.execute("DROP TABLE unknown_airport_candidate_relevance_assessments")
+    conn.commit()
+    conn.close()
+    return create_engine(f"sqlite:///{path}")
+
+
 def _canonical_counts(engine):
     with Session(engine) as session:
         return dict(
@@ -217,7 +263,7 @@ class TestInspect:
             candidate = session.get(UnknownAirportCandidate, candidate_id)
             bad = UnknownAirportCandidate(candidate_fingerprint="deadbeef")
             session.add(bad)
-            state = cli_module._read_candidate_state(session, candidate)
+            state = cli_module._read_candidate_state(session, candidate, erg_schema_ready=False)
             assert state["candidate_id"] == candidate_id
             assert state["latest_review"] is None
             assert bad in session.new
@@ -280,7 +326,7 @@ class TestDryRunAndWriteGate:
         candidate_id, _ = _seed_candidate_with_n_assertions(engine)
         engine.dispose()
 
-        with pytest.raises(ValueError, match="requires --decision or --execute"):
+        with pytest.raises(ValueError, match="requires --decision, --execute, or --relevance-decision"):
             run_review(UnknownAirportCandidateReviewConfig(
                 database=db, candidate_id=candidate_id, allow_database_write=True,
             ))
@@ -1143,3 +1189,697 @@ class TestNonexistentDatabaseFileBehavior:
         missing = tmp_path / "does_not_exist.db"
         with pytest.raises(Exception):
             precedent_module.run_review(precedent_module.SignalDispositionReviewConfig(database=missing))
+
+
+# ---------------------------------------------------------------------------
+# ERG5 - operator/CLI governance flow (docs/architecture/rwi-erg5-operator-
+# governance-flow-report.md). Test-matrix letters A-X match the mission's
+# own §32 numbering.
+# ---------------------------------------------------------------------------
+
+
+class TestErg5GovernanceViewInspect:
+    def test_a_no_assessment(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.automatic_relevance is None
+        assert result.human_relevance_review.state == "NO_ASSESSMENT_YET"
+        assert result.canonical_admission.eligible is False
+        assert result.canonical_admission.reason == "NO_RELEVANCE_ASSESSMENT"
+        rendered = render_result(result)
+        assert "NO ASSESSMENT YET" in rendered
+
+    def test_b_anoka_auto_negative_mark_not(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1, raw_name="Anoka County-Blaine Airport")
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.G_GENERIC_RUNWAY_WORK, basis="resurfacing"),),
+            assertion_ids,
+        )
+        _record_relevance_review(
+            engine, candidate_id, basis_assessment_id=assessment_id, action=MARK_NOT,
+            reviewer="human:x", reason="not EMAS related",
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        ar = result.automatic_relevance
+        assert ar.outcome == "RUNWAY_ONLY_NOT_EMAS_RELEVANT"
+        assert ar.is_inventory_relevant is False
+        assert ar.is_watch_worthy is False
+        hr = result.human_relevance_review
+        assert hr.state == "CURRENT"
+        assert hr.action == MARK_NOT
+        assert result.canonical_admission.eligible is False
+        assert result.canonical_admission.reason == "AUTOMATIC_RELEVANCE_NOT_ADMISSION_ELIGIBLE"
+
+    def test_c_anoka_auto_negative_confirm_remains_blocked(self, tmp_path):
+        """The central product rule, visible at the CLI layer: human
+        CONFIRM cannot manufacture EMAS relevance the evaluator did not
+        find."""
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1, raw_name="Anoka County-Blaine Airport")
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.G_GENERIC_RUNWAY_WORK, basis="resurfacing"),),
+            assertion_ids,
+        )
+        _record_relevance_review(
+            engine, candidate_id, basis_assessment_id=assessment_id, action=CONFIRM,
+            reviewer="human:x", reason="looks fine to me",
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.human_relevance_review.state == "CURRENT"
+        assert result.human_relevance_review.action == CONFIRM
+        assert result.canonical_admission.eligible is False
+        assert result.canonical_admission.reason == "AUTOMATIC_RELEVANCE_NOT_ADMISSION_ELIGIBLE"
+
+    def test_d_auto_positive_unreviewed(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.automatic_relevance.is_watch_worthy is True
+        assert result.human_relevance_review.state == "UNREVIEWED"
+        assert result.canonical_admission.eligible is False
+        assert result.canonical_admission.reason == "NO_CURRENT_HUMAN_REVIEW"
+
+    def test_e_auto_positive_defer(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        _record_relevance_review(
+            engine, candidate_id, basis_assessment_id=assessment_id, action=DEFER_RELEVANCE,
+            reviewer="human:x", reason="need more info",
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.human_relevance_review.state == "CURRENT"
+        assert result.human_relevance_review.action == DEFER_RELEVANCE
+        assert result.canonical_admission.eligible is False
+        assert result.canonical_admission.reason == "HUMAN_REVIEW_DEFERRED"
+
+    def test_f_auto_positive_mark_not(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        _record_relevance_review(
+            engine, candidate_id, basis_assessment_id=assessment_id, action=MARK_NOT,
+            reviewer="human:x", reason="out of band knowledge",
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.canonical_admission.eligible is False
+        assert result.canonical_admission.reason == "HUMAN_REVIEW_MARKED_NOT_RELEVANT"
+
+    def test_g_auto_positive_current_confirm_eligible(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        _make_admission_eligible(engine, candidate_id, assertion_ids)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.canonical_admission.eligible is True
+        assert result.canonical_admission.reason == "ELIGIBLE"
+        rendered = render_result(result)
+        assert "does NOT mean an Airport has already been created" in rendered
+
+    def test_h_stale_confirm(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        a1 = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        _record_relevance_review(engine, candidate_id, basis_assessment_id=a1, action=CONFIRM, reviewer="human:x", reason="x")
+        a2 = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="y"),), assertion_ids,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.automatic_relevance.assessment_id == a2
+        hr = result.human_relevance_review
+        assert hr.state == "STALE"
+        assert hr.is_current is False
+        assert hr.action == CONFIRM  # the historical CONFIRM is still shown, just not current
+        assert hr.basis_assessment_id == a1
+        assert result.canonical_admission.eligible is False
+        assert result.canonical_admission.reason == "HUMAN_REVIEW_STALE"
+        rendered = render_result(result)
+        assert "STALE, NOT current authority" in rendered
+
+    def test_i_rediscovery_stale_then_new_confirm_eligible(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        a1 = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        _record_relevance_review(engine, candidate_id, basis_assessment_id=a1, action=CONFIRM, reviewer="human:x", reason="x")
+        a2 = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="y"),), assertion_ids,
+        )
+
+        stale_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert stale_result.canonical_admission.eligible is False
+
+        _record_relevance_review(engine, candidate_id, basis_assessment_id=a2, action=CONFIRM, reviewer="human:x", reason="reconfirmed")
+        engine.dispose()
+
+        eligible_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert eligible_result.human_relevance_review.state == "CURRENT"
+        assert eligible_result.canonical_admission.eligible is True
+
+    def test_j_dormant_inventory_only(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.E_EXISTING_INSTALLATION, basis="x"),), assertion_ids,
+        )
+        _record_relevance_review(engine, candidate_id, basis_assessment_id=assessment_id, action=CONFIRM, reviewer="human:x", reason="x")
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.automatic_relevance.is_inventory_relevant is True
+        assert result.automatic_relevance.is_watch_worthy is False
+        assert result.canonical_admission.eligible is True
+
+    def test_k_watch_only(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        _record_relevance_review(engine, candidate_id, basis_assessment_id=assessment_id, action=CONFIRM, reviewer="human:x", reason="x")
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.automatic_relevance.is_inventory_relevant is False
+        assert result.automatic_relevance.is_watch_worthy is True
+        assert result.canonical_admission.eligible is True
+
+    def test_l_contradictions_displayed_even_with_confirm(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id,
+            (
+                EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),
+                EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="y", polarity=ObservationPolarity.CONTRADICTING),
+            ),
+            assertion_ids,
+        )
+        _record_relevance_review(engine, candidate_id, basis_assessment_id=assessment_id, action=CONFIRM, reviewer="human:x", reason="x")
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert "A_EXPLICIT_EMAS" in result.automatic_relevance.contradicting_evidence_classes
+        rendered = render_result(result)
+        assert "contradicting_evidence_classes: ['A_EXPLICIT_EMAS']" in rendered
+
+    def test_m_evaluator_version_displayed(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.G_GENERIC_RUNWAY_WORK, basis="x"),), assertion_ids,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.automatic_relevance.evaluator_version
+        rendered = render_result(result)
+        assert f"evaluator_version: {result.automatic_relevance.evaluator_version}" in rendered
+
+    def test_n_exact_evidence_link_ids(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=2)
+        _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert set(result.automatic_relevance.linked_source_assertion_ids) == set(assertion_ids)
+
+
+class TestErg5RelevanceReviewRecording:
+    def test_o_stale_basis_ux_honest_refusal_names_current_id(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        a1 = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        a2 = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="y"),), assertion_ids,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=CONFIRM, basis_assessment_id=a1,
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+        assert result.relevance_action_eligible is False
+        assert str(a2) in result.relevance_action_refusal_reason
+        assert "stale" in result.relevance_action_refusal_reason.lower() or "current latest" in result.relevance_action_refusal_reason.lower()
+
+    def test_p_cross_candidate_basis_review_attempt_refused(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_a_id, assertions_a = _seed_candidate_with_n_assertions(engine, n=1, raw_name="Candidate A")
+        candidate_b_id, assertions_b = _seed_candidate_with_n_assertions(engine, n=1, raw_name="Candidate B")
+        assessment_b = _persist_assessment(
+            engine, candidate_b_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertions_b,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_a_id, relevance_decision=CONFIRM, basis_assessment_id=assessment_b,
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+        assert result.relevance_action_eligible is False
+        assert "different candidate" in result.relevance_action_refusal_reason
+
+    def test_q_dry_run_writes_zero_rows(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=CONFIRM, basis_assessment_id=assessment_id,
+            reviewer="human:x", reason="x",
+        ))
+        assert result.relevance_action_eligible is True
+        assert result.relevance_written is False
+
+        with Session(create_engine(f"sqlite:///{db}")) as session:
+            from app.models.unknown_airport_candidate_relevance_review import UnknownAirportCandidateRelevanceReview
+            assert session.query(UnknownAirportCandidateRelevanceReview).count() == 0
+
+    def test_r_authorized_write_appends_exactly_one_review(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=CONFIRM, basis_assessment_id=assessment_id,
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+        assert result.relevance_written is True
+        assert result.relevance_written_review_id is not None
+
+        with Session(create_engine(f"sqlite:///{db}")) as session:
+            from app.models.unknown_airport_candidate_relevance_review import UnknownAirportCandidateRelevanceReview
+            reviews = session.query(UnknownAirportCandidateRelevanceReview).all()
+            assert len(reviews) == 1
+            assert reviews[0].action == CONFIRM
+
+    def test_action_vocabulary_rejects_identity_review_action(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        engine.dispose()
+
+        with pytest.raises(ValueError, match="--relevance-decision must be one of"):
+            run_review(UnknownAirportCandidateReviewConfig(
+                database=db, candidate_id=candidate_id, relevance_decision="MATCH_EXISTING_AIRPORT",
+                basis_assessment_id=assessment_id, reviewer="human:x", reason="x",
+            ))
+
+
+class TestErg5SameBasisMultiReview:
+    def test_s_defer_then_confirm_same_basis_shows_current_confirm(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=DEFER_RELEVANCE, basis_assessment_id=assessment_id,
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=CONFIRM, basis_assessment_id=assessment_id,
+            reviewer="human:y", reason="reconsidered", allow_database_write=True,
+        ))
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.human_relevance_review.state == "CURRENT"
+        assert result.human_relevance_review.action == CONFIRM
+        assert result.canonical_admission.eligible is True
+
+    def test_confirm_then_mark_not_same_basis_shows_current_mark_not(self, tmp_path):
+        """Mission's own §9 second half: the REVERSE direction (CONFIRM
+        then MARK_NOT, same basis) - a human reversing an earlier CONFIRM
+        must also correctly flip canonical_admission back to BLOCKED."""
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=CONFIRM, basis_assessment_id=assessment_id,
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=MARK_NOT, basis_assessment_id=assessment_id,
+            reviewer="human:y", reason="reconsidered, not relevant after all", allow_database_write=True,
+        ))
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.human_relevance_review.state == "CURRENT"
+        assert result.human_relevance_review.action == MARK_NOT
+        assert result.canonical_admission.eligible is False
+        assert result.canonical_admission.reason == "HUMAN_REVIEW_MARKED_NOT_RELEVANT"
+
+
+class TestErg5IdentityVsRelevanceSeparation:
+    def test_t_relevance_eligible_but_identity_defer_still_blocks_execution(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        _make_admission_eligible(engine, candidate_id, assertion_ids)
+        identity_review_id = _record_review(engine, candidate_id, action="DEFER", reason="still checking", reviewer="human:x")
+        engine.dispose()
+
+        inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert inspect_result.canonical_admission.eligible is True
+        assert inspect_result.latest_review.action == "DEFER"
+
+        execute_result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, execute=True, review_id=identity_review_id,
+            new_airport_name="Foo", new_airport_country="XX", allow_database_write=True,
+        ))
+        assert execute_result.execute_eligible is False
+        assert "REJECT_CANDIDATE or DEFER" not in (execute_result.execute_refusal_reason or "")
+        assert execute_result.execute_action == "DEFER"
+
+    def test_no_flattening_into_one_approved_flag(self, tmp_path):
+        """The output contract itself must keep identity review state,
+        relevance review state, and canonical admission as three
+        independently-readable fields - never collapsed into a single
+        boolean."""
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        _make_admission_eligible(engine, candidate_id, assertion_ids)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert result.latest_review is None  # no identity review recorded at all
+        assert result.canonical_admission.eligible is True  # relevance gate alone
+        assert result.resolved_airport_id is None  # not actually admitted
+
+
+class TestErg5SchemaAbsent:
+    def test_u_inspect_works_cleanly_with_erg_schema_absent(self, tmp_path):
+        db = tmp_path / "erg_absent.db"
+        engine = _make_erg_pre_migration_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert not result.blockers
+        assert result.erg_schema_readiness["ready"] is False
+        assert result.automatic_relevance is None
+        assert result.human_relevance_review is None
+        assert result.canonical_admission is None
+        rendered = render_result(result)
+        assert ERG_SCHEMA_MIGRATION_REQUIRED_BLOCKER in rendered
+
+    def test_u_relevance_decision_hard_blocked_when_erg_schema_absent(self, tmp_path):
+        db = tmp_path / "erg_absent2.db"
+        engine = _make_erg_pre_migration_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=CONFIRM, basis_assessment_id=1,
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+        assert result.blockers == (ERG_SCHEMA_MIGRATION_REQUIRED_BLOCKER,)
+
+    def test_u_identity_review_and_execute_still_work_when_erg_schema_absent(self, tmp_path):
+        """Old identity-only CLI functionality must not catastrophically
+        break just because ERG2/ERG3 are not yet migrated."""
+        db = tmp_path / "erg_absent3.db"
+        engine = _make_erg_pre_migration_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, decision="DEFER", reviewer="human:x", reason="x",
+            allow_database_write=True,
+        ))
+        assert result.written is True
+        assert result.automatic_relevance is None
+
+
+class TestErg5PartialOrMalformedSchemaAttack:
+    """Mission's own §18: partial/malformed ERG schema states must never
+    be misreported as ready, must fail closed, and must never be
+    silently repaired."""
+
+    def test_a_erg2_present_erg3_absent(self, tmp_path):
+        db = tmp_path / "partial_a.db"
+        engine = create_engine(f"sqlite:///{db}")
+        Base.metadata.create_all(engine)
+        engine.dispose()
+        conn = sqlite3.connect(str(db))
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE unknown_airport_candidate_relevance_reviews")
+        conn.commit()
+        conn.close()
+
+        readiness = check_erg_schema_readiness(db)
+        assert readiness == {"erg2_ready": True, "erg3_ready": False, "ready": False}
+
+    def test_b_erg3_present_erg2_absent(self, tmp_path):
+        db = tmp_path / "partial_b.db"
+        engine = create_engine(f"sqlite:///{db}")
+        Base.metadata.create_all(engine)
+        engine.dispose()
+        conn = sqlite3.connect(str(db))
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE unknown_airport_candidate_relevance_assessment_evidence_links")
+        conn.execute("DROP TABLE unknown_airport_candidate_relevance_assessments")
+        conn.commit()
+        conn.close()
+
+        readiness = check_erg_schema_readiness(db)
+        assert readiness == {"erg2_ready": False, "erg3_ready": True, "ready": False}
+
+    def test_c_erg2_malformed_missing_column(self, tmp_path):
+        db = tmp_path / "malformed_c.db"
+        engine = create_engine(f"sqlite:///{db}")
+        Base.metadata.create_all(engine)
+        engine.dispose()
+        conn = sqlite3.connect(str(db))
+        conn.execute("ALTER TABLE unknown_airport_candidate_relevance_assessments DROP COLUMN evaluator_version")
+        conn.commit()
+        conn.close()
+
+        readiness = check_erg_schema_readiness(db)
+        assert readiness["erg2_ready"] is False
+        assert readiness["ready"] is False
+
+    def test_d_erg3_malformed_missing_column(self, tmp_path):
+        db = tmp_path / "malformed_d.db"
+        engine = create_engine(f"sqlite:///{db}")
+        Base.metadata.create_all(engine)
+        engine.dispose()
+        conn = sqlite3.connect(str(db))
+        conn.execute("ALTER TABLE unknown_airport_candidate_relevance_reviews DROP COLUMN reason")
+        conn.commit()
+        conn.close()
+
+        readiness = check_erg_schema_readiness(db)
+        assert readiness["erg3_ready"] is False
+        assert readiness["ready"] is False
+
+    def test_partial_schema_relevance_decision_still_hard_blocked_no_crash(self, tmp_path):
+        """End-to-end through run_review(): a partial (not fully absent)
+        ERG schema must still hard-block --relevance-decision cleanly,
+        never leak an OperationalError, never attempt a partial write."""
+        db = tmp_path / "partial_e2e.db"
+        engine = create_engine(f"sqlite:///{db}")
+        Base.metadata.create_all(engine)
+        engine.dispose()
+        conn = sqlite3.connect(str(db))
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE unknown_airport_candidate_relevance_reviews")
+        conn.commit()
+        conn.close()
+
+        engine2 = create_engine(f"sqlite:///{db}")
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine2, n=1)
+        engine2.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=CONFIRM, basis_assessment_id=1,
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+        assert result.blockers == (ERG_SCHEMA_MIGRATION_REQUIRED_BLOCKER,)
+
+        # Plain inspect must also stay safe (governance fields left None,
+        # not a partial/misleading ERG2-only view).
+        inspect_result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert not inspect_result.blockers
+        assert inspect_result.automatic_relevance is None
+        assert inspect_result.human_relevance_review is None
+        assert inspect_result.canonical_admission is None
+
+
+class TestErg5NoAutoflush:
+    def test_v_inspect_does_not_leak_on_unrelated_invalid_pending_object(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        _make_admission_eligible(engine, candidate_id, assertion_ids)
+
+        with Session(engine) as session:
+            candidate = session.get(UnknownAirportCandidate, candidate_id)
+            candidate_id_captured = candidate.id  # captured before unrelated pending state
+            bad = UnknownAirportCandidate(candidate_fingerprint="deadbeef")
+            session.add(bad)
+            from app.services.unknown_airport_candidate_governance_view import get_unknown_airport_candidate_governance_view
+            view = get_unknown_airport_candidate_governance_view(session, candidate_id_captured)
+            assert view.canonical_admission.eligible is True
+            assert bad in session.new
+        engine.dispose()
+
+    def test_v_relevance_review_write_precondition_phase_does_not_leak(self, tmp_path):
+        """Attacks the PRECONDITION-CHECK phase specifically (an invalid
+        basis_assessment_id, so the function raises its own governed
+        ValueError before ever reaching its own intentional write flush)
+        - a genuinely successful write's own flush legitimately DOES
+        flush bad's violation too (repository-standard "no swallowing of
+        real write errors" behavior, already proven at the service layer
+        by ERG3's own test suite), so that is not what this test attacks."""
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.A_EXPLICIT_EMAS, basis="x"),), assertion_ids,
+        )
+
+        with Session(engine) as session:
+            candidate = session.get(UnknownAirportCandidate, candidate_id)
+            bad = UnknownAirportCandidate(candidate_fingerprint="deadbeef")
+            session.add(bad)
+            with pytest.raises(ValueError, match="does not exist"):
+                record_unknown_airport_candidate_relevance_review(
+                    session, candidate, basis_assessment_id=999999, action=CONFIRM,
+                    reviewer="human:x", reason="x",
+                )
+            assert bad in session.new
+        engine.dispose()
+
+
+class TestErg5SignalInstallationFirewall:
+    def test_x_no_signal_or_installation_created_across_full_flow(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        before = _canonical_counts(engine)
+
+        assessment_id = _persist_assessment(
+            engine, candidate_id, (EmasEvidenceObservation(EvidenceClass.E_EXISTING_INSTALLATION, basis="x"),), assertion_ids,
+        )
+        run_review(UnknownAirportCandidateReviewConfig(
+            database=db, candidate_id=candidate_id, relevance_decision=CONFIRM, basis_assessment_id=assessment_id,
+            reviewer="human:x", reason="x", allow_database_write=True,
+        ))
+        run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        engine.dispose()
+
+        after = _canonical_counts(create_engine(f"sqlite:///{db}"))
+        assert after["installations"] == before["installations"]
+        assert after["signals"] == before["signals"]
+        assert after["runways"] == before["runways"]
+
+    def test_no_signal_eligible_field_invented(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, assertion_ids = _seed_candidate_with_n_assertions(engine, n=1)
+        _make_admission_eligible(engine, candidate_id, assertion_ids)
+        engine.dispose()
+
+        result = run_review(UnknownAirportCandidateReviewConfig(database=db, candidate_id=candidate_id))
+        assert not hasattr(result, "signal_eligible")
+        assert not hasattr(result.canonical_admission, "signal_eligible")
+
+
+class TestErg5DirectGovernanceReuse:
+    def test_no_duplicated_latest_ordering_or_admission_rule_in_cli_source(self):
+        import scripts.review_unknown_airport_candidate as cli_mod
+
+        source = inspect_module.getsource(cli_mod)
+        # The CLI module itself must never construct an ORDER BY over
+        # relevance assessments/reviews, nor re-derive the inventory-OR-
+        # watch admission rule - both must come only from the imported
+        # governance view / ERG2 / ERG3 / ERG4 helpers.
+        assert "is_inventory_relevant or" not in source
+        assert "is_watch_worthy or" not in source
+        assert "UnknownAirportCandidateRelevanceAssessment)" not in source
+        assert "UnknownAirportCandidateRelevanceReview)" not in source
+
+    def test_governance_view_module_never_imports_signal_or_installation(self):
+        import app.services.unknown_airport_candidate_governance_view as view_mod
+
+        tree = ast.parse(inspect_module.getsource(view_mod))
+        imported_names = set()
+        imported_modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                imported_modules.add(node.module or "")
+                imported_names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.Import):
+                imported_modules.update(alias.name for alias in node.names)
+
+        assert "Signal" not in imported_names
+        assert "Installation" not in imported_names
+        assert not any("unknown_airport_discovery_integration" in m for m in imported_modules)
+        assert not any("identity_guard" in m for m in imported_modules)
