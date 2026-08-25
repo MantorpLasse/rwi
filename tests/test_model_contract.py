@@ -24,6 +24,8 @@ from app.models import (
     SourceAssertionEvidenceBag,
     Snapshot,
     UnknownAirportCandidate,
+    UnknownAirportCandidateRelevanceAssessment,
+    UnknownAirportCandidateRelevanceAssessmentEvidenceLink,
     UnknownAirportCandidateReview,
 )
 
@@ -313,6 +315,23 @@ EXPECTED_COLUMNS = {
         "reason": ("TEXT", False, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
+    "unknown_airport_candidate_relevance_assessments": {
+        "id": ("INTEGER", False, None, None),
+        "candidate_id": ("INTEGER", False, None, None),
+        "outcome": ("VARCHAR(30)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "evidence_classes_matched_json": ("TEXT", False, None, None),
+        "contradicting_evidence_classes_json": ("TEXT", False, None, None),
+        "is_inventory_relevant": ("BOOLEAN", False, None, None),
+        "is_watch_worthy": ("BOOLEAN", False, None, None),
+        "evaluator_version": ("VARCHAR(20)", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+    },
+    "unknown_airport_candidate_relevance_assessment_evidence_links": {
+        "id": ("INTEGER", False, None, None),
+        "assessment_id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -391,6 +410,13 @@ EXPECTED_FOREIGN_KEYS = {
         ("evidence_bag_snapshot_id", "source_assertion_evidence_bags.id"),
         ("evaluated_against_airport_id", "airports.id"),
         ("triggering_review_id", "unknown_airport_candidate_reviews.id"),
+    },
+    "unknown_airport_candidate_relevance_assessments": {
+        ("candidate_id", "unknown_airport_candidates.id"),
+    },
+    "unknown_airport_candidate_relevance_assessment_evidence_links": {
+        ("assessment_id", "unknown_airport_candidate_relevance_assessments.id"),
+        ("source_assertion_id", "source_assertions.id"),
     },
 }
 
@@ -499,6 +525,13 @@ EXPECTED_INDEXES = {
         ("ix_identity_guard_evaluations_evidence_bag_snapshot_id", ("evidence_bag_snapshot_id",), False),
         ("ix_identity_guard_evaluations_evaluated_against_airport_id", ("evaluated_against_airport_id",), False),
         ("ix_identity_guard_evaluations_triggering_review_id", ("triggering_review_id",), False),
+    },
+    "unknown_airport_candidate_relevance_assessments": {
+        ("ix_unknown_airport_candidate_relevance_assessments_candidate_id", ("candidate_id",), False),
+    },
+    "unknown_airport_candidate_relevance_assessment_evidence_links": {
+        ("ix_unknown_airport_candidate_relevance_assessment_evidence_links_assessment_id", ("assessment_id",), False),
+        ("ix_unknown_airport_candidate_relevance_assessment_evidence_links_source_assertion_id", ("source_assertion_id",), False),
     },
 }
 
@@ -615,6 +648,13 @@ EXPECTED_RELATIONSHIPS = {
         "evaluated_against_airport": ("Airport", None, DEFAULT_CASCADE),
         "triggering_review": ("UnknownAirportCandidateReview", None, DEFAULT_CASCADE),
     },
+    "UnknownAirportCandidateRelevanceAssessment": {
+        "candidate": ("UnknownAirportCandidate", None, DEFAULT_CASCADE),
+    },
+    "UnknownAirportCandidateRelevanceAssessmentEvidenceLink": {
+        "assessment": ("UnknownAirportCandidateRelevanceAssessment", None, DEFAULT_CASCADE),
+        "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+    },
 }
 
 
@@ -650,6 +690,8 @@ def test_all_current_models_are_exported_from_app_models():
         SourceAssertionEvidenceBag.__name__,
         Snapshot.__name__,
         UnknownAirportCandidate.__name__,
+        UnknownAirportCandidateRelevanceAssessment.__name__,
+        UnknownAirportCandidateRelevanceAssessmentEvidenceLink.__name__,
         UnknownAirportCandidateReview.__name__,
     ] == [
         "Airport",
@@ -672,6 +714,8 @@ def test_all_current_models_are_exported_from_app_models():
         "SourceAssertionEvidenceBag",
         "Snapshot",
         "UnknownAirportCandidate",
+        "UnknownAirportCandidateRelevanceAssessment",
+        "UnknownAirportCandidateRelevanceAssessmentEvidenceLink",
         "UnknownAirportCandidateReview",
     ]
 

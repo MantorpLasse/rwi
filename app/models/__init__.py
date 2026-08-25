@@ -13,6 +13,10 @@ from app.models.signal_disposition import SignalDisposition, SignalDispositionMe
 from app.models.unknown_airport_candidate import UnknownAirportCandidate, UnknownAirportCandidateReview
 from app.models.source_assertion_evidence_bag import SourceAssertionEvidenceBag
 from app.models.identity_guard_evaluation import IdentityGuardEvaluation
+from app.models.unknown_airport_candidate_relevance_assessment import (
+    UnknownAirportCandidateRelevanceAssessment,
+    UnknownAirportCandidateRelevanceAssessmentEvidenceLink,
+)
 
 __all__ = [
     "Airport",
@@ -36,5 +40,7 @@ __all__ = [
     "SourceAssertionEvidenceBag",
     "Snapshot",
     "UnknownAirportCandidate",
+    "UnknownAirportCandidateRelevanceAssessment",
+    "UnknownAirportCandidateRelevanceAssessmentEvidenceLink",
     "UnknownAirportCandidateReview",
 ]
