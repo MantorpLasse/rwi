@@ -26,6 +26,7 @@ from app.models import (
     UnknownAirportCandidate,
     UnknownAirportCandidateRelevanceAssessment,
     UnknownAirportCandidateRelevanceAssessmentEvidenceLink,
+    UnknownAirportCandidateRelevanceReview,
     UnknownAirportCandidateReview,
 )
 
@@ -332,6 +333,16 @@ EXPECTED_COLUMNS = {
         "assessment_id": ("INTEGER", False, None, None),
         "source_assertion_id": ("INTEGER", False, None, None),
     },
+    "unknown_airport_candidate_relevance_reviews": {
+        "id": ("INTEGER", False, None, None),
+        "candidate_id": ("INTEGER", False, None, None),
+        "basis_assessment_id": ("INTEGER", False, None, None),
+        "action": ("VARCHAR(30)", False, None, None),
+        "reviewer": ("VARCHAR(100)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_review_id": ("INTEGER", True, None, None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -417,6 +428,11 @@ EXPECTED_FOREIGN_KEYS = {
     "unknown_airport_candidate_relevance_assessment_evidence_links": {
         ("assessment_id", "unknown_airport_candidate_relevance_assessments.id"),
         ("source_assertion_id", "source_assertions.id"),
+    },
+    "unknown_airport_candidate_relevance_reviews": {
+        ("candidate_id", "unknown_airport_candidates.id"),
+        ("basis_assessment_id", "unknown_airport_candidate_relevance_assessments.id"),
+        ("supersedes_review_id", "unknown_airport_candidate_relevance_reviews.id"),
     },
 }
 
@@ -532,6 +548,11 @@ EXPECTED_INDEXES = {
     "unknown_airport_candidate_relevance_assessment_evidence_links": {
         ("ix_unknown_airport_candidate_relevance_assessment_evidence_links_assessment_id", ("assessment_id",), False),
         ("ix_unknown_airport_candidate_relevance_assessment_evidence_links_source_assertion_id", ("source_assertion_id",), False),
+    },
+    "unknown_airport_candidate_relevance_reviews": {
+        ("ix_unknown_airport_candidate_relevance_reviews_candidate_id", ("candidate_id",), False),
+        ("ix_unknown_airport_candidate_relevance_reviews_basis_assessment_id", ("basis_assessment_id",), False),
+        ("ix_unknown_airport_candidate_relevance_reviews_supersedes_review_id", ("supersedes_review_id",), False),
     },
 }
 
@@ -655,6 +676,11 @@ EXPECTED_RELATIONSHIPS = {
         "assessment": ("UnknownAirportCandidateRelevanceAssessment", None, DEFAULT_CASCADE),
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
     },
+    "UnknownAirportCandidateRelevanceReview": {
+        "candidate": ("UnknownAirportCandidate", None, DEFAULT_CASCADE),
+        "basis_assessment": ("UnknownAirportCandidateRelevanceAssessment", None, DEFAULT_CASCADE),
+        "supersedes": ("UnknownAirportCandidateRelevanceReview", None, DEFAULT_CASCADE),
+    },
 }
 
 
@@ -692,6 +718,7 @@ def test_all_current_models_are_exported_from_app_models():
         UnknownAirportCandidate.__name__,
         UnknownAirportCandidateRelevanceAssessment.__name__,
         UnknownAirportCandidateRelevanceAssessmentEvidenceLink.__name__,
+        UnknownAirportCandidateRelevanceReview.__name__,
         UnknownAirportCandidateReview.__name__,
     ] == [
         "Airport",
@@ -716,6 +743,7 @@ def test_all_current_models_are_exported_from_app_models():
         "UnknownAirportCandidate",
         "UnknownAirportCandidateRelevanceAssessment",
         "UnknownAirportCandidateRelevanceAssessmentEvidenceLink",
+        "UnknownAirportCandidateRelevanceReview",
         "UnknownAirportCandidateReview",
     ]
 

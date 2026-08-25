@@ -17,6 +17,7 @@ from app.models.unknown_airport_candidate_relevance_assessment import (
     UnknownAirportCandidateRelevanceAssessment,
     UnknownAirportCandidateRelevanceAssessmentEvidenceLink,
 )
+from app.models.unknown_airport_candidate_relevance_review import UnknownAirportCandidateRelevanceReview
 
 __all__ = [
     "Airport",
@@ -42,5 +43,6 @@ __all__ = [
     "UnknownAirportCandidate",
     "UnknownAirportCandidateRelevanceAssessment",
     "UnknownAirportCandidateRelevanceAssessmentEvidenceLink",
+    "UnknownAirportCandidateRelevanceReview",
     "UnknownAirportCandidateReview",
 ]
