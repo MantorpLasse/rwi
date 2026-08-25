@@ -428,63 +428,71 @@ def _deterministic_code_matches(session: Session, candidate: UnknownAirportCandi
 
 
 def _read_candidate_state(session: Session, candidate: UnknownAirportCandidate) -> dict:
-    reviews = (
-        session.query(UnknownAirportCandidateReview)
-        .filter(UnknownAirportCandidateReview.candidate_id == candidate.id)
-        .order_by(UnknownAirportCandidateReview.created_at.asc(), UnknownAirportCandidateReview.id.asc())
-        .all()
-    )
-    review_history = tuple(_summarize_review(r) for r in reviews)
-    latest = get_latest_unknown_airport_candidate_review(session, candidate.id)
-    latest_summary = _summarize_review(latest) if latest is not None else None
-
-    assertions = (
-        session.query(SourceAssertion)
-        .filter(SourceAssertion.unknown_airport_candidate_id == candidate.id)
-        .order_by(SourceAssertion.id.asc())
-        .all()
-    )
-    linked = tuple(
-        LinkedAssertionSummary(
-            source_assertion_id=a.id, source_locator=a.source_locator, artifact_identity=a.artifact_identity,
-            raw_relevant_text_excerpt=((a.raw_relevant_text or "")[:200] or None),
-            identity_guard_decision=a.identity_guard_decision,
+    # UAC-H1 no_autoflush hardening: this entire function is read-only
+    # (inspect/preview only, never writes) - wraps it all in
+    # session.no_autoflush so it can never trigger a premature flush of
+    # some unrelated pending object the caller happens to be holding in
+    # the same session, matching get_latest_unknown_airport_candidate_review()'s
+    # own hardening (app.services.unknown_airport_candidate_persistence).
+    with session.no_autoflush:
+        reviews = (
+            session.query(UnknownAirportCandidateReview)
+            .filter(UnknownAirportCandidateReview.candidate_id == candidate.id)
+            .order_by(UnknownAirportCandidateReview.created_at.asc(), UnknownAirportCandidateReview.id.asc())
+            .all()
         )
-        for a in assertions
-    )
+        review_history = tuple(_summarize_review(r) for r in reviews)
+        latest = get_latest_unknown_airport_candidate_review(session, candidate.id)
+        latest_summary = _summarize_review(latest) if latest is not None else None
 
-    resolved_airport_name = None
-    if candidate.resolved_airport_id is not None:
-        resolved = session.get(Airport, candidate.resolved_airport_id)
-        resolved_airport_name = resolved.name if resolved is not None else None
-
-    downstream_note = None
-    if candidate.resolved_airport_id is not None:
-        downstream_note = (
-            "This candidate is resolved - LINKED EVIDENCE above is now empty because resolution "
-            "clears unknown_airport_candidate_id on every moved SourceAssertion (see Airport "
-            f"#{candidate.resolved_airport_id}'s own source_assertions for that evidence now). "
-            "Formerly candidate-linked evidence now carries airport_id but identity_guard_decision "
-            "remains INSUFFICIENT_IDENTITY (never re-evaluated - see the UAC5 report's "
-            "guard-replay-feasibility finding: faithful replay is not currently possible with the "
-            "evidence persisted for this candidate). This evidence will not reach "
-            "intelligence-review/promotion/Signal creation until a future, separately-designed "
-            "slice addresses this."
+        assertions = (
+            session.query(SourceAssertion)
+            .filter(SourceAssertion.unknown_airport_candidate_id == candidate.id)
+            .order_by(SourceAssertion.id.asc())
+            .all()
+        )
+        linked = tuple(
+            LinkedAssertionSummary(
+                source_assertion_id=a.id, source_locator=a.source_locator, artifact_identity=a.artifact_identity,
+                raw_relevant_text_excerpt=((a.raw_relevant_text or "")[:200] or None),
+                identity_guard_decision=a.identity_guard_decision,
+            )
+            for a in assertions
         )
 
-    return dict(
-        candidate_id=candidate.id, candidate_found=True,
-        raw_name=candidate.raw_name, raw_city=candidate.raw_city, raw_state_region=candidate.raw_state_region,
-        raw_country=candidate.raw_country, raw_iata_code=candidate.raw_iata_code,
-        raw_icao_code=candidate.raw_icao_code, raw_faa_lid=candidate.raw_faa_lid,
-        raw_runway_designation=candidate.raw_runway_designation,
-        candidate_fingerprint=candidate.candidate_fingerprint,
-        resolved_airport_id=candidate.resolved_airport_id, resolved_airport_name=resolved_airport_name,
-        review_history=review_history, latest_review=latest_summary,
-        linked_assertion_count=len(linked), linked_assertions=linked,
-        deterministic_code_matches=_deterministic_code_matches(session, candidate),
-        downstream_continuation_note=downstream_note,
-    )
+        resolved_airport_name = None
+        if candidate.resolved_airport_id is not None:
+            resolved = session.get(Airport, candidate.resolved_airport_id)
+            resolved_airport_name = resolved.name if resolved is not None else None
+
+        downstream_note = None
+        if candidate.resolved_airport_id is not None:
+            downstream_note = (
+                "This candidate is resolved - LINKED EVIDENCE above is now empty because resolution "
+                "clears unknown_airport_candidate_id on every moved SourceAssertion (see Airport "
+                f"#{candidate.resolved_airport_id}'s own source_assertions for that evidence now). "
+                "Formerly candidate-linked evidence now carries airport_id but identity_guard_decision "
+                "remains INSUFFICIENT_IDENTITY (never re-evaluated - see the UAC5 report's "
+                "guard-replay-feasibility finding: faithful replay is not currently possible with the "
+                "evidence persisted for this candidate). This evidence will not reach "
+                "intelligence-review/promotion/Signal creation until a future, separately-designed "
+                "slice addresses this."
+            )
+
+        result = dict(
+            candidate_id=candidate.id, candidate_found=True,
+            raw_name=candidate.raw_name, raw_city=candidate.raw_city, raw_state_region=candidate.raw_state_region,
+            raw_country=candidate.raw_country, raw_iata_code=candidate.raw_iata_code,
+            raw_icao_code=candidate.raw_icao_code, raw_faa_lid=candidate.raw_faa_lid,
+            raw_runway_designation=candidate.raw_runway_designation,
+            candidate_fingerprint=candidate.candidate_fingerprint,
+            resolved_airport_id=candidate.resolved_airport_id, resolved_airport_name=resolved_airport_name,
+            review_history=review_history, latest_review=latest_summary,
+            linked_assertion_count=len(linked), linked_assertions=linked,
+            deterministic_code_matches=_deterministic_code_matches(session, candidate),
+            downstream_continuation_note=downstream_note,
+        )
+    return result
 
 
 def _run_review_write(

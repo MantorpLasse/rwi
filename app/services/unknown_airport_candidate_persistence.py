@@ -264,12 +264,33 @@ def get_latest_unknown_airport_candidate_review(
     candidate.resolved_airport_id, and is not the not-yet-built
     governed resolution service (design doc §8) that will eventually
     consume it.
+
+    UAC-H1 no_autoflush hardening: wrapped in `session.no_autoflush`
+    (the same pattern ERG2/ERG3/ERG4's own "latest" read helpers already
+    use) - a purely read-only helper must never trigger a premature
+    flush of some unrelated pending object the caller happens to be
+    holding in the same session. Independently reproduced before this
+    fix: a caller holding an unrelated, invalid, pending ORM object in
+    the same session (e.g. a half-built row from an earlier step) would
+    have that object's own constraint violation raised HERE, at this
+    function's own read, instead of being left pending until the
+    caller's actual intended flush/commit. SCOPE, stated precisely (do
+    not over-claim): this guard protects only THIS function's own
+    internal query - it does not and cannot protect a caller who reads
+    an expired `candidate.id` attribute as the argument expression
+    BEFORE calling this function (that read happens in the caller's own
+    scope, not this function's); see
+    app.services.unknown_airport_candidate_resolution._require_current_review()
+    and scripts/review_unknown_airport_candidate.py's own
+    `_read_candidate_state()` for the two call sites hardened against
+    that separate, caller-side risk.
     """
-    reviews = (
-        session.query(UnknownAirportCandidateReview)
-        .filter(UnknownAirportCandidateReview.candidate_id == candidate_id)
-        .order_by(UnknownAirportCandidateReview.created_at.desc(), UnknownAirportCandidateReview.id.desc())
-        .limit(1)
-        .all()
-    )
+    with session.no_autoflush:
+        reviews = (
+            session.query(UnknownAirportCandidateReview)
+            .filter(UnknownAirportCandidateReview.candidate_id == candidate_id)
+            .order_by(UnknownAirportCandidateReview.created_at.desc(), UnknownAirportCandidateReview.id.desc())
+            .limit(1)
+            .all()
+        )
     return reviews[0] if reviews else None

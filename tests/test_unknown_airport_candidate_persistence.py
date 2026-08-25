@@ -1021,6 +1021,76 @@ class TestOrderingDeterminism:
 
 
 # ---------------------------------------------------------------------------
+# UAC-H1: get_latest_unknown_airport_candidate_review() no_autoflush
+# hardening (docs/architecture/rwi-uac-h1-unknown-airport-review-no-
+# autoflush-hardening-report.md). Independently reproduced, pre-existing
+# defect: this pure read helper performed a bare session.query() with no
+# session.no_autoflush guard, so a caller holding an unrelated, invalid,
+# pending ORM object in the same session would have THAT object's own
+# constraint violation raised here, at this function's own read, instead
+# of being left pending until the caller's actual intended commit -
+# reproducible via the ERG4 adversarial review, and independently via the
+# untouched MATCH_EXISTING_AIRPORT path (see
+# tests/test_unknown_airport_candidate_resolution.py's own
+# TestUacH1NoAutoflushHardening for the full-caller-chain proof).
+# ---------------------------------------------------------------------------
+
+
+class TestGetLatestReviewNoAutoflushHardening:
+    def test_unrelated_invalid_pending_object_does_not_leak(self):
+        _, session = make_session()
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_regional_kwargs()).candidate
+        session.commit()
+        record_unknown_airport_candidate_review(session, candidate, action="DEFER", reason="x", reviewer="human:x")
+        session.commit()
+        candidate_id = candidate.id  # captured before unrelated pending state, realistic caller pattern
+        bad = UnknownAirportCandidate(candidate_fingerprint="deadbeef")
+        session.add(bad)
+        result = get_latest_unknown_airport_candidate_review(session, candidate_id)
+        assert result is not None
+        assert result.action == "DEFER"
+        assert bad in session.new  # still pending/unflushed - the read did not flush it
+
+    def test_expired_candidate_attribute_read_at_call_site_isolated(self):
+        """Narrower isolation than the combined test above: an expired
+        `candidate.id` attribute (after an intervening commit) read AS
+        THE ARGUMENT EXPRESSION at the call site, with NO unrelated
+        pending object present. Documents that this specific read is
+        safe on its own - see TestUacH1NoAutoflushHardening in
+        tests/test_unknown_airport_candidate_resolution.py for why this
+        function's OWN no_autoflush wrap cannot, by itself, protect a
+        caller who combines an expired attribute read with unrelated
+        pending state (the argument is evaluated before this function's
+        body ever runs) - that combined case is hardened at the two
+        caller sites instead (_require_current_review() and the UAC5
+        CLI's _read_candidate_state())."""
+        _, session = make_session()
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_regional_kwargs()).candidate
+        session.commit()  # expires candidate's attributes
+        result = get_latest_unknown_airport_candidate_review(session, candidate.id)
+        assert result is None
+
+    def test_same_timestamp_latest_semantics_unchanged_by_hardening(self):
+        """Re-proves TestOrderingDeterminism's own same-timestamp tiebreak
+        still holds after the no_autoflush wrap - the fix changes only
+        WHEN a flush may happen, never the ORDER BY/LIMIT semantics."""
+        _, session = make_session()
+        candidate = find_or_create_unknown_airport_candidate(session, **_foo_regional_kwargs()).candidate
+        session.commit()
+        fixed_time = datetime(2026, 8, 19, 12, 0, 0, tzinfo=UTC)
+        first = UnknownAirportCandidateReview(
+            candidate_id=candidate.id, action="DEFER", reason="a", reviewer="human:a", created_at=fixed_time,
+        )
+        second = UnknownAirportCandidateReview(
+            candidate_id=candidate.id, action="DEFER", reason="b", reviewer="human:b", created_at=fixed_time,
+        )
+        session.add_all([first, second])
+        session.commit()
+        latest = get_latest_unknown_airport_candidate_review(session, candidate.id)
+        assert latest.id == max(first.id, second.id)
+
+
+# ---------------------------------------------------------------------------
 # No canonical side effects (§8 of the UAC1 mission brief)
 # ---------------------------------------------------------------------------
 

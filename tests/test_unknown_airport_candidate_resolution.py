@@ -1386,3 +1386,125 @@ class TestErg4DirectServiceBypass:
                 create_airport_from_approved_candidate(
                     session, candidate_id=candidate.id, review_id=review.id, name="Foo", country="XX",
                 )
+
+
+# ---------------------------------------------------------------------------
+# UAC-H1: pre-existing UAC1 no_autoflush hardening, re-verified at the
+# full authoritative-service call-chain level (docs/architecture/
+# rwi-uac-h1-unknown-airport-review-no-autoflush-hardening-report.md).
+# ERG4's own review found and left unfixed a weakness in
+# get_latest_unknown_airport_candidate_review() (UAC1), reachable via the
+# untouched MATCH_EXISTING_AIRPORT path. This class independently
+# reproduces that full-chain leak BEFORE the fix and proves it is closed
+# AFTER, at both UAC4 entry points, without weakening the codebase's own
+# "no swallowing of real write errors" convention.
+# ---------------------------------------------------------------------------
+
+
+class TestUacH1NoAutoflushHardening:
+    def test_require_current_review_precondition_phase_does_not_leak(self):
+        """_require_current_review() itself (called directly, bypassing
+        both top-level entry points) must not leak on an unrelated
+        invalid pending object - the narrowest possible reproduction of
+        the original ERG4-review finding."""
+        with Session(_engine()) as session:
+            real = _seed_airport(session, name="Real Airport")
+            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            review = record_unknown_airport_candidate_review(
+                session, candidate, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+                matched_airport_id=real.id,
+            )
+            session.commit()
+            review_id = review.id  # captured before unrelated pending state
+            bad = UnknownAirportCandidate(candidate_fingerprint="deadbeef")
+            session.add(bad)
+
+            import app.services.unknown_airport_candidate_resolution as resolution_module
+
+            latest = resolution_module._require_current_review(
+                session, candidate, review_id=review_id, expected_action="MATCH_EXISTING_AIRPORT",
+            )
+            assert latest.id == review_id
+            assert bad in session.new
+
+    def test_match_existing_airport_precondition_phase_does_not_leak_but_real_write_still_validates(self):
+        """The full, untouched MATCH_EXISTING_AIRPORT chain: with an
+        unrelated invalid pending object present, the precondition-check
+        phase must succeed cleanly (the original bug); but this function's
+        OWN intentional write flush at the end must still correctly
+        surface that unrelated object's own constraint violation once a
+        real write genuinely happens - the fix must never swallow a real
+        write error (mission's own S9)."""
+        with Session(_engine()) as session:
+            real = _seed_airport(session, name="Real Airport")
+            candidate, _ = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            review = record_unknown_airport_candidate_review(
+                session, candidate, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+                matched_airport_id=real.id,
+            )
+            session.commit()
+            candidate_id, review_id = candidate.id, review.id
+            bad = UnknownAirportCandidate(candidate_fingerprint="deadbeef")
+            session.add(bad)
+
+            with pytest.raises(IntegrityError):
+                resolve_candidate_to_existing_airport(session, candidate_id=candidate_id, review_id=review_id)
+            session.rollback()
+
+    def test_match_existing_airport_happy_path_unaffected_by_hardening(self):
+        """Non-regression: with NO unrelated pending state, the normal
+        MATCH_EXISTING_AIRPORT flow still succeeds exactly as before."""
+        with Session(_engine()) as session:
+            real = _seed_airport(session, name="Real Airport")
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            review = record_unknown_airport_candidate_review(
+                session, candidate, action="MATCH_EXISTING_AIRPORT", reason="x", reviewer="human:x",
+                matched_airport_id=real.id,
+            )
+            session.commit()
+            result = resolve_candidate_to_existing_airport(session, candidate_id=candidate.id, review_id=review.id)
+            assert result.resolved_airport_id == real.id
+            reloaded = session.get(SourceAssertion, assertions[0].id)
+            assert reloaded.airport_id == real.id
+
+    def test_create_new_airport_precondition_phase_does_not_leak(self):
+        """CREATE_NEW_AIRPORT's own precondition phase (identity gate +
+        ERG4 gate + name/country/duplicate-code checks) must also not
+        leak on an unrelated invalid pending object - proven with a fully
+        ERG4-eligible candidate so the precondition phase runs to
+        completion (through the duplicate-code query loop) rather than
+        exiting early at the ERG4 gate."""
+        with Session(_engine()) as session:
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            review = record_unknown_airport_candidate_review(
+                session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
+            )
+            session.commit()
+            _make_admission_eligible(session, candidate, assertions)
+            candidate_id, review_id = candidate.id, review.id
+            bad = UnknownAirportCandidate(candidate_fingerprint="deadbeef")
+            session.add(bad)
+
+            with pytest.raises(IntegrityError):
+                create_airport_from_approved_candidate(
+                    session, candidate_id=candidate_id, review_id=review_id, name="Foo", country="XX",
+                )
+            session.rollback()
+
+    def test_create_new_airport_happy_path_unaffected_by_hardening(self):
+        with Session(_engine()) as session:
+            candidate, assertions = _seed_candidate_with_n_assertions(session, n=1)
+            session.commit()
+            review = record_unknown_airport_candidate_review(
+                session, candidate, action="CREATE_NEW_AIRPORT", reason="x", reviewer="human:x",
+            )
+            session.commit()
+            _make_admission_eligible(session, candidate, assertions)
+            result = create_airport_from_approved_candidate(
+                session, candidate_id=candidate.id, review_id=review.id, name="Foo", country="XX",
+            )
+            assert isinstance(result, CreateNewAirportResult)

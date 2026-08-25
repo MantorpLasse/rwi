@@ -199,6 +199,29 @@ class TestInspect:
             assert session.query(SourceAssertion).count() == 2
         engine2.dispose()
 
+    def test_read_candidate_state_does_not_leak_on_unrelated_invalid_pending_object(self, tmp_path):
+        """UAC-H1: _read_candidate_state() (the CLI's own inspect/preview
+        read path, which calls get_latest_unknown_airport_candidate_review())
+        must not leak a raw IntegrityError when an unrelated invalid
+        pending object exists in the same session - mirrors the ERG4-
+        review-discovered UAC1 finding, re-verified at this CLI call site
+        specifically. Called directly (bypassing run_review(), which owns
+        its own session internally and cannot have foreign state injected
+        into it from outside)."""
+        db = tmp_path / "db.sqlite"
+        engine = _make_full_db(db)
+        candidate_id, _ = _seed_candidate_with_n_assertions(engine, n=1)
+        engine.dispose()
+
+        with Session(create_engine(f"sqlite:///{db}")) as session:
+            candidate = session.get(UnknownAirportCandidate, candidate_id)
+            bad = UnknownAirportCandidate(candidate_fingerprint="deadbeef")
+            session.add(bad)
+            state = cli_module._read_candidate_state(session, candidate)
+            assert state["candidate_id"] == candidate_id
+            assert state["latest_review"] is None
+            assert bad in session.new
+
     def test_inspect_nonexistent_candidate(self, tmp_path):
         db = tmp_path / "db.sqlite"
         _make_full_db(db).dispose()

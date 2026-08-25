@@ -228,20 +228,30 @@ def _require_unresolved(candidate: UnknownAirportCandidate) -> None:
 def _require_current_review(
     session: Session, candidate: UnknownAirportCandidate, *, review_id: int, expected_action: str,
 ) -> UnknownAirportCandidateReview:
-    latest = get_latest_unknown_airport_candidate_review(session, candidate.id)
-    if latest is None:
-        raise StaleReviewError(candidate.id, review_id, reason="no review has ever been recorded for this candidate")
-    if latest.id != review_id:
-        raise StaleReviewError(
-            candidate.id, review_id,
-            reason=f"the current latest review is id={latest.id} (action={latest.action!r}), not {review_id!r}",
-        )
-    if latest.action != expected_action:
-        raise StaleReviewError(
-            candidate.id, review_id,
-            reason=f"the current review's action is {latest.action!r}, not the required {expected_action!r}",
-        )
-    return latest
+    # UAC-H1 no_autoflush hardening: wraps this ENTIRE read-only function,
+    # starting from the very first `candidate.id` read - reading an
+    # expired attribute (e.g. after an earlier caller commit) triggers an
+    # internal refresh SELECT that runs through SQLAlchemy's default
+    # autoflush path exactly like session.get()/session.query() do, and
+    # would otherwise flush any unrelated pending object the caller
+    # happens to be holding in the same session. Reproduced directly
+    # before this fix. This function performs no writes of its own, so
+    # wrapping its entire body is safe.
+    with session.no_autoflush:
+        latest = get_latest_unknown_airport_candidate_review(session, candidate.id)
+        if latest is None:
+            raise StaleReviewError(candidate.id, review_id, reason="no review has ever been recorded for this candidate")
+        if latest.id != review_id:
+            raise StaleReviewError(
+                candidate.id, review_id,
+                reason=f"the current latest review is id={latest.id} (action={latest.action!r}), not {review_id!r}",
+            )
+        if latest.action != expected_action:
+            raise StaleReviewError(
+                candidate.id, review_id,
+                reason=f"the current review's action is {latest.action!r}, not the required {expected_action!r}",
+            )
+        return latest
 
 
 def _require_no_linked_assertion_already_canonical(candidate_id: int, assertions: "list[SourceAssertion]") -> None:
@@ -325,21 +335,35 @@ def resolve_candidate_to_existing_airport(
     linked SourceAssertion is already inconsistently airport-linked
     (InconsistentCandidateStateError).
     """
-    candidate = session.get(UnknownAirportCandidate, candidate_id)
-    if candidate is None:
-        raise ValueError(f"UnknownAirportCandidate {candidate_id} does not exist")
-    _require_unresolved(candidate)
-    review = _require_current_review(session, candidate, review_id=review_id, expected_action=_MATCH_ACTION)
+    # UAC-H1 no_autoflush hardening: wraps the ENTIRE read-only
+    # precondition-check phase below - starting from the very first
+    # session.get() - in session.no_autoflush. Reproduced directly before
+    # this fix: an unrelated, invalid, pending ORM object elsewhere in the
+    # same session would have its own constraint violation raised HERE,
+    # at this function's first read, instead of being left pending until
+    # the caller's own intended commit. SCOPE, stated precisely (do not
+    # over-claim): this guard protects only the PRECONDITION-CHECK phase -
+    # the intentional write section below (candidate.resolved_airport_id
+    # assignment + session.flush()) is deliberately OUTSIDE this block;
+    # that flush is this function's own intentional write point and
+    # flushes the whole session's pending state, by design, exactly like
+    # every other persistence function in this codebase.
+    with session.no_autoflush:
+        candidate = session.get(UnknownAirportCandidate, candidate_id)
+        if candidate is None:
+            raise ValueError(f"UnknownAirportCandidate {candidate_id} does not exist")
+        _require_unresolved(candidate)
+        review = _require_current_review(session, candidate, review_id=review_id, expected_action=_MATCH_ACTION)
 
-    matched_airport_id = review.matched_airport_id
-    if session.get(Airport, matched_airport_id) is None:
-        raise ValueError(
-            f"review {review_id}'s matched_airport_id={matched_airport_id!r} does not reference an "
-            "existing Airport"
-        )
+        matched_airport_id = review.matched_airport_id
+        if session.get(Airport, matched_airport_id) is None:
+            raise ValueError(
+                f"review {review_id}'s matched_airport_id={matched_airport_id!r} does not reference an "
+                "existing Airport"
+            )
 
-    assertions = _linked_assertions(session, candidate_id)
-    _require_no_linked_assertion_already_canonical(candidate_id, assertions)
+        assertions = _linked_assertions(session, candidate_id)
+        _require_no_linked_assertion_already_canonical(candidate_id, assertions)
 
     candidate.resolved_airport_id = matched_airport_id
     for assertion in assertions:
@@ -410,43 +434,50 @@ def create_airport_from_approved_candidate(
     relevance review must be CONFIRM_EMAS_RELEVANT against that exact
     assessment. See module docstring's own ERG4 section.
     """
-    candidate = session.get(UnknownAirportCandidate, candidate_id)
-    if candidate is None:
-        raise ValueError(f"UnknownAirportCandidate {candidate_id} does not exist")
-    _require_unresolved(candidate)
-    _require_current_review(session, candidate, review_id=review_id, expected_action=_CREATE_ACTION)
-    _require_admission_eligible(session, candidate_id)
+    # UAC-H1 no_autoflush hardening: same rationale and SCOPE boundary as
+    # resolve_candidate_to_existing_airport() above - wraps the entire
+    # read-only precondition-check phase (including the duplicate-code
+    # query loop below, a second, independently-discovered unwrapped
+    # session.query() with the same latent risk), never the intentional
+    # write section starting at `airport = Airport(...)`.
+    with session.no_autoflush:
+        candidate = session.get(UnknownAirportCandidate, candidate_id)
+        if candidate is None:
+            raise ValueError(f"UnknownAirportCandidate {candidate_id} does not exist")
+        _require_unresolved(candidate)
+        _require_current_review(session, candidate, review_id=review_id, expected_action=_CREATE_ACTION)
+        _require_admission_eligible(session, candidate_id)
 
-    if not name or not name.strip():
-        raise ValueError("name is required")
-    if not country or not country.strip():
-        raise ValueError("country is required")
+        if not name or not name.strip():
+            raise ValueError("name is required")
+        if not country or not country.strip():
+            raise ValueError("country is required")
 
-    normalized_codes: dict[str, Optional[str]] = {}
-    for code_field, code_value in (("iata_code", iata_code), ("icao_code", icao_code), ("faa_code", faa_code)):
-        stripped = code_value.strip() if code_value and code_value.strip() else None
-        normalized_codes[code_field] = stripped
-        if stripped is None:
-            continue
-        target = stripped.casefold()
-        conflict = next(
-            (
-                existing
-                for existing in session.query(Airport).filter(getattr(Airport, code_field).isnot(None)).all()
-                if getattr(existing, code_field).strip().casefold() == target
-            ),
-            None,
-        )
-        if conflict is not None:
-            raise ValueError(
-                f"CREATE_NEW_AIRPORT refused: an existing Airport (id={conflict.id}) already has "
-                f"{code_field}={getattr(conflict, code_field)!r}, matching {stripped!r} under "
-                "case/whitespace-insensitive comparison - use resolve_candidate_to_existing_airport() "
-                "(MATCH_EXISTING_AIRPORT) instead of creating a duplicate."
+        normalized_codes: dict[str, Optional[str]] = {}
+        for code_field, code_value in (("iata_code", iata_code), ("icao_code", icao_code), ("faa_code", faa_code)):
+            stripped = code_value.strip() if code_value and code_value.strip() else None
+            normalized_codes[code_field] = stripped
+            if stripped is None:
+                continue
+            target = stripped.casefold()
+            conflict = next(
+                (
+                    existing
+                    for existing in session.query(Airport).filter(getattr(Airport, code_field).isnot(None)).all()
+                    if getattr(existing, code_field).strip().casefold() == target
+                ),
+                None,
             )
+            if conflict is not None:
+                raise ValueError(
+                    f"CREATE_NEW_AIRPORT refused: an existing Airport (id={conflict.id}) already has "
+                    f"{code_field}={getattr(conflict, code_field)!r}, matching {stripped!r} under "
+                    "case/whitespace-insensitive comparison - use resolve_candidate_to_existing_airport() "
+                    "(MATCH_EXISTING_AIRPORT) instead of creating a duplicate."
+                )
 
-    assertions = _linked_assertions(session, candidate_id)
-    _require_no_linked_assertion_already_canonical(candidate_id, assertions)
+        assertions = _linked_assertions(session, candidate_id)
+        _require_no_linked_assertion_already_canonical(candidate_id, assertions)
 
     airport = Airport(
         name=name.strip(), country=country.strip(),
