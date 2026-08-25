@@ -104,54 +104,105 @@ is human-gated), never silently absorbed. This mirrors this codebase's own
 repeated "advisory, never gating, never hidden" pattern (e.g.
 ExistingSignalReconciliationDecision.advisory_candidate_signal_ids).
 
-WATCH-WORTHY vs CANONICAL-ADMISSION-RELEVANT (design doc S6/S7 - two
-genuinely different questions, kept as two separate output fields even
-though this slice's own derivation computes them from the identical
-three-outcome set): `is_watch_worthy` answers "should this surface in an
-automatic operator queue" (S7, no human step); `is_canonical_admission_relevant`
-answers "could a human eventually approve CREATE_NEW_AIRPORT for this"
-(S6, still requires a SEPARATE future human approval action this module
-does not implement or gate). They are computed identically today
-(EMAS_CONFIRMED/EMAS_STRONG_SIGNAL/EMAS_PLAUSIBLE_SIGNAL) but are kept as
-two named fields, per the design doc's own explicit distinction, so a
-future slice may diverge them (e.g. a stricter admission bar) without a
-breaking rename.
+INVENTORY vs WATCH vs CANONICAL-ADMISSION-RELEVANT (ERG1.6,
+docs/architecture/rwi-erg1-5-inventory-vs-opportunity-design.md - resolves
+the open question this docstring used to flag as unfixed): RWI's own
+already-shipped architecture (`app.models.Installation` = "what's installed
+today," `app.models.Signal` = "something that could become a future EMAS
+order," `scripts/graduate_signal_to_installation.py` = the real, working
+pipeline turning one into the other) already draws exactly the distinction
+this module now mirrors one layer earlier, pre-canonical:
 
-KNOWN, FLAGGED, NOT-FIXED-HERE OPEN QUESTION (found during adversarial
-review, docs/architecture/rwi-erg1-emas-relevance-evaluator-report.md S16):
-EMAS_CONFIRMED currently means both "RWI inventory relevance" (this airport
-demonstrably has/had EMAS infrastructure) AND "operator watch/admission
-relevance" (`is_watch_worthy`/`is_canonical_admission_relevant` both True)
-identically - including for a purely HISTORICAL_FACT-tagged installation
-with zero corroborating current activity (e.g. "installed in 2008," no
-other evidence). The parent design doc's own Section 7 defines
-watch-worthiness as EMAS_CONFIRMED/STRONG/PLAUSIBLE unconditionally, with
-no carve-out for a dormant, decades-old, no-longer-active installation -
-this module implements that locked definition exactly as written, and does
-NOT unilaterally add a "dormant" sub-state or a third boolean, since doing
-so would require new vocabulary the parent design doc never specified
-(this slice's own correction policy: STOP before widening, don't invent).
-Flagged explicitly for a future design-level decision before ERG4 (the
-UAC4 canonical-admission gate) is built, since "should a dormant, 15-year-old
-confirmed installation with zero current activity be admission-eligible on
-the same terms as an active EMAS_STRONG_SIGNAL opportunity" is a genuine,
-unresolved policy question, not an implementation defect in this module.
+`is_inventory_relevant` answers "does this evidence establish a confirmed
+(current or historical) EMAS installation/incident fact that belongs in
+RWI's EMAS world model" - driven by E_EXISTING_INSTALLATION/F_INCIDENT_DRIVEN
+ALONE, regardless of temporality (an installation's/incident's existence is
+a permanent historical fact, never erased by later evidence - see
+CONTRADICTION SEMANTICS below). Mirrors `Installation`.
+
+`is_watch_worthy` answers "is there current-or-future-shaped evidence of an
+EMAS lifecycle event worth an operator's attention right now" - computed
+with a DELIBERATE ASYMMETRY (ERG1.5's own locked resolution, re-derived and
+confirmed, not merely re-applied):
+  - A/B/C/D contribute UNLESS their own temporality is explicitly COMPLETED
+    (a closed-out pipeline event, e.g. "RSA subsequently constructed,
+    deficiency resolved" - see the CLOSED-EVENT NOTE below). These classes
+    are inherently forward-looking by definition (a feasibility study, a
+    funding action, a safety-area deficiency needing mitigation are, by
+    definition, unresolved unless explicitly closed out) - so `UNKNOWN`
+    temporality still counts, exactly as it always has for outcome
+    computation (TEMPORAL DISCOUNT above, unchanged).
+  - E/F contribute ONLY when EXPLICITLY tagged
+    CURRENT_STATE_AS_OF_DOCUMENT_DATE/PLANNED_FUTURE_ACTION/
+    REQUESTED_PENDING_APPROVAL (a repair/replacement genuinely in progress
+    or planned) - `UNKNOWN`/`HISTORICAL_FACT`/`COMPLETED` never grant watch
+    for these classes, since an installation's mere existence is, by
+    default, an already-resolved fact requiring affirmative evidence to
+    read as "something is happening now," not merely the absence of
+    evidence to the contrary. Mirrors `Signal`.
+This asymmetry is the direct, narrow fix for what used to be flagged here
+as an open question: a dormant, decades-old confirmed installation with
+zero corroborating current activity is now `is_inventory_relevant=True,
+is_watch_worthy=False` - no longer identical to an active opportunity.
+
+`is_canonical_admission_relevant` = `is_inventory_relevant OR is_watch_worthy`
+- a DERIVED boolean, not a third independent primitive (ERG1.5 S1/S7,
+re-confirmed: RWI's own `Installation`/`Signal` split already shows a
+canonical Airport can legitimately exist for either reason alone). Field
+name preserved unchanged from ERG1 - still means exactly "could a human
+eventually approve CREATE_NEW_AIRPORT for this," a SEPARATE future
+human-gated action this module does not implement or gate.
+
+CLOSED-EVENT NOTE / MODELING GUIDANCE for future extraction-layer callers:
+to represent "this pipeline event concluded" (a resolved deficiency, a
+completed repair) in a way that correctly excludes it from
+`is_watch_worthy`, tag the observation itself `COMPLETED` - do NOT rely on
+a separate `CONTRADICTING` observation to achieve this. Contradiction
+NEVER changes any of the three dimensions (see CONTRADICTION SEMANTICS
+below, re-confirmed unchanged by ERG1.6, not silently redesigned) - a
+contradicted-but-still-POSITIVE claim (e.g. "EMAS planned" + CONTRADICTING
+"project cancelled") still contributes to `is_watch_worthy=True`,
+deliberately, so a human reviewer sees both the original claim AND its
+contradiction, rather than the system silently resolving the dispute.
+
+KNOWN, FLAGGED, NOT-FULLY-SYMMETRIC OPEN NOTE (found during ERG1.6's own
+implementation, not silently smoothed over): `is_inventory_relevant`
+reuses the EXISTING, UNCHANGED `matched_classes` intersection with
+E/F (`_CONFIRMED_CLASSES`) - which means it inherits the PRE-EXISTING,
+already-locked asymmetry between E (temporal-discount-EXEMPT) and F (NOT
+exempt - an incident's own newsworthiness genuinely fades with time,
+unlike an installation's bare existence). A BARE, UNCORROBORATED
+`HISTORICAL_FACT`-tagged F observation with nothing else is therefore
+`is_inventory_relevant=False` (matches `outcome=INSUFFICIENT_EVIDENCE`,
+since F alone is fully discounted there too) - NOT `True` as a naive
+"E and F both establish inventory regardless of temporality" reading might
+suggest. `UNKNOWN`-tagged F (never discounted, unlike explicit
+`HISTORICAL_FACT`) and any F corroborated by another current-tagged
+observation DO both set `is_inventory_relevant=True`, matching E. This
+divergence is deliberately preserved, not resolved by inventing a new,
+separately-permissive computation for F, per this slice's own
+"reuse existing logic, do not touch outcome computation, STOP and report
+conflicts rather than invent" instruction - see
+docs/architecture/rwi-erg1-6-inventory-watch-refinement-report.md S11 for
+the full derivation and the reasoning for why this is NOT a defect.
 
 KNOWN, FLAGGED, NOT-FIXED-HERE OPEN QUESTION #2 (temporal discount
-asymmetry): `UNKNOWN` temporality is never discounted (see TEMPORAL
-DISCOUNT above) - this means a class-B/F observation whose caller simply
-failed to tag a genuinely historical fact as `HISTORICAL_FACT` (leaving it
-at the `UNKNOWN` default) is treated as undiscounted, exactly as if it were
-fresh. This is a DELIBERATE, but NOT risk-free, choice: the alternative
-(discounting `UNKNOWN` the same as `HISTORICAL_FACT`) would make the whole
-evaluator fragile to ordinary extraction incompleteness, silently losing
-weight for genuinely CURRENT evidence whose extractor simply never got
-around to tagging temporality. The consequence is a hard, load-bearing
-requirement on every future extraction-layer caller: temporality MUST be
-tagged explicitly and accurately whenever it is determinable from the
-source document (an explicit date/tense in the text), and `UNKNOWN` must be
+asymmetry, unchanged by ERG1.6): `UNKNOWN` temporality is never discounted
+for OUTCOME computation (see TEMPORAL DISCOUNT above) - this means a
+class-B/F observation whose caller simply failed to tag a genuinely
+historical fact as `HISTORICAL_FACT` (leaving it at the `UNKNOWN` default)
+is treated as undiscounted, exactly as if it were fresh. This is a
+DELIBERATE, but NOT risk-free, choice: the alternative (discounting
+`UNKNOWN` the same as `HISTORICAL_FACT`) would make the whole evaluator
+fragile to ordinary extraction incompleteness, silently losing weight for
+genuinely CURRENT evidence whose extractor simply never got around to
+tagging temporality. The consequence is a hard, load-bearing requirement on
+every future extraction-layer caller: temporality MUST be tagged
+explicitly and accurately whenever it is determinable from the source
+document (an explicit date/tense in the text), and `UNKNOWN` must be
 reserved for genuinely indeterminate cases only - never used as a lazy
-default for a fact the extractor could have determined was historical.
+default for a fact the extractor could have determined was historical or
+completed.
 """
 from __future__ import annotations
 
@@ -248,15 +299,10 @@ class RelevanceOutcome(str, Enum):
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
 
 
-_WATCH_AND_ADMISSION_RELEVANT_OUTCOMES = frozenset({
-    RelevanceOutcome.EMAS_CONFIRMED,
-    RelevanceOutcome.EMAS_STRONG_SIGNAL,
-    RelevanceOutcome.EMAS_PLAUSIBLE_SIGNAL,
-})
-
 _CONFIRMED_CLASSES = frozenset({EvidenceClass.E_EXISTING_INSTALLATION, EvidenceClass.F_INCIDENT_DRIVEN})
 _STRONG_CLASSES = frozenset({EvidenceClass.A_EXPLICIT_EMAS, EvidenceClass.D_FUNDING_OR_PROCUREMENT})
 _PLAUSIBLE_CLASSES = frozenset({EvidenceClass.B_RUNWAY_SAFETY_AREA_OR_ARRESTOR_NEED, EvidenceClass.C_PLANNING_OR_FEASIBILITY})
+_OPPORTUNITY_CLASSES = _STRONG_CLASSES | _PLAUSIBLE_CLASSES
 
 # Only this class is exempt from the historical-fact temporal discount - an
 # installation's existence is a present-tense structural fact regardless of
@@ -264,6 +310,16 @@ _PLAUSIBLE_CLASSES = frozenset({EvidenceClass.B_RUNWAY_SAFETY_AREA_OR_ARRESTOR_N
 _TEMPORAL_DISCOUNT_EXEMPT_CLASSES = frozenset({EvidenceClass.E_EXISTING_INSTALLATION})
 
 _NON_DISCOUNTING_TEMPORALITIES = frozenset({TemporalQualifier.HISTORICAL_FACT, TemporalQualifier.UNKNOWN})
+
+# ERG1.6 (module docstring, INVENTORY vs WATCH vs CANONICAL-ADMISSION-RELEVANT):
+# E/F only grant is_watch_worthy with one of these EXPLICIT temporalities -
+# an installation's bare existence defaults to "already resolved," requiring
+# affirmative evidence to read as "something is happening now."
+_ACTIVE_TEMPORALITIES_FOR_INVENTORY_CLASSES = frozenset({
+    TemporalQualifier.CURRENT_STATE_AS_OF_DOCUMENT_DATE,
+    TemporalQualifier.PLANNED_FUTURE_ACTION,
+    TemporalQualifier.REQUESTED_PENDING_APPROVAL,
+})
 
 
 @dataclass(frozen=True)
@@ -336,15 +392,17 @@ class EmasRelevanceDecision:
     not merely from the outcome, so the two stay consistent).
     `contradicting_evidence_classes` names every CONTRADICTING-polarity
     class present, regardless of whether it affected `outcome` (it never
-    does - see CONTRADICTION SEMANTICS). `is_watch_worthy` and
-    `is_canonical_admission_relevant` are two deliberately separate
-    booleans - see module docstring's own WATCH-WORTHY vs
-    CANONICAL-ADMISSION-RELEVANT section."""
+    does - see CONTRADICTION SEMANTICS). `is_inventory_relevant`,
+    `is_watch_worthy`, and `is_canonical_admission_relevant` are three
+    fields answering three deliberately separate questions - see module
+    docstring's own INVENTORY vs WATCH vs CANONICAL-ADMISSION-RELEVANT
+    section (ERG1.6)."""
 
     outcome: RelevanceOutcome
     reason: str
     evidence_classes_matched: "frozenset[EvidenceClass]" = field(default_factory=frozenset)
     contradicting_evidence_classes: "frozenset[EvidenceClass]" = field(default_factory=frozenset)
+    is_inventory_relevant: bool = False
     is_watch_worthy: bool = False
     is_canonical_admission_relevant: bool = False
 
@@ -442,12 +500,26 @@ def evaluate_emas_relevance(
             "determination." + discount_note + contradiction_note
         )
 
-    watch_and_admission = outcome in _WATCH_AND_ADMISSION_RELEVANT_OUTCOMES
+    is_inventory_relevant = bool(matched_classes & _CONFIRMED_CLASSES)
+
+    opportunity_watch = any(
+        o.evidence_class in _OPPORTUNITY_CLASSES and o.temporality != TemporalQualifier.COMPLETED
+        for o in contributing
+    )
+    inventory_watch = any(
+        o.evidence_class in _CONFIRMED_CLASSES and o.temporality in _ACTIVE_TEMPORALITIES_FOR_INVENTORY_CLASSES
+        for o in positive
+    )
+    is_watch_worthy = opportunity_watch or inventory_watch
+
+    is_canonical_admission_relevant = is_inventory_relevant or is_watch_worthy
+
     return EmasRelevanceDecision(
         outcome=outcome,
         reason=reason.strip(),
         evidence_classes_matched=matched_classes,
         contradicting_evidence_classes=contradicting_classes,
-        is_watch_worthy=watch_and_admission,
-        is_canonical_admission_relevant=watch_and_admission,
+        is_inventory_relevant=is_inventory_relevant,
+        is_watch_worthy=is_watch_worthy,
+        is_canonical_admission_relevant=is_canonical_admission_relevant,
     )

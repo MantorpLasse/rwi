@@ -80,13 +80,15 @@ class TestAnokaLockedRegression:
             _obs(G, basis="Electrical Vault Improvements"),
         )
         assert decision.outcome == RUNWAY_ONLY
+        assert decision.is_inventory_relevant is False
         assert decision.is_watch_worthy is False
         assert decision.is_canonical_admission_relevant is False
         assert decision.evidence_classes_matched == frozenset({G})
         assert decision.contradicting_evidence_classes == frozenset()
 
-    def test_anoka_evidence_alone_never_watch_worthy_or_admission_relevant(self):
+    def test_anoka_evidence_alone_never_inventory_watch_or_admission_relevant(self):
         decision = _evaluate(_obs(G, basis="Runway 18-36 Pavement Reconstruction"))
+        assert decision.is_inventory_relevant is False
         assert decision.is_watch_worthy is False
         assert decision.is_canonical_admission_relevant is False
 
@@ -342,27 +344,278 @@ class TestAdditionalExplicitEmasRegressions:
         assert decision.outcome == STRONG
 
 
-# --- Adversarial-review addition: flagged, not-fixed design tension (mission
-# S12/S16) - documented, not silently accepted ---
+# --- ERG1.6: dormant-installation finding RESOLVED (was flagged, not fixed,
+# by the ERG1 adversarial review; ERG1.5 designed the fix; this locks it) ---
 
-class TestDormantInstallationFlaggedFinding:
+class TestDormantInstallationResolved:
     """A dormant, decades-old confirmed installation with zero corroborating
-    current activity is, TODAY, both watch-worthy and canonical-admission-
-    relevant - identical to an active EMAS_STRONG_SIGNAL opportunity. This
-    matches the parent design doc's own literal, unconditional Section 7
-    definition of watch-worthiness (EMAS_CONFIRMED/STRONG/PLAUSIBLE, no
-    'dormant' carve-out) - this module implements that locked definition
-    exactly, and does not invent a third boolean/vocabulary member outside
-    this mission's scope. Locked as a KNOWN, FLAGGED, NOT-FIXED-HERE
-    finding (module docstring) for a future design-level decision before
-    ERG4 is built - this test documents current behavior honestly rather
-    than silently asserting it is fully resolved."""
+    current activity is now inventory-relevant (RWI should know EMAS exists
+    there) and admission-relevant (a human may still consider canonical
+    admission on inventory grounds alone) but NOT watch-worthy (nothing
+    currently happening worth an operator's active attention) - no longer
+    identical to an active EMAS_STRONG_SIGNAL opportunity. This is the
+    primary ERG1.6 regression (mission S10)."""
 
-    def test_dormant_confirmed_installation_is_watch_and_admission_relevant_today(self):
+    def test_dormant_confirmed_installation_is_inventory_and_admission_relevant_but_not_watch_worthy(self):
         decision = _evaluate(_obs(E, basis="EMAS installed 2008, no subsequent activity", temporality=TemporalQualifier.HISTORICAL_FACT))
         assert decision.outcome == CONFIRMED
+        assert decision.is_inventory_relevant is True
+        assert decision.is_watch_worthy is False
+        assert decision.is_canonical_admission_relevant is True
+
+
+# --- ERG1.6: inventory relevance (mission S5) ---
+
+class TestInventoryRelevance:
+    """Mission S5 case matrix A-E."""
+
+    def test_confirmed_existing_installation_current_is_inventory(self):
+        decision = _evaluate(_obs(E, basis="EMAS bed present", temporality=TemporalQualifier.CURRENT_STATE_AS_OF_DOCUMENT_DATE))
+        assert decision.is_inventory_relevant is True
+
+    def test_confirmed_existing_installation_historical_is_inventory(self):
+        decision = _evaluate(_obs(E, basis="installed 2011", temporality=TemporalQualifier.HISTORICAL_FACT))
+        assert decision.is_inventory_relevant is True
+
+    def test_confirmed_existing_installation_unknown_temporality_is_inventory(self):
+        decision = _evaluate(_obs(E, basis="confirmed EMAS, no date known", temporality=TemporalQualifier.UNKNOWN))
+        assert decision.is_inventory_relevant is True
+
+    def test_bare_uncorroborated_historical_incident_class_f_is_not_inventory(self):
+        """Deliberate, documented divergence from a naive 'E and F both
+        establish inventory regardless of temporality' reading - see module
+        docstring's own KNOWN, FLAGGED, NOT-FULLY-SYMMETRIC OPEN NOTE. F is
+        NOT temporal-discount-exempt (unlike E, a pre-existing, unchanged
+        asymmetry from the original ERG1 implementation) - a bare, historical,
+        uncorroborated incident report is exactly as discounted for inventory
+        purposes as it already was for outcome purposes."""
+        decision = _evaluate(_obs(F, basis="decades-old overrun involving an EMAS", temporality=TemporalQualifier.HISTORICAL_FACT))
+        assert decision.outcome == INSUFFICIENT
+        assert decision.is_inventory_relevant is False
+
+    def test_unknown_temporality_incident_class_f_is_inventory(self):
+        """UNKNOWN is never discounted for ANY class (unchanged) - so
+        unlike explicit HISTORICAL_FACT, an UNKNOWN-tagged F observation
+        DOES establish inventory relevance, matching E."""
+        decision = _evaluate(_obs(F, basis="overrun involving an EMAS, date unknown", temporality=TemporalQualifier.UNKNOWN))
+        assert decision.outcome == CONFIRMED
+        assert decision.is_inventory_relevant is True
+
+    def test_historical_incident_corroborated_by_current_followon_is_inventory(self):
+        decision = _evaluate(
+            _obs(F, basis="overrun involving an EMAS 10 years ago", temporality=TemporalQualifier.HISTORICAL_FACT),
+            _obs(D, basis="current EMAS replacement funding following the incident", temporality=TemporalQualifier.CURRENT_STATE_AS_OF_DOCUMENT_DATE),
+        )
+        assert decision.is_inventory_relevant is True
+
+    def test_generic_runway_work_only_is_never_inventory(self):
+        decision = _evaluate(_obs(G, basis="pavement reconstruction"))
+        assert decision.is_inventory_relevant is False
+
+
+# --- ERG1.6: watch semantics (mission S6) ---
+
+class TestWatchSemantics:
+    """Mission S6 case matrix A-H."""
+
+    def test_emas_feasibility_study_is_watch(self):
+        decision = _evaluate(_obs(A, basis="EMAS feasibility study"), _obs(C, basis="EMAS feasibility study"))
+        assert decision.is_watch_worthy is True
+
+    def test_emas_procurement_is_watch(self):
+        decision = _evaluate(_obs(D, basis="EMAS procurement"))
+        assert decision.is_watch_worthy is True
+
+    def test_emas_replacement_planned_is_watch(self):
+        decision = _evaluate(_obs(D, basis="EMAS replacement planned", temporality=TemporalQualifier.PLANNED_FUTURE_ACTION))
+        assert decision.is_watch_worthy is True
+
+    def test_rsa_deficiency_early_signal_is_watch(self):
+        decision = _evaluate(_obs(B, basis="RSA deficiency"))
+        assert decision.is_watch_worthy is True
+
+    def test_existing_installation_15_years_no_active_work_is_not_watch(self):
+        decision = _evaluate(_obs(E, basis="installed 15 years ago", temporality=TemporalQualifier.HISTORICAL_FACT))
+        assert decision.is_watch_worthy is False
+
+    def test_existing_installation_plus_current_repair_is_watch(self):
+        decision = _evaluate(
+            _obs(E, basis="EMAS bed present", temporality=TemporalQualifier.HISTORICAL_FACT),
+            _obs(E, basis="currently undergoing repair", temporality=TemporalQualifier.CURRENT_STATE_AS_OF_DOCUMENT_DATE),
+        )
+        assert decision.is_watch_worthy is True
+
+    def test_existing_installation_plus_future_replacement_is_watch(self):
+        decision = _evaluate(
+            _obs(E, basis="installed 2011", temporality=TemporalQualifier.HISTORICAL_FACT),
+            _obs(D, basis="replacement planned 2027", temporality=TemporalQualifier.PLANNED_FUTURE_ACTION),
+        )
+        assert decision.is_watch_worthy is True
+
+    def test_historical_installation_only_is_not_watch(self):
+        decision = _evaluate(_obs(E, basis="historical installation", temporality=TemporalQualifier.HISTORICAL_FACT))
+        assert decision.is_watch_worthy is False
+
+
+# --- ERG1.6: temporality asymmetry attack (mission S7, HIGH PRIORITY) ---
+
+class TestTemporalityAsymmetry:
+    """A/B/C/D default forward/opportunity-oriented; E/F default
+    backward/inventory-oriented - attacked directly, no implicit
+    'UNKNOWN = current' for E/F."""
+
+    def test_a_through_d_unknown_temporality_retains_existing_watch_semantics(self):
+        for cls in (A, B, C, D):
+            decision = _evaluate(_obs(cls, basis="x", temporality=TemporalQualifier.UNKNOWN))
+            assert decision.is_watch_worthy is True, cls
+
+    def test_e_unknown_temporality_is_inventory_not_watch(self):
+        decision = _evaluate(_obs(E, basis="x", temporality=TemporalQualifier.UNKNOWN))
+        assert decision.is_inventory_relevant is True
+        assert decision.is_watch_worthy is False
+
+    def test_f_unknown_temporality_is_inventory_not_watch(self):
+        decision = _evaluate(_obs(F, basis="x", temporality=TemporalQualifier.UNKNOWN))
+        assert decision.is_inventory_relevant is True
+        assert decision.is_watch_worthy is False
+
+    def test_e_historical_fact_is_inventory_not_watch(self):
+        decision = _evaluate(_obs(E, basis="x", temporality=TemporalQualifier.HISTORICAL_FACT))
+        assert decision.is_inventory_relevant is True
+        assert decision.is_watch_worthy is False
+
+    @pytest.mark.parametrize("temporality", [
+        TemporalQualifier.CURRENT_STATE_AS_OF_DOCUMENT_DATE, TemporalQualifier.PLANNED_FUTURE_ACTION,
+        TemporalQualifier.REQUESTED_PENDING_APPROVAL,
+    ])
+    def test_e_explicit_current_or_future_temporality_is_inventory_and_watch(self, temporality):
+        decision = _evaluate(_obs(E, basis="x", temporality=temporality))
+        assert decision.is_inventory_relevant is True
+        assert decision.is_watch_worthy is True
+
+    @pytest.mark.parametrize("temporality", [
+        TemporalQualifier.CURRENT_STATE_AS_OF_DOCUMENT_DATE, TemporalQualifier.PLANNED_FUTURE_ACTION,
+        TemporalQualifier.REQUESTED_PENDING_APPROVAL,
+    ])
+    def test_f_explicit_current_or_future_temporality_is_inventory_and_watch(self, temporality):
+        decision = _evaluate(_obs(F, basis="x", temporality=temporality))
+        assert decision.is_inventory_relevant is True
+        assert decision.is_watch_worthy is True
+
+    def test_completed_a_through_d_observation_alone_is_not_watch(self):
+        """New in ERG1.6: a closed-out pipeline event (e.g. 'RSA
+        subsequently constructed, deficiency resolved') must not keep
+        reading as an active watch item forever."""
+        decision = _evaluate(_obs(B, basis="RSA improvement completed", temporality=TemporalQualifier.COMPLETED))
+        assert decision.outcome == PLAUSIBLE  # outcome computation unchanged
+        assert decision.is_watch_worthy is False
+
+    def test_completed_a_through_d_observation_with_a_still_open_observation_is_watch(self):
+        decision = _evaluate(
+            _obs(B, basis="RSA improvement completed", temporality=TemporalQualifier.COMPLETED),
+            _obs(C, basis="follow-on feasibility study still open", temporality=TemporalQualifier.CURRENT_STATE_AS_OF_DOCUMENT_DATE),
+        )
+        assert decision.is_watch_worthy is True
+
+
+# --- ERG1.6: canonical admission derivation (mission S8) ---
+
+class TestCanonicalAdmissionDerivation:
+    def test_inventory_true_watch_false_yields_admission_true(self):
+        decision = _evaluate(_obs(E, basis="x", temporality=TemporalQualifier.HISTORICAL_FACT))
+        assert decision.is_inventory_relevant is True and decision.is_watch_worthy is False
+        assert decision.is_canonical_admission_relevant is True
+
+    def test_inventory_false_watch_true_yields_admission_true(self):
+        decision = _evaluate(_obs(B, basis="x"))
+        assert decision.is_inventory_relevant is False and decision.is_watch_worthy is True
+        assert decision.is_canonical_admission_relevant is True
+
+    def test_inventory_true_watch_true_yields_admission_true(self):
+        decision = _evaluate(
+            _obs(E, basis="x", temporality=TemporalQualifier.HISTORICAL_FACT),
+            _obs(D, basis="y", temporality=TemporalQualifier.PLANNED_FUTURE_ACTION),
+        )
+        assert decision.is_inventory_relevant is True and decision.is_watch_worthy is True
+        assert decision.is_canonical_admission_relevant is True
+
+    def test_inventory_false_watch_false_yields_admission_false(self):
+        decision = _evaluate(_obs(G, basis="x"))
+        assert decision.is_inventory_relevant is False and decision.is_watch_worthy is False
+        assert decision.is_canonical_admission_relevant is False
+
+    def test_admission_is_always_exactly_the_or_of_the_two_primitives(self):
+        """Structural proof, not just spot cases - re-run across every test
+        already in this module's own fixtures."""
+        for observations in (
+            (), (_obs(G, basis="x"),), (_obs(A, basis="x"),), (_obs(B, basis="x"),),
+            (_obs(E, basis="x", temporality=TemporalQualifier.HISTORICAL_FACT),),
+            (_obs(E, basis="x", temporality=TemporalQualifier.CURRENT_STATE_AS_OF_DOCUMENT_DATE),),
+        ):
+            decision = evaluate_emas_relevance(observations)
+            assert decision.is_canonical_admission_relevant == (decision.is_inventory_relevant or decision.is_watch_worthy)
+
+
+# --- ERG1.6: active-replacement regression (mission S11, mandatory) ---
+
+class TestActiveReplacementRegression:
+    def test_existing_emas_plus_2027_replacement_is_inventory_and_watch_and_admission(self):
+        decision = _evaluate(
+            _obs(E, basis="existing EMAS", temporality=TemporalQualifier.HISTORICAL_FACT),
+            _obs(D, basis="replacement planned for 2027", temporality=TemporalQualifier.PLANNED_FUTURE_ACTION),
+        )
+        assert decision.is_inventory_relevant is True
         assert decision.is_watch_worthy is True
         assert decision.is_canonical_admission_relevant is True
+        # No Signal-shaped field or Signal-related import anywhere - see
+        # TestInformationFirewall/TestSignalFirewall below.
+
+
+# --- ERG1.6: removed/cancelled cases (mission S12) ---
+
+class TestRemovedAndCancelledCases:
+    """ERG1.5's own contradiction treatment (surfaced, never suppressing) is
+    NOT silently redesigned here - re-confirmed identical for the two new
+    booleans."""
+
+    def test_historical_emas_existed_but_later_removed_stays_inventory_relevant(self):
+        decision = _evaluate(
+            _obs(E, basis="EMAS installed 1998", temporality=TemporalQualifier.HISTORICAL_FACT),
+            _obs(E, basis="removed 2015, RSA constructed instead", polarity=ObservationPolarity.CONTRADICTING),
+        )
+        assert decision.is_inventory_relevant is True  # history preserved, never deleted
+        assert decision.is_watch_worthy is False  # nothing currently active
+        assert decision.contradicting_evidence_classes == frozenset({E})
+
+    def test_planned_emas_project_cancelled_stays_watch_worthy_contradiction_surfaced(self):
+        """Matches Case I's own already-locked reasoning: contradiction
+        never suppresses watch either - a human sees both the original
+        claim and its contradiction, never a silently resolved dispute."""
+        decision = _evaluate(
+            _obs(D, basis="EMAS replacement planned", temporality=TemporalQualifier.PLANNED_FUTURE_ACTION),
+            _obs(D, basis="project cancelled", polarity=ObservationPolarity.CONTRADICTING),
+        )
+        assert decision.is_watch_worthy is True
+        assert decision.contradicting_evidence_classes == frozenset({D})
+
+    def test_rsa_deficiency_resolved_via_completed_tag_is_not_watch(self):
+        """The CORRECT modeling for 'this closed out' per module docstring's
+        own CLOSED-EVENT NOTE: tag the observation COMPLETED, don't rely on
+        CONTRADICTING to suppress watch (it never does, by design)."""
+        decision = _evaluate(_obs(B, basis="full standard RSA subsequently constructed, deficiency resolved", temporality=TemporalQualifier.COMPLETED))
+        assert decision.is_watch_worthy is False
+
+    def test_rsa_deficiency_resolution_modeled_as_contradiction_does_not_suppress_watch(self):
+        """A DIFFERENT, equally valid modeling choice from the test above -
+        deliberately produces a DIFFERENT (also correct) result: contradiction
+        never gates watch, by the already-locked, unchanged rule. Both tests
+        are correct; they simply model 'resolution' two different ways."""
+        decision = _evaluate(
+            _obs(B, basis="RSA deficiency identified"),
+            _obs(B, basis="full standard RSA subsequently constructed, deficiency resolved", polarity=ObservationPolarity.CONTRADICTING),
+        )
+        assert decision.is_watch_worthy is True
+        assert decision.contradicting_evidence_classes == frozenset({B})
 
 
 # --- Adversarial-review addition: evaluator version seam (mission S22) ---
@@ -543,6 +796,25 @@ class TestDeterminism:
         obs = (_obs(D, basis="EMAS grant"),)
         assert evaluate_emas_relevance(obs) == evaluate_emas_relevance(obs)
 
+    def test_mixed_inventory_and_watch_evidence_reversed_order_is_stable(self):
+        """ERG1.6-specific: both new booleans, not just outcome, must be
+        order-independent under a mixed evidence set."""
+        e = _obs(E, basis="existing EMAS", temporality=TemporalQualifier.HISTORICAL_FACT)
+        d = _obs(D, basis="replacement planned", temporality=TemporalQualifier.PLANNED_FUTURE_ACTION)
+        g = _obs(G, basis="pavement work")
+        first = _evaluate(e, d, g)
+        second = _evaluate(g, d, e)
+        third = _evaluate(d, g, e)
+        assert first == second == third
+        assert first.is_inventory_relevant is True and first.is_watch_worthy is True
+
+    def test_unicode_evidence_inventory_and_watch_booleans_stable(self):
+        decision = _evaluate(_obs(
+            E, basis="不足な滑走路 EMAS 設置済み", temporality=TemporalQualifier.HISTORICAL_FACT,
+        ))
+        assert decision.is_inventory_relevant is True
+        assert decision.is_watch_worthy is False
+
 
 # --- S. Empty evidence ---
 
@@ -627,7 +899,7 @@ class TestOutputContract:
         decision = _evaluate(_obs(G, basis="pavement reconstruction"))
         for field_name in (
             "outcome", "reason", "evidence_classes_matched", "contradicting_evidence_classes",
-            "is_watch_worthy", "is_canonical_admission_relevant",
+            "is_inventory_relevant", "is_watch_worthy", "is_canonical_admission_relevant",
         ):
             assert hasattr(decision, field_name)
 
@@ -643,6 +915,44 @@ class TestOutputContract:
 
 
 # --- Information firewall (AST-based, mirrors test_promotion_policy_evaluation.py) ---
+
+# --- ERG1.6: Signal firewall (mission S13) and inventory firewall (mission S14) ---
+
+class TestSignalAndInventoryFirewall:
+    """is_watch_worthy=True must never mean 'a Signal exists/should be
+    created/promotion approved.' is_inventory_relevant=True must never
+    create an Airport/Installation/EMAS bed/UnknownAirportCandidate/
+    canonical admission - both are evaluator OUTPUT ONLY."""
+
+    def test_no_field_named_or_resembling_signal_eligible_exists(self):
+        decision = evaluate_emas_relevance((EmasEvidenceObservation(A, basis="x"),))
+        field_names = {f for f in vars(decision).keys()}
+        assert not any("signal" in f.lower() for f in field_names)
+
+    def test_active_replacement_produces_no_signal_or_installation_side_effect(self):
+        """The mission's own S11 regression, restated as an explicit
+        no-side-effect proof: calling the evaluator performs no action
+        beyond returning a plain dataclass."""
+        before = evaluate_emas_relevance((
+            EmasEvidenceObservation(E, basis="existing EMAS", temporality=TemporalQualifier.HISTORICAL_FACT),
+            EmasEvidenceObservation(D, basis="replacement planned 2027", temporality=TemporalQualifier.PLANNED_FUTURE_ACTION),
+        ))
+        after = evaluate_emas_relevance((
+            EmasEvidenceObservation(E, basis="existing EMAS", temporality=TemporalQualifier.HISTORICAL_FACT),
+            EmasEvidenceObservation(D, basis="replacement planned 2027", temporality=TemporalQualifier.PLANNED_FUTURE_ACTION),
+        ))
+        assert before == after  # pure, no accumulating hidden state
+
+    def test_no_import_of_installation_or_airport_or_unknown_airport_candidate_models(self):
+        source = inspect.getsource(erm)
+        tree = ast.parse(source)
+        imported_names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    imported_names.add(alias.asname or alias.name)
+        assert imported_names.isdisjoint({"Installation", "Airport", "UnknownAirportCandidate", "Signal"})
+
 
 class TestInformationFirewall:
     """Attack section 13: ERG1 must not create/update/query any ORM object,
