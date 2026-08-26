@@ -37,13 +37,42 @@ import scripts.migrate_evidence_bag_persistence_eb2 as migration
 EB2_TABLES = migration.TABLES
 
 
+def _tables_depending_on(table_names: "set[str]") -> "set[str]":
+    """Transitive closure: every table (anywhere in Base.metadata) that
+    has a foreign key pointing, directly or indirectly, at any table in
+    `table_names`. A realistic "not yet migrated" pre-EB2 database could
+    not contain such a table either - it would have no valid FK target
+    (KAR1's own source_assertion_identity_resolutions is the first real
+    example: its causal-integrity composite ForeignKeyConstraint points at
+    source_assertion_evidence_bags, an EB2 table, so a pre-EB2 fixture
+    must exclude it too, exactly like it already excludes the EB2 tables
+    themselves). Computed generically, not by hardcoding any specific
+    table name, so this stays correct for any future table with the same
+    kind of dependency."""
+    dependents: "set[str]" = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, table in Base.metadata.tables.items():
+            if name in table_names or name in dependents:
+                continue
+            referenced = {fk.column.table.name for column in table.columns for fk in column.foreign_keys}
+            if referenced & (table_names | dependents):
+                dependents.add(name)
+                changed = True
+    return dependents
+
+
 def _pre_eb2_db(path):
     """A full pre-EB2 schema (every table except the two this migration
-    creates) - the realistic "not yet migrated" starting state."""
+    creates, and any table that itself structurally depends on one of
+    them via a foreign key) - the realistic "not yet migrated" starting
+    state."""
     engine = create_engine(f"sqlite:///{path}")
+    excluded = set(EB2_TABLES) | _tables_depending_on(set(EB2_TABLES))
     pre_meta = MetaData()
     for name, table in Base.metadata.tables.items():
-        if name not in EB2_TABLES:
+        if name not in excluded:
             table.to_metadata(pre_meta)
     pre_meta.create_all(engine)
     engine.dispose()

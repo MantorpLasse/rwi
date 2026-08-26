@@ -22,6 +22,7 @@ from app.models import (
     Source,
     SourceAssertion,
     SourceAssertionEvidenceBag,
+    SourceAssertionIdentityResolution,
     Snapshot,
     UnknownAirportCandidate,
     UnknownAirportCandidateRelevanceAssessment,
@@ -343,6 +344,17 @@ EXPECTED_COLUMNS = {
         "created_at": ("DATETIME", False, ("callable",), None),
         "supersedes_review_id": ("INTEGER", True, None, None),
     },
+    "source_assertion_identity_resolutions": {
+        "id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+        "evidence_bag_snapshot_id": ("INTEGER", False, None, None),
+        "action": ("VARCHAR(30)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "reviewer": ("VARCHAR(100)", False, None, None),
+        "matched_airport_id": ("INTEGER", True, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_resolution_id": ("INTEGER", True, None, None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -433,6 +445,19 @@ EXPECTED_FOREIGN_KEYS = {
         ("candidate_id", "unknown_airport_candidates.id"),
         ("basis_assessment_id", "unknown_airport_candidate_relevance_assessments.id"),
         ("supersedes_review_id", "unknown_airport_candidate_relevance_reviews.id"),
+    },
+    "source_assertion_identity_resolutions": {
+        ("source_assertion_id", "source_assertions.id"),
+        # Composite FK (KAR1's own causal-integrity guarantee, mirroring
+        # identity_guard_evaluations's own identical pattern above):
+        # source_assertion_id ALSO participates in the composite
+        # (evidence_bag_snapshot_id, source_assertion_id) ->
+        # (source_assertion_evidence_bags.id, source_assertion_evidence_bags.source_assertion_id)
+        # constraint, so this column carries two independent FK targets.
+        ("source_assertion_id", "source_assertion_evidence_bags.source_assertion_id"),
+        ("evidence_bag_snapshot_id", "source_assertion_evidence_bags.id"),
+        ("matched_airport_id", "airports.id"),
+        ("supersedes_resolution_id", "source_assertion_identity_resolutions.id"),
     },
 }
 
@@ -554,6 +579,12 @@ EXPECTED_INDEXES = {
         ("ix_unknown_airport_candidate_relevance_reviews_basis_assessment_id", ("basis_assessment_id",), False),
         ("ix_unknown_airport_candidate_relevance_reviews_supersedes_review_id", ("supersedes_review_id",), False),
     },
+    "source_assertion_identity_resolutions": {
+        ("ix_source_assertion_identity_resolutions_source_assertion_id", ("source_assertion_id",), False),
+        ("ix_source_assertion_identity_resolutions_evidence_bag_snapshot_id", ("evidence_bag_snapshot_id",), False),
+        ("ix_source_assertion_identity_resolutions_matched_airport_id", ("matched_airport_id",), False),
+        ("ix_source_assertion_identity_resolutions_supersedes_resolution_id", ("supersedes_resolution_id",), False),
+    },
 }
 
 DEFAULT_CASCADE = frozenset({"merge", "save-update"})
@@ -662,6 +693,12 @@ EXPECTED_RELATIONSHIPS = {
     },
     "SourceAssertionEvidenceBag": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+    },
+    "SourceAssertionIdentityResolution": {
+        "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+        "evidence_bag_snapshot": ("SourceAssertionEvidenceBag", None, DEFAULT_CASCADE),
+        "matched_airport": ("Airport", None, DEFAULT_CASCADE),
+        "supersedes": ("SourceAssertionIdentityResolution", None, DEFAULT_CASCADE),
     },
     "IdentityGuardEvaluation": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),

@@ -18,6 +18,7 @@ from app.models.unknown_airport_candidate_relevance_assessment import (
     UnknownAirportCandidateRelevanceAssessmentEvidenceLink,
 )
 from app.models.unknown_airport_candidate_relevance_review import UnknownAirportCandidateRelevanceReview
+from app.models.source_assertion_identity_resolution import SourceAssertionIdentityResolution
 
 __all__ = [
     "Airport",
@@ -39,6 +40,7 @@ __all__ = [
     "Source",
     "SourceAssertion",
     "SourceAssertionEvidenceBag",
+    "SourceAssertionIdentityResolution",
     "Snapshot",
     "UnknownAirportCandidate",
     "UnknownAirportCandidateRelevanceAssessment",
