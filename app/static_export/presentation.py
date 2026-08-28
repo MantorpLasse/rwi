@@ -51,6 +51,51 @@ STATUS_PRESENTATION = {
     "cip": {"role": "planning", "sv": "CIP", "en": "CIP"},
 }
 
+# SLT1 (docs/architecture/rwi-signal-temporal-relevance-opportunity-lifecycle-design.md):
+# presentation for app.static_export.signal_lifecycle.SignalLifecycleState.
+# Concise, investor-facing labels - never the raw enum name - plus a short
+# tooltip that states plainly what each state does and does not claim
+# (design doc S11/S13's own explicit ask: e.g. "Behöver research" must read
+# as "unconfirmed", not "discarded" or "unimportant").
+LIFECYCLE_PRESENTATION = {
+    "active_opportunity": {
+        "css": "active",
+        "sv": "Aktuell möjlighet",
+        "en": "Active opportunity",
+        "sv_tooltip": "Källor pekar på pågående eller kommande ekonomisk aktivitet just nu - budget, upphandling, projektering eller byggnation.",
+        "en_tooltip": "Sources point to current or upcoming economic activity right now - funding, procurement, design or construction.",
+    },
+    "developing_watch": {
+        "css": "watch",
+        "sv": "Under bevakning",
+        "en": "Developing watch",
+        "sv_tooltip": "Relevant EMAS-aktivitet finns, men det är ännu för osäkert eller för tidigt för att bedöma kommersiell mognad.",
+        "en_tooltip": "Relevant EMAS activity exists, but commercial timing or maturity is still uncertain.",
+    },
+    "realized_historical": {
+        "css": "historical",
+        "sv": "Historik",
+        "en": "Historical",
+        "sv_tooltip": "Den ekonomiska aktiviteten är bekräftat genomförd eller avslutad - värdefull historik, inte en aktuell möjlighet.",
+        "en_tooltip": "The economic activity is confirmed completed or concluded - valuable history, not a current opportunity.",
+    },
+    "stale_unresolved": {
+        "css": "stale",
+        "sv": "Behöver research",
+        "en": "Needs research",
+        "sv_tooltip": "Gammal nog att inte visas som aktuell, men RWI saknar ännu bevis för vad som hänt sedan dess. Inte bortsorterad - bara obekräftad.",
+        "en_tooltip": "Old enough that treating it as current would be misleading, but RWI has no evidence yet of what happened since. Not discarded - just unconfirmed.",
+    },
+    "other": {
+        "css": "unknown",
+        "sv": "Ej klassificerad",
+        "en": "Unclassified",
+        "sv_tooltip": "Kunde inte klassificeras säkert utifrån tillgänglig information.",
+        "en_tooltip": "Could not be safely classified from the information available.",
+    },
+}
+
+
 def text(key: str, locale: str = "sv") -> str:
     return LOCALES.get(locale, LOCALES["sv"]).get(key, key)
 
@@ -62,6 +107,19 @@ def status_view(value: str | None, locale: str = "sv") -> tuple[str, str]:
         return entry[locale], entry["role"]
     # Unknown values are not assigned an invented lifecycle meaning.
     return value.replace("_", " "), "unknown"
+
+
+def lifecycle_view(state: str | None, locale: str = "sv") -> tuple[str, str, str]:
+    """(label, css_class, tooltip) for a SignalLifecycleState value's own
+    `.value` (e.g. "active_opportunity"). Mirrors status_view()'s own
+    fallback discipline: an unrecognized value renders as its own
+    underscore-stripped text, never silently coerced into an existing
+    label."""
+    entry = LIFECYCLE_PRESENTATION.get(state or "")
+    if entry:
+        return entry[locale], entry["css"], entry[f"{locale}_tooltip"]
+    fallback = (state or "").replace("_", " ") or ("Okänd" if locale == "sv" else "Unknown")
+    return fallback, "unknown", ""
 
 
 def public_signal_state(signal_id: int, status: str | None, locale: str = "sv") -> tuple[str, str | None]:

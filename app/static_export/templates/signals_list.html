@@ -1,12 +1,30 @@
 {% extends "base.html" %}
-{% from "_components.html" import gauge, cat, signal_row, signal_strip, source_badge, airport_label %}
+{% from "_components.html" import gauge, cat, signal_row, signal_strip, source_badge, airport_label, lifecycle_badge %}
 {% block title %}Signaler · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <h1>Signaler</h1>
 <p class="subtitle">{{ signals|length }} signaler.</p>
 
+{# SLT1 (docs/architecture/rwi-signal-temporal-relevance-opportunity-
+   lifecycle-design.md): real, computed counts per lifecycle state - never
+   hardcoded. Doubles as a compact legend for the lifecycle filter below. #}
+<div class="lifecycle-stats">
+  {% for item in lifecycle_counts %}
+  <div class="lifecycle-stat" title="{{ item.tooltip }}">
+    <span class="lifecycle {{ item.css_class }}">{{ item.label }}</span>
+    <span class="lifecycle-stat-count">{{ item.count }}</span>
+  </div>
+  {% endfor %}
+</div>
+
 <div class="filters">
   <input id="q" type="search" placeholder="Sök signal eller flygplats...">
+  <select id="lifecycle-filter" title="Visa signaler efter var i sin livscykel de befinner sig - se rubrikerna ovan.">
+    <option value="current" selected>Aktuellt (möjligheter + under bevakning)</option>
+    <option value="historical">Historik</option>
+    <option value="stale">Behöver research</option>
+    <option value="">Alla</option>
+  </select>
   <select id="status-filter">
     <option value="">Alla statusar</option>
     {% for item in statuses %}<option value="{{ item.value }}">{{ item.label }}</option>{% endfor %}
@@ -21,16 +39,25 @@
 <div class="card">
   <table id="signals-table">
     <thead>
-      <tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
+      <tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
     </thead>
     <tbody>
       {% for item in signal_rows %}
         {% if item.kind == "single" %}
         {{ signal_row(item.signal, root) }}
         {% else %}
+        {# A group can legitimately span more than one lifecycle state (e.g.
+           three replacement_after_incident signals at one airport, of
+           different ages) - data-lifecycle carries every distinct state
+           present among its members (space-separated tokens), so the group
+           stays reachable from EVERY filter view any of its members belongs
+           to. Never collapsed to just the headline member's own state -
+           that would silently hide a real member from the view it belongs
+           in (mission hard boundary: no Signal silently omitted). #}
         <tr class="grouprow" data-toggle="{{ item.group_id }}"
             data-search="{{ (item.members|map(attribute='title')|join(' ') ~ ' ' ~ item.airport_name ~ ' ' ~ item.airport_code)|lower }}"
             data-status="{{ item.top_signal.status or '' }}" data-country="{{ item.country }}"
+            data-lifecycle="{{ item.members|map(attribute='lifecycle_state')|unique|join(' ') }}"
             data-signal-ids="{{ item.members|map(attribute='id')|join(',') }}"
         >
           <td data-label="Bevaka"><button type="button" class="star-toggle" data-signal-id="{{ item.top_signal.id }}" aria-pressed="false" aria-label="Bevaka signal">☆</button></td>
@@ -38,6 +65,7 @@
           <td class="title" data-label="Signal">
             <span class="caret">▶</span><span class="grouptitle">{{ item.top_signal.title }}</span><span class="more-tag">+{{ item.more_count }} till</span>
           </td>
+          <td data-label="Läge">{{ lifecycle_badge(item.top_signal) }}</td>
           <td data-label="Status"><span class="pill {{ 'done' if item.top_signal.is_completed else 'status ' ~ item.top_signal.status_role }}">{{ item.top_signal.status_label }}</span></td>
           <td data-label="Projekttyp">{{ cat(item.category_label, item.category_class) }}</td>
           <td data-label="Confidence">{{ gauge(item.confidence_level, item.confidence_label, root) }}</td>
@@ -46,7 +74,7 @@
           <td data-label="Score">{% if item.top_signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(item.top_signal.probability_score) }}</span>{% else %}–{% endif %}</td>
         </tr>
         <tr class="detail-row" data-detail-for="{{ item.group_id }}">
-          <td colspan="9">
+          <td colspan="10">
             <div class="detail-wrap" data-wrap="{{ item.group_id }}">
               <div class="detail-panel">
                 {% for signal in item.members %}
@@ -58,21 +86,33 @@
         </tr>
         {% endif %}
       {% else %}
-      <tr><td colspan="8" class="empty-state">Inga signaler registrerade.</td></tr>
+      <tr><td colspan="10" class="empty-state">Inga signaler registrerade.</td></tr>
       {% endfor %}
     </tbody>
   </table>
-  <div id="no-match" class="empty-state" hidden>Inga signaler matchade sökningen.</div>
+  <div id="no-match" class="empty-state" hidden>Inga signaler matchade sökningen eller filtret.</div>
 </div>
 
 <script src="{{ root }}/watch.js"></script>
 <script>
 (function () {
   var q = document.getElementById("q");
+  var lifecycleFilter = document.getElementById("lifecycle-filter");
   var statusFilter = document.getElementById("status-filter");
   var countryFilter = document.getElementById("country-filter");
   var watchedOnly = document.getElementById("watched-only");
   var table = document.getElementById("signals-table");
+
+  // SLT1: maps the lifecycle-filter <select>'s own value to the set of
+  // real lifecycle-state tokens (app.static_export.signal_lifecycle's own
+  // SignalLifecycleState.value strings, written server-side into each
+  // row's data-lifecycle attribute) it should show. "" (Alla) matches
+  // everything, same convention status-filter/country-filter already use.
+  var LIFECYCLE_FILTER_STATES = {
+    current: ["active_opportunity", "developing_watch"],
+    historical: ["realized_historical"],
+    stale: ["stale_unresolved"]
+  };
   var tbody = table.querySelector("tbody");
   var noMatch = document.getElementById("no-match");
 
@@ -111,6 +151,21 @@
     return blockIds(block).some(function (id) { return watched.indexOf(id) !== -1; });
   }
 
+  function blockLifecycleStates(block) {
+    // A group's data-lifecycle can carry more than one space-separated
+    // token (mixed-tier group - see signals_list.html's own grouprow
+    // comment); a single row always carries exactly one.
+    var raw = block.rows[0].getAttribute("data-lifecycle") || "";
+    return raw.split(/\s+/).filter(Boolean);
+  }
+
+  function blockMatchesLifecycleFilter(block) {
+    var wanted = LIFECYCLE_FILTER_STATES[lifecycleFilter.value];
+    if (!wanted) return true; // "" (Alla) - matches everything
+    var present = blockLifecycleStates(block);
+    return present.some(function (state) { return wanted.indexOf(state) !== -1; });
+  }
+
   function blockMatchesFilters(block, watched) {
     var row = block.rows[0];
     var searchAttr = row.getAttribute("data-search");
@@ -121,7 +176,8 @@
     var matches =
       (!term || searchAttr.indexOf(term) !== -1) &&
       (!status || row.getAttribute("data-status") === status) &&
-      (!country || row.getAttribute("data-country") === country);
+      (!country || row.getAttribute("data-country") === country) &&
+      blockMatchesLifecycleFilter(block);
     if (matches && watchedOnly.checked) {
       matches = isBlockWatched(block, watched);
     }
@@ -154,7 +210,7 @@
 
   RWIWatch.initStars(table, render);
 
-  [q, statusFilter, countryFilter, watchedOnly].forEach(function (el) {
+  [q, lifecycleFilter, statusFilter, countryFilter, watchedOnly].forEach(function (el) {
     el.addEventListener("input", render);
     el.addEventListener("change", render);
   });

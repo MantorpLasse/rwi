@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session, selectinload
 from app.database import SessionLocal
 from app.models import Airport, Installation, PhysicalInstallationIdentity, Runway, RunwayEnd, Signal, SourceAssertion
 from app.services.runway_identity import AmbiguousRunwayDesignationError, normalize_end
-from app.static_export.presentation import public_signal_state, status_view, text
+from app.static_export.presentation import lifecycle_view, public_signal_state, status_view, text
+from app.static_export.signal_lifecycle import SignalLifecycleState, derive_signal_lifecycle
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -122,6 +123,36 @@ _SOURCE_TYPE = {
 }
 
 
+# SLT1: default-view relevance ordering for SignalLifecycleState - current/
+# future opportunities first, then developing watch, then stale/unresolved
+# (still worth surfacing for research priority), then realized/historical
+# last (settled, own dedicated view - design doc S11). Never used to
+# recompute or override probability_score itself, only as the primary sort
+# key ahead of it (see _signal_sort_key below).
+_LIFECYCLE_SORT_TIER = {
+    SignalLifecycleState.ACTIVE_OPPORTUNITY: 0,
+    SignalLifecycleState.DEVELOPING_WATCH: 1,
+    SignalLifecycleState.STALE_UNRESOLVED: 2,
+    SignalLifecycleState.REALIZED_HISTORICAL: 3,
+    SignalLifecycleState.OTHER: 4,
+}
+
+
+def _signal_sort_key(view: SimpleNamespace) -> tuple:
+    """Lifecycle tier first, existing score-descending meaning preserved as
+    the tie-break within a tier, Signal id as a final deterministic
+    tie-break (mission-required: "sorting inside a lifecycle tier remains
+    deterministic" - the pre-SLT1 sort had no such guarantee for same-score
+    rows). probability_score's own meaning is untouched; only sort order
+    changes."""
+    return (
+        view.lifecycle_tier,
+        view.probability_score is None,
+        -(view.probability_score or 0),
+        view.id,
+    )
+
+
 def _confidence_level(value: str | None) -> str:
     return _CONFIDENCE_LEVEL.get((value or "").lower(), "low")
 
@@ -139,7 +170,7 @@ def _source_type_view(value: str | None) -> tuple[str | None, str | None, str | 
     return _SOURCE_TYPE.get(value, ("Övrig källa", None, None))
 
 
-def _signal_view(signal: Signal) -> SimpleNamespace:
+def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
     source = signal.source
     category_label, category_class = _category_view(signal.category)
     confidence_level = _confidence_level(signal.confidence)
@@ -147,6 +178,12 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         source.source_type if source else None
     )
     public_status_label, public_qualification = public_signal_state(signal.id, signal.status)
+    # SLT1 (docs/architecture/rwi-signal-temporal-relevance-opportunity-
+    # lifecycle-design.md): a presentation-only, non-persisted read, never a
+    # replacement for status/confidence/probability_score - see
+    # app.static_export.signal_lifecycle's own module docstring.
+    lifecycle = derive_signal_lifecycle(signal, today=today)
+    lifecycle_label, lifecycle_class, lifecycle_tooltip = lifecycle_view(lifecycle.state.value)
     return SimpleNamespace(
         id=signal.id,
         title=signal.title,
@@ -162,6 +199,12 @@ def _signal_view(signal: Signal) -> SimpleNamespace:
         public_qualification=public_qualification,
         is_completed=signal.status == "completed",
         installation_id=signal.installation_id,
+        lifecycle_state=lifecycle.state.value,
+        lifecycle_tier=_LIFECYCLE_SORT_TIER[lifecycle.state],
+        lifecycle_label=lifecycle_label,
+        lifecycle_class=lifecycle_class,
+        lifecycle_tooltip=lifecycle_tooltip,
+        lifecycle_reason=lifecycle.reason,
         updated_at=signal.updated_at,
         target_year=signal.target_year,
         planning_year=signal.planning_year,
@@ -714,14 +757,29 @@ def _group_signal_views(signal_views: list[SimpleNamespace]) -> list[SimpleNames
     return rows
 
 
-def _airport_view(airport: Airport) -> SimpleNamespace:
-    signal_views = [
-        _signal_view(s)
-        for s in sorted(
-            (s for s in airport.signals if _is_public_signal(s)),
-            key=lambda s: (s.probability_score is None, -(s.probability_score or 0)),
+def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
+    """One row per SignalLifecycleState, in the same relevance order as
+    _LIFECYCLE_SORT_TIER, each carrying its own real count over the exact
+    signal_views passed in (never a separately-queried or hardcoded number)
+    - feeds the stats bar + filter option labels on signals_list.html."""
+    counts = Counter(view.lifecycle_state for view in signal_views)
+    return [
+        SimpleNamespace(
+            state=state.value,
+            label=lifecycle_view(state.value)[0],
+            css_class=lifecycle_view(state.value)[1],
+            tooltip=lifecycle_view(state.value)[2],
+            count=counts.get(state.value, 0),
         )
+        for state in sorted(SignalLifecycleState, key=lambda s: _LIFECYCLE_SORT_TIER[s])
     ]
+
+
+def _airport_view(airport: Airport, *, today: date) -> SimpleNamespace:
+    signal_views = sorted(
+        (_signal_view(s, today=today) for s in airport.signals if _is_public_signal(s)),
+        key=_signal_sort_key,
+    )
     installation_views = [_installation_view(i) for i in airport.installations]
     current_emas = _current_emas_views(airport)
     incident_views = [
@@ -788,17 +846,22 @@ def _json_default(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def build_site(output_dir: Path, *, session: Session | None = None) -> None:
+def build_site(output_dir: Path, *, session: Session | None = None, today: date | None = None) -> None:
+    """`today` defaults to the real current date - the same real-clock
+    default `datetime.now(UTC)` already uses for `generated_at` just below.
+    Callers (chiefly the SLT1 test suite) may pass a fixed date so
+    lifecycle-derivation results stay stable across real-calendar time
+    instead of drifting as the actual date advances."""
     owns_session = session is None
     session = session or SessionLocal()
     try:
-        _build(output_dir, session)
+        _build(output_dir, session, today=today or date.today())
     finally:
         if owns_session:
             session.close()
 
 
-def _build(output_dir: Path, session: Session) -> None:
+def _build(output_dir: Path, session: Session, *, today: date) -> None:
     output_dir = Path(output_dir)
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -825,7 +888,7 @@ def _build(output_dir: Path, session: Session) -> None:
             selectinload(Airport.source_assertions).selectinload(SourceAssertion.source),
         ).order_by(Airport.name)
     ).all()
-    airport_views = [_airport_view(a) for a in airports]
+    airport_views = [_airport_view(a, today=today) for a in airports]
 
     all_signals = session.scalars(
         select(Signal).options(
@@ -834,8 +897,8 @@ def _build(output_dir: Path, session: Session) -> None:
             selectinload(Signal.source),
         )
     ).all()
-    signal_views = [_signal_view(s) for s in all_signals if _is_public_signal(s)]
-    signal_views.sort(key=lambda s: (s.probability_score is None, -(s.probability_score or 0)))
+    signal_views = [_signal_view(s, today=today) for s in all_signals if _is_public_signal(s)]
+    signal_views.sort(key=_signal_sort_key)
 
     def render(name: str, path: Path, **context) -> None:
         template = env.get_template(name)
@@ -892,6 +955,10 @@ def _build(output_dir: Path, session: Session) -> None:
             for status in sorted({s.status for s in signal_views if s.status})
         ],
         countries=sorted({s.country for s in signal_views if s.country}),
+        # SLT1: real, computed counts for the four lifecycle states (design
+        # doc S11/S18's own "current opportunity count is correct"
+        # requirement) - never invented, never hardcoded.
+        lifecycle_counts=_lifecycle_counts_view(signal_views),
     )
     for signal in signal_views:
         render(

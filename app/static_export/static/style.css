@@ -28,6 +28,14 @@
      "never hardcode hex in components" if copied as-is. */
   --new: #6fd9b8;
   --new-bg: #0f3a30;
+  /* SLT1 lifecycle badge (docs/architecture/rwi-signal-temporal-relevance-
+     opportunity-lifecycle-design.md) - "realized/historical" needs its own
+     distinct, calm identity, deliberately separate from every other badge
+     color on the page (active/watch/stale reuse the existing
+     verified/med/low tokens below, since their meaning - "good now",
+     "uncertain", "quiet, needs research" - already matches those hues). */
+  --historical: #b9a6e0;
+  --historical-bg: #241c3a;
 
   --font-display: "Space Grotesk", sans-serif;
   --font-body: "IBM Plex Sans", sans-serif;
@@ -417,6 +425,49 @@ a:hover .sign {
 .cat.replace { background: var(--med-bg); color: var(--med-ink); }
 .cat.incident { background: var(--high-bg); color: var(--high-ink); }
 .cat.study { background: var(--low-bg); color: var(--low-ink); }
+
+/* SLT1 lifecycle badge — a separate, additional badge from .cat/.pill,
+   never replacing either. Text always comes from
+   app/static_export/presentation.py's LIFECYCLE_PRESENTATION, never a raw
+   enum value. */
+.lifecycle {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  display: inline-block;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.lifecycle.active { background: var(--verified-bg); color: var(--verified-ink); border-color: var(--verified); }
+.lifecycle.watch { background: var(--med-bg); color: var(--med-ink); }
+.lifecycle.historical { background: var(--historical-bg); color: var(--historical); }
+.lifecycle.stale { background: var(--low-bg); color: var(--low-ink); }
+.lifecycle.unknown { background: var(--panel2); color: var(--text-dim); }
+
+/* Compact per-state count legend above the signals table. */
+.lifecycle-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 16px;
+}
+
+.lifecycle-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+}
+
+.lifecycle-stat-count {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
 
 /* Confidence som gauge, inte badge-text. */
 .gauge {
