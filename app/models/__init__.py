@@ -19,6 +19,7 @@ from app.models.unknown_airport_candidate_relevance_assessment import (
 )
 from app.models.unknown_airport_candidate_relevance_review import UnknownAirportCandidateRelevanceReview
 from app.models.source_assertion_identity_resolution import SourceAssertionIdentityResolution
+from app.models.source_assertion_legacy_identity_attestation import SourceAssertionLegacyIdentityAttestation
 
 __all__ = [
     "Airport",
@@ -41,6 +42,7 @@ __all__ = [
     "SourceAssertion",
     "SourceAssertionEvidenceBag",
     "SourceAssertionIdentityResolution",
+    "SourceAssertionLegacyIdentityAttestation",
     "Snapshot",
     "UnknownAirportCandidate",
     "UnknownAirportCandidateRelevanceAssessment",

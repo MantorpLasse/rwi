@@ -355,6 +355,18 @@ EXPECTED_COLUMNS = {
         "created_at": ("DATETIME", False, ("callable",), None),
         "supersedes_resolution_id": ("INTEGER", True, None, None),
     },
+    "source_assertion_legacy_identity_attestations": {
+        "id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+        "action": ("VARCHAR(30)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "reviewer": ("VARCHAR(100)", False, None, None),
+        "matched_airport_id": ("INTEGER", True, None, None),
+        "reviewed_snapshot_json": ("TEXT", False, None, None),
+        "reviewed_snapshot_hash": ("VARCHAR(64)", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_attestation_id": ("INTEGER", True, None, None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -458,6 +470,11 @@ EXPECTED_FOREIGN_KEYS = {
         ("evidence_bag_snapshot_id", "source_assertion_evidence_bags.id"),
         ("matched_airport_id", "airports.id"),
         ("supersedes_resolution_id", "source_assertion_identity_resolutions.id"),
+    },
+    "source_assertion_legacy_identity_attestations": {
+        ("source_assertion_id", "source_assertions.id"),
+        ("matched_airport_id", "airports.id"),
+        ("supersedes_attestation_id", "source_assertion_legacy_identity_attestations.id"),
     },
 }
 
@@ -585,6 +602,12 @@ EXPECTED_INDEXES = {
         ("ix_source_assertion_identity_resolutions_matched_airport_id", ("matched_airport_id",), False),
         ("ix_source_assertion_identity_resolutions_supersedes_resolution_id", ("supersedes_resolution_id",), False),
     },
+    "source_assertion_legacy_identity_attestations": {
+        ("ix_source_assertion_legacy_identity_attestations_source_assertion_id", ("source_assertion_id",), False),
+        ("ix_source_assertion_legacy_identity_attestations_matched_airport_id", ("matched_airport_id",), False),
+        ("ix_source_assertion_legacy_identity_attestations_reviewed_snapshot_hash", ("reviewed_snapshot_hash",), False),
+        ("ix_source_assertion_legacy_identity_attestations_supersedes_attestation_id", ("supersedes_attestation_id",), False),
+    },
 }
 
 DEFAULT_CASCADE = frozenset({"merge", "save-update"})
@@ -699,6 +722,11 @@ EXPECTED_RELATIONSHIPS = {
         "evidence_bag_snapshot": ("SourceAssertionEvidenceBag", None, DEFAULT_CASCADE),
         "matched_airport": ("Airport", None, DEFAULT_CASCADE),
         "supersedes": ("SourceAssertionIdentityResolution", None, DEFAULT_CASCADE),
+    },
+    "SourceAssertionLegacyIdentityAttestation": {
+        "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+        "matched_airport": ("Airport", None, DEFAULT_CASCADE),
+        "supersedes": ("SourceAssertionLegacyIdentityAttestation", None, DEFAULT_CASCADE),
     },
     "IdentityGuardEvaluation": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),

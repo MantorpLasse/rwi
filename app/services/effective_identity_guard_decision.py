@@ -93,6 +93,10 @@ from app.models import SourceAssertion
 from app.models.identity_guard_evaluation import IdentityGuardEvaluation
 from app.services.evidence_attachment_guard import AttachmentOutcome
 from app.services.resolved_candidate_evidence_reevaluation import SourceAssertionNotFoundError
+from app.services.source_assertion_legacy_identity_attestation import (
+    get_latest_legacy_identity_attestation,
+    is_attestation_current,
+)
 
 __all__ = [
     "EffectiveIdentityGuardDecisionBasis",
@@ -101,6 +105,7 @@ __all__ = [
 ]
 
 _EVALUATIONS_TABLE = "identity_guard_evaluations"
+_LEGACY_ATTESTATIONS_TABLE = "source_assertion_legacy_identity_attestations"
 
 
 def _identity_guard_evaluations_table_exists(session: Session) -> bool:
@@ -143,6 +148,21 @@ def _identity_guard_evaluations_table_exists(session: Session) -> bool:
     )
 
 
+def _legacy_attestations_table_exists(session: Session) -> bool:
+    """Identical reasoning and technique to
+    `_identity_guard_evaluations_table_exists()` above, for the new
+    source_assertion_legacy_identity_attestations table (this same
+    mission's own migration) - a database that has not yet run that
+    migration must fall back cleanly to ORIGINAL_DECISION, never raise."""
+    return (
+        session.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name = :table"),
+            {"table": _LEGACY_ATTESTATIONS_TABLE},
+        ).first()
+        is not None
+    )
+
+
 class EffectiveIdentityGuardDecisionBasis(str, Enum):
     """Why `effective_decision` was selected - explicit provenance rather
     than an overloaded boolean."""
@@ -160,6 +180,15 @@ class EffectiveIdentityGuardDecisionBasis(str, Enum):
     # back to the original historical decision, distinctly flagged for
     # audit rather than silently treated the same as "no evaluation".
     INCONSISTENT_REEVALUATION = "INCONSISTENT_REEVALUATION"
+    # docs/architecture/rwi-legacy-attached-sourceassertion-identity-
+    # governance-design.md: a currently-trustworthy (non-stale)
+    # CONFIRM_EXISTING_ATTACHMENT SourceAssertionLegacyIdentityAttestation
+    # exists for a row that never ran the modern identity guard at all
+    # (identity_guard_decision IS NULL) - authoritative for CURRENT
+    # downstream eligibility, but explicitly, permanently distinguished in
+    # this basis from a real machine ORIGINAL_DECISION or LATEST_REEVALUATION;
+    # never conflated with either.
+    LEGACY_HUMAN_ATTESTATION = "LEGACY_HUMAN_ATTESTATION"
 
 
 def _map_raw_outcome(raw: "str | None") -> AttachmentOutcome:
@@ -177,6 +206,64 @@ def _map_raw_outcome(raw: "str | None") -> AttachmentOutcome:
         return AttachmentOutcome(raw)
     except ValueError:
         return AttachmentOutcome.INSUFFICIENT_IDENTITY
+
+
+def _fallback_decision(
+    session: Session, assertion: SourceAssertion, source_assertion_id: int, original_decision: AttachmentOutcome,
+) -> "EffectiveIdentityGuardDecision":
+    """The one place both "no EB4 evaluations table yet" and "table exists
+    but no evaluation row for this assertion" now converge (previously each
+    directly returned ORIGINAL_DECISION inline - identical behavior,
+    refactored so both call sites can also consult a legacy attestation).
+
+    docs/architecture/rwi-legacy-attached-sourceassertion-identity-
+    governance-design.md S6/S9: only ever consults a legacy attestation
+    when `assertion.identity_guard_decision IS NULL` - a row WITH a real
+    historical decision (however it turned out, e.g. REJECT_CROSS_AIRPORT)
+    already has genuine machine-governed information that a legacy
+    attestation must never override; `check_legacy_attestation_eligibility()`
+    already refuses to let one be recorded for such a row in the first
+    place, and this is the matching defensive read-side enforcement of the
+    identical rule. Falls back to plain ORIGINAL_DECISION, completely
+    unchanged from pre-this-mission behavior, whenever: the assertion
+    already has a real identity_guard_decision, the legacy-attestations
+    table has not been migrated yet, no attestation exists, the latest one
+    is REJECT/DEFER (never manufactures a positive result), or the latest
+    CONFIRM is stale (a live snapshot no longer matches what was reviewed -
+    see is_attestation_current())."""
+    if assertion.identity_guard_decision is not None or not _legacy_attestations_table_exists(session):
+        return EffectiveIdentityGuardDecision(
+            source_assertion_id=source_assertion_id,
+            original_decision=original_decision,
+            latest_evaluation_id=None,
+            latest_evaluation_outcome=None,
+            effective_decision=original_decision,
+            basis=EffectiveIdentityGuardDecisionBasis.ORIGINAL_DECISION,
+        )
+
+    latest_attestation = get_latest_legacy_identity_attestation(session, source_assertion_id)
+    if (
+        latest_attestation is not None
+        and latest_attestation.action == "CONFIRM_EXISTING_ATTACHMENT"
+        and is_attestation_current(session, latest_attestation)
+    ):
+        return EffectiveIdentityGuardDecision(
+            source_assertion_id=source_assertion_id,
+            original_decision=original_decision,
+            latest_evaluation_id=None,
+            latest_evaluation_outcome=None,
+            effective_decision=AttachmentOutcome.ATTACH_CONFIRMED,
+            basis=EffectiveIdentityGuardDecisionBasis.LEGACY_HUMAN_ATTESTATION,
+        )
+
+    return EffectiveIdentityGuardDecision(
+        source_assertion_id=source_assertion_id,
+        original_decision=original_decision,
+        latest_evaluation_id=None,
+        latest_evaluation_outcome=None,
+        effective_decision=original_decision,
+        basis=EffectiveIdentityGuardDecisionBasis.ORIGINAL_DECISION,
+    )
 
 
 @dataclass(frozen=True)
@@ -250,14 +337,7 @@ def resolve_effective_identity_guard_decision(
         # malformation fail loud there instead of being silently
         # reinterpreted here.
         if not _identity_guard_evaluations_table_exists(session):
-            return EffectiveIdentityGuardDecision(
-                source_assertion_id=source_assertion_id,
-                original_decision=original_decision,
-                latest_evaluation_id=None,
-                latest_evaluation_outcome=None,
-                effective_decision=original_decision,
-                basis=EffectiveIdentityGuardDecisionBasis.ORIGINAL_DECISION,
-            )
+            return _fallback_decision(session, assertion, source_assertion_id, original_decision)
 
         latest = session.scalars(
             select(IdentityGuardEvaluation)
@@ -267,14 +347,7 @@ def resolve_effective_identity_guard_decision(
         ).first()
 
         if latest is None:
-            return EffectiveIdentityGuardDecision(
-                source_assertion_id=source_assertion_id,
-                original_decision=original_decision,
-                latest_evaluation_id=None,
-                latest_evaluation_outcome=None,
-                effective_decision=original_decision,
-                basis=EffectiveIdentityGuardDecisionBasis.ORIGINAL_DECISION,
-            )
+            return _fallback_decision(session, assertion, source_assertion_id, original_decision)
 
         latest_outcome = _map_raw_outcome(latest.outcome)
 
