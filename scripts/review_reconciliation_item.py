@@ -96,6 +96,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models import SourceAssertion
+from app.services.effective_identity_guard_decision import resolve_effective_identity_guard_decision
+from app.services.evidence_attachment_guard import AttachmentOutcome
 from app.services.existing_signal_reconciliation import (
     ExistingSignalReconciliationOutcome,
     evaluate_existing_signal_reconciliation,
@@ -275,8 +277,8 @@ def _validate_confirm_distinct_signal(
 
 
 def _validate_mark_duplicate(
-    *, outcome: ExistingSignalReconciliationOutcome, candidate_signal_ids: "tuple[int, ...]",
-    duplicate_of_signal_id: "int | None",
+    *, session: Session, assertion: SourceAssertion, outcome: ExistingSignalReconciliationOutcome,
+    candidate_signal_ids: "tuple[int, ...]", duplicate_of_signal_id: "int | None",
 ) -> "tuple[bool, str | None]":
     if outcome != POSSIBLE:
         return False, (
@@ -288,6 +290,18 @@ def _validate_mark_duplicate(
         return False, (
             f"DUPLICATE_TARGET_NOT_A_CURRENT_CANDIDATE: Signal {duplicate_of_signal_id!r} is not one "
             f"of the current blocking candidates {candidate_signal_ids!r}."
+        )
+    # Surfaces the authoritative record_reviewer_action() gate here too, so
+    # a plain dry-run (no --allow-database-write) shows the real refusal
+    # instead of only failing when a write is actually attempted - the
+    # invariant itself still lives exclusively in the service layer; this
+    # is read-only, informational duplication of that same check.
+    effective = resolve_effective_identity_guard_decision(session, source_assertion_id=assertion.id)
+    if effective.effective_decision != AttachmentOutcome.ATTACH_CONFIRMED:
+        return False, (
+            f"EFFECTIVE_IDENTITY_NOT_CONFIRMED: MARK_DUPLICATE requires the effective identity "
+            f"decision to be 'ATTACH_CONFIRMED', got {effective.effective_decision.value!r} "
+            f"(basis={effective.basis.value!r})."
         )
     return True, None
 
@@ -376,7 +390,8 @@ def run_review(config: ReviewConfig) -> ReviewResult:
                 )
             elif config.action == "MARK_DUPLICATE":
                 eligible, refusal = _validate_mark_duplicate(
-                    outcome=decision.outcome, candidate_signal_ids=decision.candidate_signal_ids,
+                    session=session, assertion=assertion, outcome=decision.outcome,
+                    candidate_signal_ids=decision.candidate_signal_ids,
                     duplicate_of_signal_id=config.duplicate_of_signal_id,
                 )
             else:  # DEFER, NEEDS_MORE_EVIDENCE, REJECT_SIGNAL - no reconciliation precondition

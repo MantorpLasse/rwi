@@ -1291,3 +1291,62 @@ class TestDirectUniqueSourceAnchorReachability:
             assert signal.category == "new_installation"
             assert s.query(Signal).count() == 1
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# 43. MARK_DUPLICATE effective-identity gate (rwi-mark-duplicate-upstream-
+# governance-gate design/review, Option B): a SourceAssertion with a genuine
+# structural anchor but ungoverned identity (EB5 INSUFFICIENT_IDENTITY) must
+# be refused, surfaced by this same, otherwise-unmodified CLI.
+# ---------------------------------------------------------------------------
+
+
+class TestMarkDuplicateEffectiveIdentityGate:
+    def _ungoverned_legacy_fixture(self, tmp_path, name="ungoverned.db"):
+        db = _full_schema_database(tmp_path, name)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            airport = _airport(s, name="Ungoverned Airport", code="UNG")
+            source = _source(s, title="USAspending grant: ungoverned")
+            legacy_signal = _signal(s, airport, source_id=source.id, title="Legacy signal")
+            legacy_signal_id = legacy_signal.id
+            # Deliberately NOT _governed_assertion(): no identity_guard_decision,
+            # no legacy identity attestation - EB5 falls back to
+            # INSUFFICIENT_IDENTITY, the SA76-shaped real control case.
+            assertion = SourceAssertion(
+                source=source, airport=airport, assertion_type="project_construction",
+                raw_relevant_text="ENGINEERED MATERIAL ARRESTING SYSTEM", source_record_identifier="rec-ungoverned",
+            )
+            s.add(assertion)
+            s.commit()
+            assertion_id = assertion.id
+        engine.dispose()
+        return db, assertion_id, legacy_signal_id
+
+    def test_dry_run_shows_effective_identity_refusal(self, tmp_path):
+        db, aid, sid = self._ungoverned_legacy_fixture(tmp_path)
+        result = cli.run_review(cli.ReviewConfig(
+            database=db, source_assertion_id=aid, action="MARK_DUPLICATE", duplicate_of_signal_id=sid,
+        ))
+        assert result.reconciliation_outcome == "POSSIBLE_EXISTING_SIGNAL_MATCH"
+        assert result.action_eligible is False
+        assert "EFFECTIVE_IDENTITY_NOT_CONFIRMED" in result.action_refusal_reason
+        assert "INSUFFICIENT_IDENTITY" in result.action_refusal_reason
+
+    def test_real_write_attempt_is_also_refused_and_writes_nothing(self, tmp_path):
+        db, aid, sid = self._ungoverned_legacy_fixture(tmp_path)
+        before = _sha(db)
+        result = cli.run_review(cli.ReviewConfig(
+            database=db, source_assertion_id=aid, action="MARK_DUPLICATE", duplicate_of_signal_id=sid,
+            reviewer="human:tester", reason="Attempted duplicate link.", allow_database_write=True,
+        ))
+        assert result.written is False
+        assert result.action_eligible is False
+        assert _sha(db) == before
+
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            assertion = s.get(SourceAssertion, aid)
+            assert assertion.signal_id is None
+            assert s.query(ReviewerAction).filter_by(source_assertion_id=aid).count() == 0
+        engine.dispose()

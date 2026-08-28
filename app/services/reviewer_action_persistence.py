@@ -54,6 +54,39 @@ block no reviewer action can override at this boundary. HUMAN_REVIEW_REQUIRED
 items do NOT need to first become AUTO_ELIGIBLE to be approved - that
 distinction from the design doc is preserved.
 
+MARK_DUPLICATE IDENTITY GATE (rwi-mark-duplicate-upstream-governance-gate
+design/review): MARK_DUPLICATE may only be recorded when the SourceAssertion's
+EFFECTIVE identity decision - `app.services.effective_identity_guard_decision.
+resolve_effective_identity_guard_decision()`, never the raw
+`identity_guard_decision` column directly - is `ATTACH_CONFIRMED`. Reusing
+EB5 here (rather than duplicating APPROVE_SIGNAL/CONFIRM_DISTINCT_SIGNAL's own
+raw-column check above) is deliberate and load-bearing: a legacy-attested row
+like SA81 has `identity_guard_decision` permanently NULL by the legacy
+attestation mechanism's own design (it never writes that column), yet its
+identity is genuinely governed via `LEGACY_HUMAN_ATTESTATION` - checking the
+raw column here would make MARK_DUPLICATE permanently unreachable for every
+legacy-attested row, the opposite of this gate's purpose. Existing-Signal
+reconciliation (R1-R4) is itself structurally identity-blind - it can
+correctly compute a genuine `POSSIBLE_EXISTING_SIGNAL_MATCH` for a
+SourceAssertion whose own airport attachment was never human-confirmed at
+all (a raw legacy import default) - so without this gate, MARK_DUPLICATE
+could permanently link an unverified airport attachment to a real, named
+Signal before a human ever confirmed the assertion belongs there. Reconciled
+against the real historical precedent (SourceAssertion #222 -> Signal #67):
+that MARK_DUPLICATE was recorded only after `identity_guard_decision`
+already read `ATTACH_CONFIRMED`, satisfying this gate with zero behavior
+change.
+
+DELIBERATELY NOT REQUIRED FOR MARK_DUPLICATE: `intelligence_review_decision`
+and `promotion_policy_decision`. Those two answer "should THIS evidence,
+taken alone, become a NEW Signal" - a question MARK_DUPLICATE never asks (it
+creates no Signal and never reads claims at all); it only asks "does this
+evidence, whatever its own materiality, refer to an entity that already has
+one." Requiring intelligence review first would block a genuine, safe
+reconciliation for a reason structurally unrelated to duplicate-recognition.
+This action intentionally terminates the new-Signal path before that
+question is ever reached.
+
 CONFIRM_DISTINCT_SIGNAL GATE (R4B,
 docs/architecture/existing-signal-reconciliation-r4b-reviewer-action-report.md):
 this action is a follow-on resolution to an already-approved governed
@@ -88,11 +121,14 @@ from sqlalchemy.orm import Session
 
 from app.models import Signal, SourceAssertion
 from app.models.reviewer_action import REVIEWER_ACTIONS, ReviewerAction
+from app.services.effective_identity_guard_decision import resolve_effective_identity_guard_decision
+from app.services.evidence_attachment_guard import AttachmentOutcome
 
 __all__ = [
     "REQUIRED_IDENTITY_DECISION_FOR_APPROVAL",
     "REQUIRED_INTELLIGENCE_DECISION_FOR_APPROVAL",
     "REQUIRED_PROMOTION_DECISION_FOR_APPROVAL",
+    "REQUIRED_EFFECTIVE_IDENTITY_FOR_MARK_DUPLICATE",
     "get_latest_reviewer_action",
     "record_reviewer_action",
 ]
@@ -100,6 +136,7 @@ __all__ = [
 REQUIRED_IDENTITY_DECISION_FOR_APPROVAL = "ATTACH_CONFIRMED"
 REQUIRED_INTELLIGENCE_DECISION_FOR_APPROVAL = "REVIEW_REQUIRED"
 REQUIRED_PROMOTION_DECISION_FOR_APPROVAL = "HUMAN_REVIEW_REQUIRED"
+REQUIRED_EFFECTIVE_IDENTITY_FOR_MARK_DUPLICATE = AttachmentOutcome.ATTACH_CONFIRMED
 
 # The literal shape app.services.existing_signal_reconciliation_review.
 # compute_reconciliation_fingerprint() produces: hashlib.sha256(...).hexdigest()
@@ -145,6 +182,20 @@ def record_reviewer_action(
             raise ValueError("MARK_DUPLICATE requires duplicate_of_signal_id")
         if session.get(Signal, duplicate_of_signal_id) is None:
             raise ValueError("referenced Signal (duplicate_of_signal_id) does not exist")
+        # See module docstring "MARK_DUPLICATE IDENTITY GATE" - the EFFECTIVE
+        # decision (EB5), never the raw column, so a legacy-attested row
+        # (raw identity_guard_decision permanently NULL) is correctly
+        # treated as governed. Deliberately does NOT also require
+        # intelligence_review_decision/promotion_policy_decision - see the
+        # same docstring section for why.
+        effective = resolve_effective_identity_guard_decision(session, source_assertion_id=source_assertion.id)
+        if effective.effective_decision != REQUIRED_EFFECTIVE_IDENTITY_FOR_MARK_DUPLICATE:
+            raise ValueError(
+                f"MARK_DUPLICATE requires the effective identity decision "
+                f"(resolve_effective_identity_guard_decision) to be "
+                f"{REQUIRED_EFFECTIVE_IDENTITY_FOR_MARK_DUPLICATE.value!r}, got "
+                f"{effective.effective_decision.value!r} (basis={effective.basis.value!r})"
+            )
     elif duplicate_of_signal_id is not None:
         raise ValueError("duplicate_of_signal_id is only valid when action == MARK_DUPLICATE")
 
