@@ -75,10 +75,26 @@ existing coarse field - never relabeled as, or treated as equivalent to,
 `app.services.promotion_policy_evaluation.SourceAuthorityTier` (design doc
 S12/S15's own already-documented gap; this module does not attempt to close
 it, only to avoid conflating the two).
+
+SOURCE-FAMILY DISPATCH FIELDS (docs/architecture/rwi-usaspending-legacy-
+claims-extractor-design.md): `source_type`/`source_published_date` carry
+`Source.source_type`/`Source.published_date` verbatim - generic, already-
+persisted Source metadata, not a new concept. They exist so
+app.services.human_review_claim_enrichment can dispatch to a source-family-
+specific claims adapter using (source_type, parser_identifier) rather than
+parser_identifier alone (needed because a shared legacy backfill
+parser_identifier can span multiple, structurally different source_type
+families), and so an adapter can anchor a claim's TemporalContext.as_of_date
+to the cited document's own persisted date without re-parsing it from raw
+text. This module still has no knowledge of MAC/Granicus, USAspending, or
+any other source-specific extractor - it only exposes one more already-
+joined, source-agnostic Source field, exactly like source_title/
+source_publisher already are.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from enum import Enum
 from typing import Optional, Sequence
 
@@ -153,11 +169,13 @@ class HumanReviewItem:
     airport_code: "str | None"
 
     source_id: int
+    source_type: "str | None"
     source_title: "str | None"
     source_publisher: "str | None"
     source_url: "str | None"
     source_document_reference: "str | None"
     source_reliability_level_raw: "str | None"
+    source_published_date: "date | None"
 
     artifact_identity: "str | None"
     source_locator: "str | None"
@@ -300,11 +318,13 @@ def _to_item(assertion: SourceAssertion, latest_action: Optional[ReviewerAction]
         airport_name=airport.name if airport else None,
         airport_code=_airport_code(airport),
         source_id=assertion.source_id,
+        source_type=source.source_type if source else None,
         source_title=source.title if source else None,
         source_publisher=source.publisher if source else None,
         source_url=source.url if source else None,
         source_document_reference=source.document_reference if source else None,
         source_reliability_level_raw=source.reliability_level if source else None,
+        source_published_date=source.published_date if source else None,
         artifact_identity=assertion.artifact_identity,
         source_locator=assertion.source_locator,
         raw_fragment_hash=assertion.raw_fragment_hash,
