@@ -65,7 +65,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models import InstallationAssertionLink, Signal, SourceAssertion
@@ -226,6 +226,7 @@ def _build_candidate(
     signal: Signal,
     supporting_assertions: "list[SourceAssertion]",
     installation_ids_by_assertion_id: "dict[int, set[int]]",
+    signal_count_by_source_id: "dict[int, int]",
 ) -> ReconciliationCandidateSignal:
     supporting_source_ids = tuple(sorted({a.source_id for a in supporting_assertions}))
     supporting_artifact_identities = tuple(
@@ -261,6 +262,19 @@ def _build_candidate(
         # without conflating storage time with evidence time.
         evidence_date=signal.last_verified_at,
         reference_year=_signal_reference_year(signal),
+        source_id=signal.source_id,
+        # See R1's own ReconciliationCandidateSignal.is_uniquely_sourced
+        # docstring for why this is required, not merely convenient: a
+        # single reference document (e.g. a bulk incidents dataset) can
+        # legitimately back more than one distinct real-world event, so
+        # direct source_id equality alone must never anchor. Computed from
+        # `signal_count_by_source_id` - a fresh, DATABASE-WIDE (not
+        # airport-scoped) count fetched by `find_reconciliation_candidates()`
+        # for exactly this purpose (see its own docstring) - never from this
+        # call's own airport-scoped candidate set, which would undercount.
+        is_uniquely_sourced=(
+            signal.source_id is not None and signal_count_by_source_id.get(signal.source_id, 0) == 1
+        ),
     )
 
 
@@ -274,7 +288,7 @@ def find_reconciliation_candidates(
     every session call here is a `session.query(...)` SELECT; nothing is
     added, flushed, committed, or mutated.
 
-    Three batched queries, never one query per Signal:
+    Four batched queries, never one query per Signal:
     (1) the candidate Signal rows themselves; (2) every SourceAssertion
     currently linked to any of those Signals (`SourceAssertion.signal_id.
     in_(...)`) in one query, grouped in Python by `signal_id`; (3) EVERY
@@ -283,10 +297,16 @@ def find_reconciliation_candidates(
     see `_latest_installation_links_by_assertion_id()`'s own docstring for
     why an outcome pre-filter would hide a later retraction) in one query,
     reduced to the single latest link per `assertion_id`, kept only when
-    that latest link's own outcome is `SAME_PHYSICAL_INSTALLATION`.
-    `_build_candidate()` then assembles each
-    `ReconciliationCandidateSignal` purely from these already-fetched,
-    in-memory groupings - no further query per Signal.
+    that latest link's own outcome is `SAME_PHYSICAL_INSTALLATION`; (4) a
+    `GROUP BY Signal.source_id` count, restricted to the distinct source_id
+    values the candidates themselves carry, but DELIBERATELY NOT restricted
+    to this call's own airport-scoped candidate set - the whole point of
+    `is_uniquely_sourced` is "is this source_id used by any OTHER Signal
+    ANYWHERE," and scoping that count to one airport would silently
+    undercount a source_id also used at a different airport, corrupting the
+    very uniqueness fact R1's new anchor depends on. `_build_candidate()`
+    then assembles each `ReconciliationCandidateSignal` purely from these
+    already-fetched, in-memory groupings - no further query per Signal.
     """
     filters = []
     if source_assertion.airport_id is not None:
@@ -331,7 +351,21 @@ def find_reconciliation_candidates(
                     latest_link.physical_installation_id
                 )
 
+    candidate_source_ids = {signal.source_id for signal in signals if signal.source_id is not None}
+    signal_count_by_source_id: "dict[int, int]" = {}
+    if candidate_source_ids:
+        counts = (
+            session.query(Signal.source_id, func.count(Signal.id))
+            .filter(Signal.source_id.in_(candidate_source_ids))
+            .group_by(Signal.source_id)
+            .all()
+        )
+        signal_count_by_source_id = dict(counts)
+
     return tuple(
-        _build_candidate(signal, assertions_by_signal_id.get(signal.id, []), installation_ids_by_assertion_id)
+        _build_candidate(
+            signal, assertions_by_signal_id.get(signal.id, []),
+            installation_ids_by_assertion_id, signal_count_by_source_id,
+        )
         for signal in signals
     )

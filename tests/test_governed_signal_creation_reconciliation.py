@@ -474,13 +474,42 @@ class TestAnchorFamilies:
         assert excinfo.value.decision.candidate_signal_ids == (existing.id,)
         session.close(); engine.dispose()
 
-    def test_legacy_signal_source_id_alone_is_not_a_provenance_anchor(self):
+    def test_legacy_signal_unique_source_id_now_blocks_as_direct_anchor(self):
+        # Real-DB blast-radius review finding (docs/architecture/rwi-
+        # legacy-signal-reconciliation-gap-design report): a legacy Signal
+        # with zero supporting_source_assertions whose own direct source_id
+        # is not shared by any OTHER Signal system-wide IS now a genuine
+        # structural anchor - this is the approved fix for the real SA81/
+        # Signal44 blind spot. Superseded expectation of this test's own
+        # prior name/body (source_id alone was never an anchor) - now
+        # correct only for the non-unique case, covered by the sibling test
+        # immediately below.
         engine, session = make_session()
         airport = _airport(session)
         legacy_source = _source(session, title="Legacy single-doc source")
         existing = _signal(session, airport, source_id=legacy_source.id)  # no supporting_source_assertions
 
         assertion = _governed_assertion(session, legacy_source, airport)
+        with pytest.raises(ExistingSignalPossibleMatchError) as excinfo:
+            create_signal_from_approved_review(session, assertion, **_BASE_FIELDS)
+        assert excinfo.value.decision.outcome == POSSIBLE
+        assert excinfo.value.decision.candidate_signal_ids == (existing.id,)
+        assert any("identity_anchor:direct_unique_source" in r for r in excinfo.value.decision.reasons)
+        assert assertion.signal_id is None
+        session.close(); engine.dispose()
+
+    def test_legacy_signal_non_unique_source_id_still_does_not_anchor(self):
+        # The narrowing condition that keeps the fix above safe: a source
+        # legitimately shared by more than one Signal (e.g. a bulk reference
+        # dataset) must never anchor merely because one candidate also has
+        # zero supporting_source_assertions.
+        engine, session = make_session()
+        airport = _airport(session)
+        bulk_source = _source(session, title="Bulk reference dataset")
+        existing = _signal(session, airport, source_id=bulk_source.id)
+        _signal(session, airport, source_id=bulk_source.id)  # a second Signal shares the same source_id
+
+        assertion = _governed_assertion(session, bulk_source, airport)
         result = create_signal_from_approved_review(session, assertion, **_BASE_FIELDS)
         session.commit()
         assert result.created is True

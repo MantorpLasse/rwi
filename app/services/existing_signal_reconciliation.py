@@ -28,16 +28,21 @@ never on a database, never on wall-clock time.
 CENTRAL, HARDENED RULE (design doc S5/S18, Invariant 21): a candidate can
 gate creation (`POSSIBLE_EXISTING_SIGNAL_MATCH`) ONLY via at least one
 STRUCTURAL IDENTITY ANCHOR - a shared canonical runway, a shared physical
-installation identity, or a shared source document already backing that
-candidate. Compatibility evidence (airport, category, vendor name, temporal
-proximity, reference year) can accumulate without limit and still never gate
-creation by itself; it is carried instead as non-blocking advisory metadata
-on `CLEAR_TO_CREATE`. This is not a numeric threshold relaxed or tightened by
-a constant - no count of compatibility axes, however large, ever substitutes
-for one anchor. The design doc's own review checkpoint (S18) found and
-removed exactly this kind of disguised score ("2+ independent supporting
-categories"); this module is written so that mistake cannot quietly return -
-see TestNoCompatibilityCountSubstitutesForAnchor in the test suite.
+installation identity, a shared source document already backing that
+candidate, or (real-DB blast-radius review, legacy blind-spot fix) a
+candidate's own direct source reference when that reference is both
+unsupported by any linked assertion yet AND already established, exactly,
+to be exclusive to this one candidate (`ReconciliationCandidateSignal.
+is_uniquely_sourced` - see its own docstring). Compatibility evidence
+(airport, category, vendor name, temporal proximity, reference year) can
+accumulate without limit and still never gate creation by itself; it is
+carried instead as non-blocking advisory metadata on `CLEAR_TO_CREATE`. This
+is not a numeric threshold relaxed or tightened by a constant - no count of
+compatibility axes, however large, ever substitutes for one anchor. The
+design doc's own review checkpoint (S18) found and removed exactly this kind
+of disguised score ("2+ independent supporting categories"); this module is
+written so that mistake cannot quietly return - see
+TestNoCompatibilityCountSubstitutesForAnchor in the test suite.
 
 STRUCTURAL SAFETY OVERRIDE: a populated, differing `runway_id` on both sides,
 or a populated, differing `airport_id` on both sides, disconfirms a candidate
@@ -161,6 +166,19 @@ class ReconciliationCandidateSignal:
     computes this aggregation; this module only ever tests set membership
     against it, never re-derives it from anything raw.
 
+    `source_id`/`is_uniquely_sourced` (legacy blind-spot fix, real-DB blast-
+    radius review): `source_id` is the candidate's OWN direct provenance
+    reference - distinct from `supporting_source_ids`, which is derived
+    entirely from already-linked supporting assertions and is empty for a
+    candidate with none. `is_uniquely_sourced` is a fact the caller must
+    compute and supply, never inferred here: whether this exact `source_id`
+    is not shared by any OTHER candidate/Signal at all (a live, exact,
+    non-fuzzy count the pure core cannot itself perform, since it never
+    touches a database) - required because a single reference document can
+    legitimately back more than one distinct real-world event, so direct
+    `source_id` equality is only trustworthy as an anchor when it is also
+    known to be exclusive to this one candidate.
+
     Same absent-field discipline as `ExistingSignalReconciliationSubject`:
     no title, no raw notes, no financial fields, no confidence/score."""
 
@@ -175,6 +193,8 @@ class ReconciliationCandidateSignal:
     likely_supplier: Optional[str] = None
     evidence_date: Optional[date] = None
     reference_year: Optional[int] = None
+    source_id: Optional[int] = None
+    is_uniquely_sourced: bool = False
 
 
 @dataclass(frozen=True)
@@ -236,6 +256,27 @@ def _anchor_reasons(
 
     if subject.artifact_identity is not None and subject.artifact_identity in candidate.supporting_artifact_identities:
         reasons.append(f"signal {sid}: identity_anchor:provenance (artifact_identity={subject.artifact_identity!r})")
+
+    # Legacy blind-spot fix: a candidate with NO supporting SourceAssertion
+    # at all (so the two anchors immediately above can never fire for it)
+    # may still be anchored by its own direct source_id - but ONLY when the
+    # caller has already established, exactly, that this source_id is not
+    # shared by any other candidate/Signal (`is_uniquely_sourced`). This is
+    # deliberately narrower than the two anchors above: it never fires for a
+    # candidate that already has supporting-assertion provenance (that case
+    # is already covered, and existing behavior for it must not change), and
+    # it never fires for a source_id known to legitimately back more than
+    # one distinct event. Still a genuine structural identity fact - never a
+    # compatibility count - so Invariant 21 is unaffected.
+    if (
+        subject.source_id is not None
+        and candidate.source_id is not None
+        and subject.source_id == candidate.source_id
+        and not candidate.supporting_source_ids
+        and not candidate.supporting_artifact_identities
+        and candidate.is_uniquely_sourced
+    ):
+        reasons.append(f"signal {sid}: identity_anchor:direct_unique_source (source_id={subject.source_id})")
 
     return tuple(reasons)
 

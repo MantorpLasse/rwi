@@ -1215,3 +1215,79 @@ class TestMSPSyntheticAlreadyResolved:
         assert result.action_eligible is False
         assert "ALREADY_LINKED" in result.action_refusal_reason
         assert result.linked_signal_id == signal_67_id
+
+
+# ---------------------------------------------------------------------------
+# 42. Real SA81/Signal44 legacy shape - the new direct-unique-source anchor
+# (docs/architecture: rwi-legacy-signal-reconciliation-gap-design and its own
+# real-DB blast-radius review) makes MARK_DUPLICATE reachable through this
+# same, unmodified CLI for a legacy Signal that has zero supporting
+# SourceAssertions, without any change to this script itself.
+# ---------------------------------------------------------------------------
+
+
+class TestDirectUniqueSourceAnchorReachability:
+    def _legacy_fixture(self, tmp_path, name="legacy.db"):
+        db = _full_schema_database(tmp_path, name)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            airport = _airport(s, name="Greenville Downtown", code="GMU")
+            source = _source(s, title="USAspending grant: Greenville Airport Commission")
+            legacy_signal = _signal(
+                s, airport, source_id=source.id, title="USAspending grant - $8.3M, FY2022",
+                category="new_installation",
+            )
+            legacy_signal_id = legacy_signal.id
+            assertion = _governed_assertion(s, source, airport, approved=False)
+            assertion_id = assertion.id
+        engine.dispose()
+        return db, assertion_id, legacy_signal_id
+
+    def test_previously_clear_to_create_becomes_possible_match(self, tmp_path):
+        db, aid, sid = self._legacy_fixture(tmp_path)
+        result = cli.run_review(cli.ReviewConfig(database=db, source_assertion_id=aid))
+        assert result.reconciliation_outcome == "POSSIBLE_EXISTING_SIGNAL_MATCH"
+        assert result.candidate_signal_ids == (sid,)
+        assert any("identity_anchor:direct_unique_source" in r for r in result.anchor_reasons)
+        assert result.current_fingerprint is not None
+
+    def test_mark_duplicate_is_now_eligible_in_dry_run(self, tmp_path):
+        db, aid, sid = self._legacy_fixture(tmp_path)
+        result = cli.run_review(cli.ReviewConfig(
+            database=db, source_assertion_id=aid, action="MARK_DUPLICATE", duplicate_of_signal_id=sid,
+        ))
+        assert result.action_eligible is True
+        assert result.written is False  # dry run - no --allow-database-write
+
+    def test_no_write_occurs_without_allow_database_write(self, tmp_path):
+        db, aid, sid = self._legacy_fixture(tmp_path)
+        before = _sha(db)
+        cli.run_review(cli.ReviewConfig(
+            database=db, source_assertion_id=aid, action="MARK_DUPLICATE", duplicate_of_signal_id=sid,
+        ))
+        assert _sha(db) == before
+
+    def test_real_write_links_signal_id_and_records_exactly_one_reviewer_action(self, tmp_path):
+        db, aid, sid = self._legacy_fixture(tmp_path)
+        result = cli.run_review(cli.ReviewConfig(
+            database=db, source_assertion_id=aid, action="MARK_DUPLICATE", duplicate_of_signal_id=sid,
+            reviewer="human:tester", reason="Same grant/source as the existing legacy Signal.",
+            allow_database_write=True,
+        ))
+        assert result.written is True
+        assert result.written_linked_signal_id == sid
+
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            assertion = s.get(SourceAssertion, aid)
+            assert assertion.signal_id == sid
+            actions = s.query(ReviewerAction).filter_by(source_assertion_id=aid).all()
+            assert len(actions) == 1
+            assert actions[0].action == "MARK_DUPLICATE"
+            assert actions[0].duplicate_of_signal_id == sid
+            # No auto-mutation, no auto-retirement, no second Signal.
+            signal = s.get(Signal, sid)
+            assert signal.title == "USAspending grant - $8.3M, FY2022"
+            assert signal.category == "new_installation"
+            assert s.query(Signal).count() == 1
+        engine.dispose()

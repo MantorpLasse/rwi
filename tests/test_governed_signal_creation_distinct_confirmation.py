@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import itertools
 from datetime import date
 
 import pytest
@@ -116,9 +117,18 @@ def _link(session, assertion, identity, outcome="SAME_PHYSICAL_INSTALLATION", su
     return link
 
 
+_record_identifier_counter = itertools.count()
+
+
 def _governed_assertion(session, source, airport, *, approved=True, **kwargs) -> SourceAssertion:
     kwargs.setdefault("assertion_type", "project_construction")
-    kwargs.setdefault("source_record_identifier", f"rec-{id(kwargs)}-{source.id}")
+    # A monotonic counter, never id(kwargs): a freshly-created, short-lived
+    # kwargs dict's own id() can be reused by CPython once garbage
+    # collected, so two calls in the same test can coincidentally collide on
+    # the (source_id, source_record_identifier) uniqueness constraint -
+    # observed as a rare, order-dependent flake unrelated to any behavior
+    # this file actually tests.
+    kwargs.setdefault("source_record_identifier", f"rec-{next(_record_identifier_counter)}-{source.id}")
     kwargs.setdefault("identity_guard_decision", "ATTACH_CONFIRMED")
     kwargs.setdefault("intelligence_review_decision", "REVIEW_REQUIRED")
     kwargs.setdefault("promotion_policy_decision", "HUMAN_REVIEW_REQUIRED")
