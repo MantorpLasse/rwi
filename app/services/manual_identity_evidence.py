@@ -586,8 +586,25 @@ def record_manual_identity_evidence(
         # Candidate derived SOLELY from the assertion's own canonical
         # airport_id - never a caller-supplied one (Phase 6/11). Eligibility
         # already proved this airport exists.
+        #
+        # Local import (not top-level): app.services.airport_alias itself
+        # imports normalize_for_containment_check/excerpt_contains_value
+        # FROM this module, so a top-level import here would be circular.
+        # Deferred to call time, by which point both modules are fully
+        # initialized. get_admitted_airport_aliases() is a pure read (no
+        # mutation, no flush) that derives the CURRENTLY admitted alias
+        # set for this Airport from the append-only AirportAlias history
+        # (docs/architecture, "RWI - Governed Canonical Airport Aliases -
+        # Cross-Script Identity Design" mission) - the ONLY change this
+        # mission makes to this function; falls back to an empty set on a
+        # database that has never migrated that table, so this remains
+        # completely backward compatible.
+        from app.services.airport_alias import get_admitted_airport_aliases
+
         airport = session.get(Airport, source_assertion.airport_id)
-        candidate = candidate_airport_from_airport_like(airport)
+        candidate = candidate_airport_from_airport_like(
+            airport, aliases=get_admitted_airport_aliases(session, airport.id),
+        )
         decisions = evaluate_attachment_for_candidates(evidence_bag, [candidate])
         decision = decisions[candidate.id]
 

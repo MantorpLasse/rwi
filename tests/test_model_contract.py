@@ -381,6 +381,21 @@ EXPECTED_COLUMNS = {
         "normalization_version": ("INTEGER", False, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
+    "airport_aliases": {
+        "id": ("INTEGER", False, None, None),
+        "airport_id": ("INTEGER", False, None, None),
+        "alias": ("VARCHAR(300)", False, None, None),
+        "language": ("VARCHAR(50)", True, None, None),
+        "script": ("VARCHAR(50)", True, None, None),
+        "source_id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+        "evidence_excerpt": ("TEXT", False, None, None),
+        "analyst": ("VARCHAR(100)", False, None, None),
+        "evidence_class": ("VARCHAR(30)", False, None, None),
+        "status": ("VARCHAR(20)", False, ("scalar", "ADMITTED"), None),
+        "supersedes_alias_id": ("INTEGER", True, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -493,6 +508,12 @@ EXPECTED_FOREIGN_KEYS = {
     "manual_identity_evidences": {
         ("source_assertion_id", "source_assertions.id"),
         ("source_id", "sources.id"),
+    },
+    "airport_aliases": {
+        ("airport_id", "airports.id"),
+        ("source_id", "sources.id"),
+        ("source_assertion_id", "source_assertions.id"),
+        ("supersedes_alias_id", "airport_aliases.id"),
     },
 }
 
@@ -630,6 +651,12 @@ EXPECTED_INDEXES = {
         ("ix_manual_identity_evidences_source_assertion_id", ("source_assertion_id",), False),
         ("ix_manual_identity_evidences_source_id", ("source_id",), False),
     },
+    "airport_aliases": {
+        ("ix_airport_aliases_airport_id", ("airport_id",), False),
+        ("ix_airport_aliases_source_id", ("source_id",), False),
+        ("ix_airport_aliases_source_assertion_id", ("source_assertion_id",), False),
+        ("ix_airport_aliases_supersedes_alias_id", ("supersedes_alias_id",), False),
+    },
 }
 
 DEFAULT_CASCADE = frozenset({"merge", "save-update"})
@@ -753,6 +780,12 @@ EXPECTED_RELATIONSHIPS = {
     "ManualIdentityEvidence": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
         "source": ("Source", None, DEFAULT_CASCADE),
+    },
+    "AirportAlias": {
+        "airport": ("Airport", None, DEFAULT_CASCADE),
+        "source": ("Source", None, DEFAULT_CASCADE),
+        "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+        "supersedes": ("AirportAlias", None, DEFAULT_CASCADE),
     },
     "IdentityGuardEvaluation": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),

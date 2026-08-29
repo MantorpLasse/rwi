@@ -372,7 +372,23 @@ def reevaluate_resolved_candidate_evidence(
                     "false causal link between an unrelated resolution and this evaluation."
                 )
 
-        candidate = candidate_airport_from_airport_like(airport)
+        # Local import (not top-level): app.services.airport_alias itself
+        # imports SourceAssertionNotFoundError FROM this module, so a
+        # top-level import here would be circular. Deferred to call time,
+        # by which point both modules are fully initialized - a
+        # well-established idiom for exactly this shape, not a design
+        # smell. get_admitted_airport_aliases() is a pure read (no
+        # mutation, no flush) that derives the CURRENTLY admitted alias
+        # set for this Airport from the append-only AirportAlias history
+        # (docs/architecture, "RWI - Governed Canonical Airport Aliases -
+        # Cross-Script Identity Design" mission) - the ONLY change this
+        # mission makes to this function. evaluate_attachment() itself,
+        # and every other line in this function, is completely unchanged.
+        from app.services.airport_alias import get_admitted_airport_aliases
+
+        candidate = candidate_airport_from_airport_like(
+            airport, aliases=get_admitted_airport_aliases(session, airport.id),
+        )
         decision = evaluate_attachment(candidate, evidence)
 
     evaluation = IdentityGuardEvaluation(
