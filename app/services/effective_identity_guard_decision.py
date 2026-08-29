@@ -70,8 +70,35 @@ This module performs NO writes of any kind - no SourceAssertion mutation,
 no IdentityGuardEvaluation creation, no Signal/Airport/Runway creation, no
 candidate resolution, no re-evaluation trigger, no network access, no
 commit. It reads only SourceAssertion's own two columns
-(airport_id, identity_guard_decision) and IdentityGuardEvaluation rows for
-that one assertion.
+(airport_id, identity_guard_decision), IdentityGuardEvaluation rows for
+that one assertion, and (see CROSS-SOURCE ALIAS ATTESTATION below)
+SourceAssertionCrossSourceAliasAttestation rows for that one assertion.
+
+CROSS-SOURCE ALIAS ATTESTATION (docs/architecture, "RWI - Cross-Source
+Governed Airport Identity Binding - Architecture Recon" mission's own
+Option C; see app.services.cross_source_alias_attestation for the full
+mechanism this module only narrowly, additively consumes): a narrow,
+LAST-APPLIED override, computed only after every existing branch above has
+already produced its own base result exactly as before. If, and only if,
+that base result's own `basis` is ORIGINAL_DECISION or LATEST_REEVALUATION
+(never INCONSISTENT_REEVALUATION - a flagged anomaly this module never
+silently papers over - and never LEGACY_HUMAN_ATTESTATION, a structurally
+disjoint case) AND its own `effective_decision` is exactly
+ATTACH_PROVISIONAL, this module additionally checks for a CURRENT (see
+app.services.cross_source_alias_attestation.is_cross_source_alias_attestation_current())
+SourceAssertionCrossSourceAliasAttestation for this assertion; if one
+exists, `effective_decision` becomes ATTACH_CONFIRMED and `basis` becomes
+CROSS_SOURCE_ALIAS_ATTESTATION - `original_decision` and any
+`latest_evaluation_*` fields are left completely untouched (this override
+only ever replaces the FINAL effective_decision/basis pair, never the
+historical record). Every existing branch's own result is otherwise
+completely unaffected - this override can never fire for, or change, a
+REJECT_CROSS_AIRPORT/INSUFFICIENT_IDENTITY/already-ATTACH_CONFIRMED/
+INCONSISTENT_REEVALUATION result. Falls back cleanly (no override applied)
+when the new table has never been migrated - identical
+existence-guard technique to `_identity_guard_evaluations_table_exists()`/
+`_legacy_attestations_table_exists()` above, for the current real database's
+own permanent pre-this-mission deployment state.
 
 TIME SEMANTICS: this module trusts the latest EXISTING governed evaluation
 - it never inspects current Runway/RunwayEnd topology itself, and never
@@ -106,6 +133,7 @@ __all__ = [
 
 _EVALUATIONS_TABLE = "identity_guard_evaluations"
 _LEGACY_ATTESTATIONS_TABLE = "source_assertion_legacy_identity_attestations"
+_CROSS_SOURCE_ALIAS_ATTESTATIONS_TABLE = "source_assertion_cross_source_alias_attestations"
 
 
 def _identity_guard_evaluations_table_exists(session: Session) -> bool:
@@ -163,6 +191,23 @@ def _legacy_attestations_table_exists(session: Session) -> bool:
     )
 
 
+def _cross_source_alias_attestations_table_exists(session: Session) -> bool:
+    """Identical reasoning and technique to
+    `_legacy_attestations_table_exists()` above, for the new
+    source_assertion_cross_source_alias_attestations table (a DIFFERENT
+    mission's own migration, deliberately never applied to the real
+    business database within that mission) - a database that has not yet
+    run that migration must fall back cleanly to whatever the base result
+    already was, never raise."""
+    return (
+        session.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name = :table"),
+            {"table": _CROSS_SOURCE_ALIAS_ATTESTATIONS_TABLE},
+        ).first()
+        is not None
+    )
+
+
 class EffectiveIdentityGuardDecisionBasis(str, Enum):
     """Why `effective_decision` was selected - explicit provenance rather
     than an overloaded boolean."""
@@ -189,6 +234,18 @@ class EffectiveIdentityGuardDecisionBasis(str, Enum):
     # this basis from a real machine ORIGINAL_DECISION or LATEST_REEVALUATION;
     # never conflated with either.
     LEGACY_HUMAN_ATTESTATION = "LEGACY_HUMAN_ATTESTATION"
+    # docs/architecture, "RWI - Cross-Source Governed Airport Identity
+    # Binding - Architecture Recon" mission (Option C): a CURRENT
+    # SourceAssertionCrossSourceAliasAttestation exists for a row whose own
+    # base result (ORIGINAL_DECISION or LATEST_REEVALUATION only) was
+    # exactly ATTACH_PROVISIONAL - a narrow, additive, LAST-APPLIED
+    # override; see module docstring "CROSS-SOURCE ALIAS ATTESTATION".
+    # Never conflated with a real machine ORIGINAL_DECISION/
+    # LATEST_REEVALUATION, and structurally disjoint from
+    # LEGACY_HUMAN_ATTESTATION (that basis only ever applies when raw
+    # identity_guard_decision IS NULL; this one only ever applies when it
+    # is exactly ATTACH_PROVISIONAL).
+    CROSS_SOURCE_ALIAS_ATTESTATION = "CROSS_SOURCE_ALIAS_ATTESTATION"
 
 
 def _map_raw_outcome(raw: "str | None") -> AttachmentOutcome:
@@ -284,7 +341,68 @@ class EffectiveIdentityGuardDecision:
         return self.effective_decision == AttachmentOutcome.ATTACH_CONFIRMED
 
 
+def _apply_cross_source_alias_attestation_override(
+    session: Session, base: EffectiveIdentityGuardDecision,
+) -> EffectiveIdentityGuardDecision:
+    """The one place the new Option C mechanism is consulted - see module
+    docstring "CROSS-SOURCE ALIAS ATTESTATION" for the full, exact
+    precondition. Called ONLY after every existing branch has already
+    produced its own complete `base` result; never changes
+    `original_decision`/`latest_evaluation_id`/`latest_evaluation_outcome`,
+    only ever replaces `effective_decision`/`basis` together, and only in
+    the one narrow case documented there."""
+    if base.basis not in (
+        EffectiveIdentityGuardDecisionBasis.ORIGINAL_DECISION,
+        EffectiveIdentityGuardDecisionBasis.LATEST_REEVALUATION,
+    ):
+        return base
+    if base.effective_decision != AttachmentOutcome.ATTACH_PROVISIONAL:
+        return base
+    if not _cross_source_alias_attestations_table_exists(session):
+        return base
+
+    # Deferred import - avoids a real circular import: this module
+    # (app.services.effective_identity_guard_decision.resolve_effective_identity_guard_decision)
+    # is itself called from
+    # app.services.cross_source_alias_attestation.preview_cross_source_alias_attestation()
+    # to report the CURRENT effective decision before a new attestation is
+    # written, so that module must never be imported here at module load
+    # time.
+    from app.services.cross_source_alias_attestation import (
+        get_latest_cross_source_alias_attestation,
+        is_cross_source_alias_attestation_current,
+    )
+
+    attestation = get_latest_cross_source_alias_attestation(session, base.source_assertion_id)
+    if attestation is None or not is_cross_source_alias_attestation_current(session, attestation):
+        return base
+
+    return EffectiveIdentityGuardDecision(
+        source_assertion_id=base.source_assertion_id,
+        original_decision=base.original_decision,
+        latest_evaluation_id=base.latest_evaluation_id,
+        latest_evaluation_outcome=base.latest_evaluation_outcome,
+        effective_decision=AttachmentOutcome.ATTACH_CONFIRMED,
+        basis=EffectiveIdentityGuardDecisionBasis.CROSS_SOURCE_ALIAS_ATTESTATION,
+    )
+
+
 def resolve_effective_identity_guard_decision(
+    session: Session, *, source_assertion_id: int,
+) -> EffectiveIdentityGuardDecision:
+    """Read-only. Computes the base result exactly as this function always
+    has (see `_resolve_base_effective_identity_guard_decision()` - a pure
+    rename of this function's own prior, unmodified body; every existing
+    branch, precedence rule, and return value is byte-for-byte unchanged),
+    then applies the one new, narrow, additive
+    `_apply_cross_source_alias_attestation_override()` step - see module
+    docstring "CROSS-SOURCE ALIAS ATTESTATION"."""
+    base = _resolve_base_effective_identity_guard_decision(session, source_assertion_id=source_assertion_id)
+    with session.no_autoflush:
+        return _apply_cross_source_alias_attestation_override(session, base)
+
+
+def _resolve_base_effective_identity_guard_decision(
     session: Session, *, source_assertion_id: int,
 ) -> EffectiveIdentityGuardDecision:
     """Read-only. Raises SourceAssertionNotFoundError (reused verbatim

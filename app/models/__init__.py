@@ -23,6 +23,9 @@ from app.models.source_assertion_legacy_identity_attestation import SourceAssert
 from app.models.manual_identity_evidence import ManualIdentityEvidence
 from app.models.airport_alias import AirportAlias
 from app.models.airport_identifier import AirportIdentifier
+from app.models.source_assertion_cross_source_alias_attestation import (
+    SourceAssertionCrossSourceAliasAttestation,
+)
 
 __all__ = [
     "Airport",
@@ -46,6 +49,7 @@ __all__ = [
     "SignalDispositionMember",
     "Source",
     "SourceAssertion",
+    "SourceAssertionCrossSourceAliasAttestation",
     "SourceAssertionEvidenceBag",
     "SourceAssertionIdentityResolution",
     "SourceAssertionLegacyIdentityAttestation",

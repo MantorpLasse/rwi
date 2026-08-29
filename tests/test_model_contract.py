@@ -410,6 +410,16 @@ EXPECTED_COLUMNS = {
         "supersedes_identifier_id": ("INTEGER", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
+    "source_assertion_cross_source_alias_attestations": {
+        "id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+        "matched_airport_id": ("INTEGER", False, None, None),
+        "matched_alias_id": ("INTEGER", False, None, None),
+        "analyst": ("VARCHAR(100)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_attestation_id": ("INTEGER", True, None, None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -534,6 +544,12 @@ EXPECTED_FOREIGN_KEYS = {
         ("source_id", "sources.id"),
         ("source_assertion_id", "source_assertions.id"),
         ("supersedes_identifier_id", "airport_identifiers.id"),
+    },
+    "source_assertion_cross_source_alias_attestations": {
+        ("source_assertion_id", "source_assertions.id"),
+        ("matched_airport_id", "airports.id"),
+        ("matched_alias_id", "airport_aliases.id"),
+        ("supersedes_attestation_id", "source_assertion_cross_source_alias_attestations.id"),
     },
 }
 
@@ -683,6 +699,12 @@ EXPECTED_INDEXES = {
         ("ix_airport_identifiers_source_assertion_id", ("source_assertion_id",), False),
         ("ix_airport_identifiers_supersedes_identifier_id", ("supersedes_identifier_id",), False),
     },
+    "source_assertion_cross_source_alias_attestations": {
+        ("ix_source_assertion_cross_source_alias_attestations_source_assertion_id", ("source_assertion_id",), False),
+        ("ix_source_assertion_cross_source_alias_attestations_matched_airport_id", ("matched_airport_id",), False),
+        ("ix_source_assertion_cross_source_alias_attestations_matched_alias_id", ("matched_alias_id",), False),
+        ("ix_source_assertion_cross_source_alias_attestations_supersedes_attestation_id", ("supersedes_attestation_id",), False),
+    },
 }
 
 DEFAULT_CASCADE = frozenset({"merge", "save-update"})
@@ -818,6 +840,12 @@ EXPECTED_RELATIONSHIPS = {
         "source": ("Source", None, DEFAULT_CASCADE),
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
         "supersedes": ("AirportIdentifier", None, DEFAULT_CASCADE),
+    },
+    "SourceAssertionCrossSourceAliasAttestation": {
+        "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+        "matched_airport": ("Airport", None, DEFAULT_CASCADE),
+        "matched_alias": ("AirportAlias", None, DEFAULT_CASCADE),
+        "supersedes": ("SourceAssertionCrossSourceAliasAttestation", None, DEFAULT_CASCADE),
     },
     "IdentityGuardEvaluation": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
