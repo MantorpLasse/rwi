@@ -289,25 +289,34 @@ class TestOtherReviewerActionsUnaffected:
 
 
 class TestApprovalGatesUnchanged:
-    """16, 17: APPROVE_SIGNAL/CONFIRM_DISTINCT_SIGNAL's own existing raw-
-    column checks are untouched by this mission - explicitly out of scope.
-    Proven both ways: the legacy-attested (EB5-confirmed, raw-NULL) shape
-    still fails APPROVE_SIGNAL exactly as before (no silent widening to EB5
-    for these two actions), and the existing raw-confirmed shape still
-    succeeds exactly as before."""
+    """16, 17: at the time this MARK_DUPLICATE mission was built,
+    APPROVE_SIGNAL/CONFIRM_DISTINCT_SIGNAL's own raw-column checks were
+    deliberately left untouched (explicitly out of scope for THAT mission).
+    A LATER, separate mission ("RWI - Raw-vs-Effective APPROVE_SIGNAL Gate
+    - Narrow Fix") closed that exact inconsistency by making these two
+    actions ALSO consume EB5's effective decision, mirroring
+    MARK_DUPLICATE's own gate below - so a legacy-attested (EB5-confirmed,
+    raw-NULL) row now correctly SUCCEEDS here too, no longer permanently
+    blocked merely because its raw column happens to be NULL by the legacy
+    attestation mechanism's own design. The raw-confirmed shape still
+    succeeds exactly as before (effective reduces to raw when no richer
+    governance history exists)."""
 
-    def test_approve_signal_still_rejects_legacy_attested_raw_null(self):
+    def test_approve_signal_now_succeeds_for_legacy_attested_effective_confirmed_row(self):
         engine, session = make_session()
         airport = _airport(session)
         assertion = _legacy_attested_assertion(session, airport)
         assertion.intelligence_review_decision = "REVIEW_REQUIRED"
         assertion.promotion_policy_decision = "HUMAN_REVIEW_REQUIRED"
         session.commit()
+        assert assertion.identity_guard_decision is None  # raw column stays NULL by design
 
-        with pytest.raises(ValueError, match="identity_guard_decision"):
-            record_reviewer_action(
-                session, assertion, action="APPROVE_SIGNAL", reason="x", reviewer="human:tester",
-            )
+        action = record_reviewer_action(
+            session, assertion, action="APPROVE_SIGNAL", reason="x", reviewer="human:tester",
+        )
+        session.commit()
+        assert action.action == "APPROVE_SIGNAL"
+        assert assertion.identity_guard_decision is None  # raw history never mutated
         session.close(); engine.dispose()
 
     def test_approve_signal_still_succeeds_for_raw_confirmed_fully_governed_row(self):

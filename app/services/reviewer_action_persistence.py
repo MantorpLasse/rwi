@@ -31,12 +31,33 @@ transaction boundary entirely, mirroring every other persistence service in
 this pipeline (intelligence_review_persistence, promotion_policy_persistence,
 physical_installation_reconciliation).
 
-APPROVAL GATE, fail-closed: APPROVE_SIGNAL may only be recorded where all
-three governed decisions already agree:
+APPROVAL GATE, fail-closed: APPROVE_SIGNAL (and, below, CONFIRM_DISTINCT_SIGNAL)
+may only be recorded where all three governed decisions already agree:
 
-    identity_guard_decision       == "ATTACH_CONFIRMED"
+    EFFECTIVE identity decision   == "ATTACH_CONFIRMED"
     intelligence_review_decision  == "REVIEW_REQUIRED"
     promotion_policy_decision     == "HUMAN_REVIEW_REQUIRED"
+
+RAW-vs-EFFECTIVE IDENTITY ("RWI - Raw-vs-Effective APPROVE_SIGNAL Gate -
+Narrow Fix" mission - the known inconsistency this mission closed): the
+identity component of this gate reads
+`app.services.effective_identity_guard_decision.resolve_effective_identity_guard_decision()`
+(EB5) - never `SourceAssertion.identity_guard_decision` (the raw column)
+directly - for BOTH APPROVE_SIGNAL and CONFIRM_DISTINCT_SIGNAL, exactly
+mirroring the MARK_DUPLICATE gate's own already-established EB5 reuse
+below. Before this fix, a genuinely governed row like SA235 (raw
+ATTACH_PROVISIONAL, effective ATTACH_CONFIRMED via
+CROSS_SOURCE_ALIAS_ATTESTATION) could never legally receive APPROVE_SIGNAL
+or CONFIRM_DISTINCT_SIGNAL, even though its identity is exactly as
+governedly confirmed as a row whose raw column happens to already read
+ATTACH_CONFIRMED - the SAME inconsistency MARK_DUPLICATE's own gate was
+built to avoid for legacy-attested rows. `intelligence_review_decision`/
+`promotion_policy_decision` remain RAW-column checks, unchanged - EB5 has
+no analog for those two decisions and this mission does not invent one.
+The raw `identity_guard_decision` column itself is never read, compared,
+or mutated by this gate any more - it remains a permanent, immutable,
+purely historical fact, exactly as EB5's own module docstring already
+requires of every consumer.
 
 `intelligence_review_decision` is checked explicitly even though, given the
 current pipeline's own construction, a row can never reach
@@ -200,11 +221,24 @@ def record_reviewer_action(
         raise ValueError("duplicate_of_signal_id is only valid when action == MARK_DUPLICATE")
 
     if action in _ACTIONS_REQUIRING_APPROVAL_GATE:
-        if source_assertion.identity_guard_decision != REQUIRED_IDENTITY_DECISION_FOR_APPROVAL:
+        # See module docstring "APPROVAL GATE" - the EFFECTIVE decision
+        # (EB5, resolve_effective_identity_guard_decision()), never the raw
+        # identity_guard_decision column directly, for the identical
+        # reason the MARK_DUPLICATE gate already reuses EB5 above: a raw
+        # ATTACH_PROVISIONAL row whose identity has since been genuinely,
+        # governedly confirmed (an EB4 re-evaluation, a legacy human
+        # attestation, or a CrossSourceAliasAttestation) must not be
+        # permanently unreachable here merely because the ORIGINAL,
+        # historical machine decision undershot what later governance
+        # established. The raw column itself is never read, compared, or
+        # mutated by this branch.
+        effective = resolve_effective_identity_guard_decision(session, source_assertion_id=source_assertion.id)
+        if effective.effective_decision != AttachmentOutcome(REQUIRED_IDENTITY_DECISION_FOR_APPROVAL):
             raise ValueError(
-                f"{action} requires identity_guard_decision == "
-                f"{REQUIRED_IDENTITY_DECISION_FOR_APPROVAL!r}, got "
-                f"{source_assertion.identity_guard_decision!r}"
+                f"{action} requires the EFFECTIVE identity decision "
+                f"(resolve_effective_identity_guard_decision(), not merely the raw "
+                f"identity_guard_decision column) to be {REQUIRED_IDENTITY_DECISION_FOR_APPROVAL!r}, got "
+                f"{effective.effective_decision.value!r} (basis={effective.basis.value!r})"
             )
         if source_assertion.intelligence_review_decision != REQUIRED_INTELLIGENCE_DECISION_FOR_APPROVAL:
             raise ValueError(
