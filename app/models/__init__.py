@@ -26,6 +26,7 @@ from app.models.airport_identifier import AirportIdentifier
 from app.models.source_assertion_cross_source_alias_attestation import (
     SourceAssertionCrossSourceAliasAttestation,
 )
+from app.models.manual_claim_evidence import ManualClaimEvidence
 
 __all__ = [
     "Airport",
@@ -38,6 +39,7 @@ __all__ = [
     "Incident",
     "Installation",
     "InstallationAssertionLink",
+    "ManualClaimEvidence",
     "ManualIdentityEvidence",
     "PhysicalInstallationIdentity",
     "PublishingSource",

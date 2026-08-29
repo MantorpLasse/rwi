@@ -420,6 +420,28 @@ EXPECTED_COLUMNS = {
         "created_at": ("DATETIME", False, ("callable",), None),
         "supersedes_attestation_id": ("INTEGER", True, None, None),
     },
+    "manual_claim_evidences": {
+        "id": ("INTEGER", False, None, None),
+        "source_assertion_id": ("INTEGER", False, None, None),
+        "claim_category": ("VARCHAR(30)", False, None, None),
+        "subject": ("VARCHAR(300)", False, None, None),
+        "statement": ("TEXT", False, None, None),
+        "evidence_excerpt": ("TEXT", False, None, None),
+        "analyst": ("VARCHAR(100)", False, None, None),
+        "extraction_mode": ("VARCHAR(30)", False, ("scalar", "HUMAN_TRANSCRIPTION"), None),
+        "normalization_version": ("INTEGER", False, ("scalar", 1), None),
+        "financial_amount": ("VARCHAR(50)", True, None, None),
+        "financial_amount_evidence_token": ("VARCHAR(50)", True, None, None),
+        "financial_currency": ("VARCHAR(10)", True, None, None),
+        "financial_semantic_role": ("VARCHAR(100)", True, None, None),
+        "financial_not_established": ("TEXT", True, None, None),
+        "temporal_qualifier": ("VARCHAR(40)", True, None, None),
+        "temporal_year_tokens": ("TEXT", True, None, None),
+        "relationship_party": ("VARCHAR(200)", True, None, None),
+        "relationship_role": ("VARCHAR(100)", True, None, None),
+        "relationship_scope": ("VARCHAR(200)", True, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -550,6 +572,9 @@ EXPECTED_FOREIGN_KEYS = {
         ("matched_airport_id", "airports.id"),
         ("matched_alias_id", "airport_aliases.id"),
         ("supersedes_attestation_id", "source_assertion_cross_source_alias_attestations.id"),
+    },
+    "manual_claim_evidences": {
+        ("source_assertion_id", "source_assertions.id"),
     },
 }
 
@@ -705,6 +730,9 @@ EXPECTED_INDEXES = {
         ("ix_source_assertion_cross_source_alias_attestations_matched_alias_id", ("matched_alias_id",), False),
         ("ix_source_assertion_cross_source_alias_attestations_supersedes_attestation_id", ("supersedes_attestation_id",), False),
     },
+    "manual_claim_evidences": {
+        ("ix_manual_claim_evidences_source_assertion_id", ("source_assertion_id",), False),
+    },
 }
 
 DEFAULT_CASCADE = frozenset({"merge", "save-update"})
@@ -846,6 +874,9 @@ EXPECTED_RELATIONSHIPS = {
         "matched_airport": ("Airport", None, DEFAULT_CASCADE),
         "matched_alias": ("AirportAlias", None, DEFAULT_CASCADE),
         "supersedes": ("SourceAssertionCrossSourceAliasAttestation", None, DEFAULT_CASCADE),
+    },
+    "ManualClaimEvidence": {
+        "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
     },
     "IdentityGuardEvaluation": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
