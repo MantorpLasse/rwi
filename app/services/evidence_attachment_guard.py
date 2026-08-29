@@ -249,23 +249,43 @@ class AttachmentDecision:
 
 
 def _identifier_evidence(candidate: CandidateAirport, bag: EvidenceBag) -> tuple[list[EvidenceItem], list[ContradictionItem]]:
+    """UNKNOWN-vs-KNOWN-DIFFERENT identifier asymmetry (mirrors the
+    existing, already-designed "absence != contradiction" topology rule
+    in _topology_evidence() below, S6 rule 2 - the identical principle,
+    now applied to identifiers): a stated identifier can only be
+    CONTRADICTING evidence against `candidate` when `candidate` actually
+    HAS at least one known identifier of its own for the token to
+    genuinely differ from. When `candidate.identifiers` is empty (RWI
+    simply has no canonical code on file for this airport at all - a
+    data-completeness gap, not a fact about the real world), a stated
+    identifier is neither a match nor a contradiction - exactly the same
+    "RWI's own inventory being incomplete must never be conflated with
+    'this document is about a different airport'" reasoning the design
+    doc already applies to topology, now applied here for the identical
+    reason. This never makes an unknown identifier positive evidence -
+    only removes it from being *punished* as if it were known-wrong."""
     positive: list[EvidenceItem] = []
     contradicting: list[ContradictionItem] = []
+    candidate_has_known_identifiers = bool(candidate._identifiers_norm)
     for raw in bag.identifiers:
         normalized = _norm_text(raw)
         if normalized in candidate._identifiers_norm:
             positive.append(EvidenceItem(
                 EvidenceCategory.IDENTIFIER, raw, f"matches candidate identifier {raw!r}",
             ))
-        else:
+        elif candidate_has_known_identifiers:
             # A different, structurally valid airport-identifier-shaped
-            # token found in the SAME fragment is self-evidently not the
-            # candidate's own - no external reference lookup is required
-            # to know two different identifier strings identify different
-            # airports (design doc S5, rule 1).
+            # token found in the SAME fragment, genuinely differing from
+            # one of the candidate's own KNOWN identifiers, is
+            # self-evidently not the candidate's own - no external
+            # reference lookup is required to know two different
+            # identifier strings identify different airports (design doc
+            # S5, rule 1).
             contradicting.append(ContradictionItem(
                 EvidenceCategory.IDENTIFIER, raw, f"identifier {raw!r} does not match candidate {candidate.name!r}",
             ))
+        # else: candidate has NO known identifier of any kind - absence,
+        # never contradiction (see docstring above).
     return positive, contradicting
 
 
@@ -312,9 +332,25 @@ def _topology_evidence(candidate: CandidateAirport, bag: EvidenceBag) -> tuple[l
     # "The same fragment separately identifies a different, specific
     # airport" (design doc S6, rule 3) - computed once, reused for every
     # non-matching runway token below, never re-derived per token.
+    #
+    # The identifier term below applies the identical UNKNOWN-vs-KNOWN-
+    # DIFFERENT asymmetry _identifier_evidence() itself now uses (see that
+    # function's own docstring): a stated identifier only counts toward
+    # "another airport is named in this fragment" when `candidate` has at
+    # least one known identifier of its own for the token to genuinely
+    # differ from. Without this guard, a candidate with NO known
+    # identifier on file (e.g. a newly-admitted international airport
+    # whose codes are simply not yet entered) would have every one of its
+    # OWN matching topology tokens vetoed by an unrelated, merely-unknown
+    # identifier - exactly the same "RWI's own data incompleteness must
+    # never be conflated with contradiction" bug this mission's own fix
+    # closes, manifesting a second time in this independent computation.
     other_airport_named = bool(
         bag._contradicting_names_norm or bag._contradicting_issuers_norm or bag._contradicting_locations_norm
-        or any(_norm_text(v) not in candidate._identifiers_norm for v in bag.identifiers)
+        or (
+            bool(candidate._identifiers_norm)
+            and any(_norm_text(v) not in candidate._identifiers_norm for v in bag.identifiers)
+        )
     )
 
     for raw in bag.runway_ends:
