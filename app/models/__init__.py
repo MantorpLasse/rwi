@@ -22,10 +22,12 @@ from app.models.source_assertion_identity_resolution import SourceAssertionIdent
 from app.models.source_assertion_legacy_identity_attestation import SourceAssertionLegacyIdentityAttestation
 from app.models.manual_identity_evidence import ManualIdentityEvidence
 from app.models.airport_alias import AirportAlias
+from app.models.airport_identifier import AirportIdentifier
 
 __all__ = [
     "Airport",
     "AirportAlias",
+    "AirportIdentifier",
     "AcquisitionRun",
     "AcquisitionRunStatus",
     "AcquisitionSource",
