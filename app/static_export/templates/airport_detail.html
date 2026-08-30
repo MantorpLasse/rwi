@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill %}
+{% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill, lifecycle_badge %}
 {% block title %}{{ airport.name }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a></div>
@@ -182,12 +182,26 @@
       {% else %}<div class="empty-state">Inga offentliga projekt- eller bevakningsuppgifter registrerade.</div>{% endif %}
     </div>
 
+    {# ("RWI - Juicy Design Mission #4" mission) "Intelligenshistorik" -
+       replaces the former merged Installation+Incident+Signal Tidslinje.
+       Signal/Incident chronology only now (build.py's
+       _intelligence_history_view - see its own docstring and the module's
+       "public information model" note for exactly why Installation rows
+       were removed from this merge: they already have their own honest,
+       unchanged home in "Historisk EMAS-kontext" below, and mixing both
+       kinds here is what produced BOS's own apparent "EMASMAX in both
+       dated and undated" duplication). Each event carries its own real
+       event-type label, its own already-computed SLT1 lifecycle badge
+       (current/watch/historical/stale - never a new status), and, for a
+       funding-type event, an explicit, non-omittable caveat that a grant
+       amount does not by itself establish an EMAS contract value. #}
     <div class="card panel-strong">
-      <div class="card-header">Tidslinje</div>
-      {% if airport.timeline_dated %}
+      <div class="card-header">{{ t("intelligence_history") }}<span class="card-action" style="color:var(--text-faint); font-weight:400">{{ t("intelligence_history_eyebrow") }}</span></div>
+      {% if airport.intelligence_history_dated or airport.intelligence_history_undated %}
+      {% if airport.intelligence_history_dated %}
       <div class="card-body">
         <div class="timeline">
-          {% for item in airport.timeline_dated %}
+          {% for item in airport.intelligence_history_dated %}
           <div class="timeline-item">
             <div class="timeline-year mono">{{ item.year }}</div>
             <div class="timeline-rail"><span class="timeline-dot {{ item.category_class }}"></span></div>
@@ -195,51 +209,72 @@
               <div class="timeline-title">
                 {% if item.kind == "signal" %}
                 <a href="{{ root }}/signals/{{ item.id }}.html">{{ item.title }}</a>
-                {% elif item.kind == "installation" %}
-                <a href="#installation-{{ item.id }}">{{ item.title }}</a>
                 {% else %}
                 <a href="#incident-{{ item.id }}">{{ item.title }}</a>
                 {% endif %}
                 {{ cat(item.category_label, item.category_class) }}
               </div>
-              {% if item.subtitle %}<div class="timeline-meta">{{ item.subtitle }}</div>{% endif %}
+              <div class="timeline-meta-row">
+                <span class="timeline-meta">
+                  {% if item.event_type == "funding" %}{{ t("event_type_funding") }}{% elif item.event_type == "project" %}{{ t("event_type_project") }}{% else %}{{ t("event_type_incident") }}{% endif %}
+                  {% if item.subtitle %} · {{ item.subtitle }}{% endif %}
+                </span>
+                {% if item.kind == "signal" %}{{ lifecycle_badge(item) }}{% endif %}
+              </div>
+              {% if item.financial_total_usd %}
+              <p class="timeline-meta timeline-caveat">Bidrag: <span class="mono">${{ "{:,.0f}".format(item.financial_total_usd) }}</span> · {{ item.financial_caveat }}</p>
+              {% endif %}
+              {% if item.source_type %}<p class="timeline-meta timeline-source">{{ source_badge(item, root) }}{% if item.source_published_date %} · {{ item.source_published_date }}{% endif %}{% if item.source_url %} · <a href="{{ item.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>{% endif %}</p>
+              {% elif item.source_url %}<p class="timeline-meta timeline-source"><a href="{{ item.source_url }}" target="_blank" rel="noopener">Öppna källa →</a></p>{% endif %}
             </div>
           </div>
           {% endfor %}
         </div>
       </div>
-      {% else %}
-      <div class="empty-state">Inga daterade händelser registrerade.</div>
       {% endif %}
-      {% if airport.timeline_undated %}
-      <div class="card-header" style="border-top:1px solid var(--border)">Odaterat</div>
+      {% if airport.intelligence_history_undated %}
+      <div class="card-header" style="border-top:1px solid var(--border)">{{ t("date_missing_heading") }}</div>
       <div class="card-body">
         <div class="timeline timeline-undated">
-          {% for item in airport.timeline_undated %}
+          {% for item in airport.intelligence_history_undated %}
           <div class="timeline-item timeline-item-undated">
             <div class="timeline-rail"><span class="timeline-dot {{ item.category_class }}"></span></div>
             <div class="timeline-body">
               <div class="timeline-title">
-                {% if item.kind == "signal" %}
                 <a href="{{ root }}/signals/{{ item.id }}.html">{{ item.title }}</a>
-                {% elif item.kind == "installation" %}
-                <a href="#installation-{{ item.id }}">{{ item.title }}</a>
-                {% else %}
-                <a href="#incident-{{ item.id }}">{{ item.title }}</a>
-                {% endif %}
                 {{ cat(item.category_label, item.category_class) }}
               </div>
-              {% if item.subtitle %}<div class="timeline-meta">{{ item.subtitle }}</div>{% endif %}
+              <div class="timeline-meta-row">
+                <span class="timeline-meta">
+                  {% if item.event_type == "funding" %}{{ t("event_type_funding") }}{% else %}{{ t("event_type_project") }}{% endif %}
+                  {% if item.subtitle %} · {{ item.subtitle }}{% endif %}
+                </span>
+                {{ lifecycle_badge(item) }}
+              </div>
+              <p class="timeline-meta timeline-caveat">{% if item.date_reason == "no_event_date" %}{{ t("date_reason_no_event_date") }}{% else %}{{ t("date_reason_no_date") }}{% endif %}</p>
+              {% if item.financial_total_usd %}
+              <p class="timeline-meta timeline-caveat">Bidrag: <span class="mono">${{ "{:,.0f}".format(item.financial_total_usd) }}</span> · {{ item.financial_caveat }}</p>
+              {% endif %}
+              {% if item.source_type %}<p class="timeline-meta timeline-source">{{ source_badge(item, root) }}{% if item.source_published_date %} · {{ item.source_published_date }}{% endif %}</p>{% endif %}
             </div>
           </div>
           {% endfor %}
         </div>
       </div>
       {% endif %}
+      {% else %}
+      <div class="card-body"><div class="empty-state empty-state-compact">{{ t("intelligence_history_empty") }}</div></div>
+      {% endif %}
     </div>
 
+    {# "Historisk EMAS-kontext" - unchanged real Installation data/anchors,
+       now honestly labeled: a row with a real install_year is a dated
+       historical event; a row without one (e.g. BOS installation #33 - a
+       raw FAA current-presence snapshot whose own Source has no date
+       either) is explicitly presented as today's physical state, never as
+       an undated historical event. #}
     <details class="card secondary-disclosure history-disclosure">
-      <summary class="card-header">{{ t("historical_installations") }} ({{ airport.installations|length }})</summary>
+      <summary class="card-header">{{ t("historical_emas_context") }} ({{ airport.installations|length }})</summary>
       {% if airport.installations %}
       <div class="card-body" style="display:flex; flex-direction:column; gap:22px">
         {% for installation in airport.installations %}
@@ -249,7 +284,8 @@
             {% if installation.runway_end %}<span class="pill status">Bana {{ installation.runway_end }}</span>
             {% elif installation.no_confirmed_runway %}<span class="pill unconfirmed" title="Källan pekar ut flera olika banor för denna installation - ingen enskild bana kan bekräftas, se detaljer nedan.">Ingen bekräftad bankoppling</span>{% endif %}
             {% if installation.status %}<span class="pill status">{{ installation.status }}</span>{% endif %}
-            {% if installation.install_year %}<span class="mono" style="color:var(--text-dim)">Installerad {{ installation.install_year }}</span>{% endif %}
+            {% if installation.install_year %}<span class="mono" style="color:var(--text-dim)">Installerad {{ installation.install_year }}</span>
+            {% else %}<span style="color:var(--text-dim)" title="{{ t('current_physical_state_no_year') }}">{{ t("current_physical_state") }}</span>{% endif %}
             {{ vendor_pill(installation.confirmed_vendor, root) }}
           </div>
 
@@ -285,6 +321,85 @@
       <div class="empty-state">Inga installationer registrerade.</div>
       {% endif %}
     </details>
+
+    {# ("RWI - Juicy Design Mission #4" mission, polished by "Visual Polish
+       Checkpoint") "Underlag" - one section per distinct real Source cited
+       above (build.py's _airport_evidence_view), driven entirely by each
+       source's own evidence SHAPE, never by airport identity:
+         - a source WITH governed Claim(s) renders in "claim-rich" mode -
+           its own SOURCE block, then one "evidence finding" per claim
+           (category, statement, original-language excerpt behind its own
+           disclosure) - the exact governed claim data, unchanged.
+         - a source with NO governed claim renders as one compact,
+           thin provenance row instead of a full claim block - real BOS
+           today has ~6 such sources and no governed claims at all, so the
+           generic "no claim transcribed yet" condition is stated ONCE at
+           section level (evidence_summary below), never repeated per row.
+       selectattr/rejectattr here only regroup the already-computed,
+       already-ordered `evidence` tuple for display - no new evidence
+       eligibility or ordering logic. #}
+    {% if evidence %}
+    <div class="card panel-strong annotation" id="underlag">
+      <div class="card-header">
+        {{ t("evidence") }}
+        <span class="card-action" style="color:var(--text-faint); font-weight:400">
+          {% if evidence_summary.claim_count %}{{ evidence_summary.source_count }} {{ t("sources_one") if evidence_summary.source_count == 1 else t("sources_many") }} · {{ evidence_summary.claim_count }} {{ t("claims_one") if evidence_summary.claim_count == 1 else t("claims_many") }}
+          {% else %}{{ evidence_summary.source_count }} {{ t("sources_one") if evidence_summary.source_count == 1 else t("sources_many") }}{% endif %}
+        </span>
+      </div>
+      <div class="card-body evidence-body">
+        {% set claim_sources = evidence|selectattr('claims')|list %}
+        {% set provenance_sources = evidence|rejectattr('claims')|list %}
+
+        {% if claim_sources %}
+        <div class="evidence-claims">
+          {% for source in claim_sources %}
+          <div class="evidence-source-group"{% if not loop.last or provenance_sources %} style="padding-bottom:22px; border-bottom:1px solid var(--border); margin-bottom:22px"{% endif %}>
+            <div class="evidence-eyebrow">{{ t("source") }}</div>
+            <div class="evidence-source-title">{{ source.source_title }}</div>
+            <div class="evidence-source-meta">
+              {{ source.source_publisher or "" }}{% if source.source_publisher and source.source_type %} · {% endif %}{{ source_badge(source, root) }}{% if source.source_published_date %} · {{ source.source_published_date }}{% endif %}
+              {% if source.source_url %} · <a href="{{ source.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>{% endif %}
+            </div>
+            <div class="evidence-findings">
+              {% for claim in source.claims %}
+              <div class="evidence-finding">
+                <div class="evidence-finding-label">{{ t("evidence_finding") }} {{ loop.index }}</div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:4px">
+                  <span class="pill status">{{ claim.category_label }}</span>
+                  {% if claim.temporal_label %}<span class="timeline-meta">{{ claim.temporal_label }}{% if claim.temporal_detail %} · {{ claim.temporal_detail }}{% endif %}</span>{% endif %}
+                </div>
+                <p class="evidence-finding-statement">{{ claim.statement }}</p>
+                {% if claim.relationship_party %}<p class="timeline-meta" style="margin:0 0 4px">{{ claim.relationship_party }}</p>{% endif %}
+                <details class="annotation source-detail evidence-excerpt">
+                  <summary>{{ t("original_excerpt") }}</summary>
+                  <div class="card-body"><p style="white-space:pre-line; margin:0">{{ claim.excerpt }}</p></div>
+                </details>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if provenance_sources %}
+        <p class="evidence-provenance-note">{{ t("evidence_provenance_note") }}</p>
+        <div class="evidence-provenance-list">
+          {% for source in provenance_sources %}
+          <div class="evidence-provenance-row">
+            <div class="evidence-provenance-title">{{ source.source_title }}</div>
+            <div class="evidence-provenance-meta">
+              {{ source.source_publisher or "" }}{% if source.source_publisher and source.source_type %} · {% endif %}{{ source_badge(source, root) }}{% if source.source_published_date %} · {{ source.source_published_date }}{% endif %}
+              {% if source.source_url %} · <a href="{{ source.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
 
     {% if airport.incidents %}<div class="card">
       <div class="card-header">Incidenter</div>

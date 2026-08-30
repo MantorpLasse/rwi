@@ -853,6 +853,27 @@ dl.meta dd {
   margin-top: 2px;
 }
 
+/* ("RWI - Juicy Design Mission #4 - Visual Polish Checkpoint" mission)
+   Keeps "event type · context" and the SLT1 lifecycle badge on one line,
+   badge pushed to the trailing edge - the lifecycle read stays visible
+   without claiming a full row of its own next to the real event headline
+   (the mission's own "lifecycle remains useful but should not overpower
+   the actual event"). */
+.timeline-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  flex-wrap: wrap;
+}
+
+.timeline-meta-row .timeline-meta { margin-top: 0; }
+
+/* Financial caveats/source citations stay visually secondary (smaller,
+   muted, never boxed) but always visible - never hidden behind a toggle. */
+.timeline-caveat { margin-top: 6px; }
+.timeline-source { margin-top: 4px; }
+
 @media (max-width: 480px) {
   .timeline-item {
     grid-template-columns: 40px 16px 1fr;
@@ -860,6 +881,11 @@ dl.meta dd {
   }
   .timeline-year {
     font-size: 0.76rem;
+  }
+  .timeline-meta-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
   }
 }
 
@@ -1027,6 +1053,64 @@ footer.site {
 summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:3px; }
 .disclosure-body { padding:0 0 4px; color:var(--text-dim); }
 .disclosure-body p { margin:0 0 8px; }
+
+/* ("RWI - Juicy Design Mission #4 - Visual Polish Checkpoint" mission)
+   "Underlag" - claim-rich sources (their own SOURCE block + numbered
+   evidence findings) read as an analyst dossier; provenance-only sources
+   (no governed claim) render as compact, thin rows - never the same
+   visual weight as a real transcribed claim. Gold (var(--accent)) marks
+   the finding label only, not a filled block. */
+.evidence-eyebrow {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.evidence-source-title { font-weight: 500; margin-top: 2px; }
+.evidence-source-meta { color: var(--text-dim); font-size: 0.85rem; margin: 2px 0 14px; }
+
+.evidence-findings { display: flex; flex-direction: column; gap: 16px; }
+.evidence-finding-label {
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.evidence-finding-statement { margin: 6px 0 4px; font-size: 1rem; }
+
+/* The original-language excerpt reads as quoted source text, not RWI's
+   own commentary - a left rule + italic, distinct from the claim
+   statement's own plain prose directly above it. */
+.evidence-excerpt .card-body {
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.evidence-provenance-note {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin: 4px 0 12px;
+}
+.evidence-provenance-list { display: flex; flex-direction: column; }
+.evidence-provenance-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.evidence-provenance-row:last-child { border-bottom: none; }
+.evidence-provenance-title { font-weight: 500; }
+.evidence-provenance-meta { color: var(--text-dim); font-size: 0.82rem; }
+
+@media (max-width: 480px) {
+  .evidence-provenance-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+}
 @media (max-width:700px) { .intelligence-head { display:none; } .intelligence-item { grid-template-columns:minmax(0,1fr) auto; gap:6px 12px; padding:16px 0; } .intelligence-place { grid-column:1; grid-row:1; } .intelligence-type { grid-column:2; grid-row:1; justify-self:end; } .intelligence-story { grid-column:1 / -1; grid-row:2; } .intelligence-date { grid-column:1 / -1; grid-row:3; text-align:left; margin-top:1px; } }
 
 /* Visual redesign: editorial aviation intelligence, not an admin panel. */

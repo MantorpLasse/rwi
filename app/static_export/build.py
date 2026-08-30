@@ -545,67 +545,111 @@ def _is_public_signal(signal: Signal) -> bool:
     return signal.published
 
 
+# ("RWI - Juicy Design Mission #4" mission) Public information model /
+# semantic recon findings for the lower Airport Detail page, reproduced here
+# as the single source of truth (full matrix: docs/architecture, final
+# report):
+#
+#   INSTALLATION (Installation, persisted)
+#     install_year, when present, is a real dated historical EVENT (a
+#     physical system going in) - correctly chronological. When ABSENT
+#     (69 of 149 real rows database-wide), the row is not "missing a date
+#     that should be filled in" - it is a different KIND of record: a raw
+#     current-physical-presence snapshot (e.g. BOS installation #33, source
+#     "FAA EMAS Incidents and Installations map", itself has no
+#     published_date either - there is no date to recover). Mixing both
+#     kinds into one merged Tidslinje/"Odaterat" pair (the pre-Mission-#4
+#     behavior) is exactly what produced the BOS "EMASMAX appears both
+#     dated and undated" appearance investigated in Section 3 of this
+#     mission - see BOS_APPARENT_DUPLICATION_CAUSE in the mission's final
+#     report. RESOLUTION: Installation rows no longer feed this
+#     chronological timeline at all - they remain fully presented,
+#     source-and-all, in their own dedicated "Historisk EMAS-kontext"
+#     disclosure below (_installation_view, unchanged), which already
+#     honestly labels an undated row as current physical state rather than
+#     a historical event (airport_detail.html's own dated/undated label).
+#
+#   INCIDENT (Incident, persisted)
+#     incident_date is a required (non-nullable) column - always a real
+#     event date, always chronological, always historical by definition
+#     (something that already happened).
+#
+#   SIGNAL (Signal, persisted)
+#     year source: target_year -> planning_year (the same fallback chain
+#     this function already used pre-Mission-#4; unchanged). A funding-type
+#     Signal (Source.source_type in the grant vocabulary) is tagged
+#     event_type="funding" rather than "project" - Section 12's own
+#     instruction that a grant amount must never visually imply EMAS
+#     contract/procurement value. current/historical relevance reuses
+#     Signal's own already-computed SLT1 lifecycle_state/label/class/tooltip
+#     verbatim (signal_lifecycle.py) - Section 6's explicit instruction to
+#     separate current from historical "WITHOUT inventing a new
+#     business-domain status". source_published_date (the SOURCE's own
+#     publication date) is carried through for display ONLY as its own,
+#     separately-labeled field - never substituted for, or silently treated
+#     as equivalent to, the event's own year (Section 11).
+#
+#   Events without a resolvable year go to a separate `undated` list, each
+#   carrying an honest `date_reason` (Section 5): "no_event_date" when the
+#   underlying Source itself has a real published_date but the Signal's own
+#   event-year fields do not (the record is dated, just not for THIS
+#   event), or "no_date" when neither exists. Never an invented date.
+_GRANT_SOURCE_TYPES_TIMELINE = frozenset({"usaspending_grant", "aip_grant", "iija_grant"})
+
+_FUNDING_CAVEAT = (
+    "Ett bidragsbelopp anger inte automatiskt ett EMAS-kontraktsvärde, en leverantörsintäkt, "
+    "en total projektkostnad eller en genomförd upphandling - se \"Bedömd EMAS-del\" på signalens "
+    "egen sida för vad som faktiskt är fastställt."
+)
+
+
 def _timeline_event(
     *, kind: str, id: int, year: int | None, day: date | None,
-    category_class: str, category_label: str, title: str, subtitle: str | None,
+    event_type: str, category_class: str, category_label: str, title: str, subtitle: str | None,
+    lifecycle_label: str | None = None, lifecycle_class: str | None = None, lifecycle_tooltip: str | None = None,
+    source_type_label=None, source_type_anchor=None, source_type_tooltip=None,
+    source_url=None, source_published_date=None, source_title=None,
+    financial_total_usd=None, financial_caveat=None,
+    date_reason: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         kind=kind,
         id=id,
         year=year,
         day=day,
+        event_type=event_type,
         category_class=category_class,
         category_label=category_label,
         title=title,
         subtitle=subtitle,
+        lifecycle_label=lifecycle_label,
+        lifecycle_class=lifecycle_class,
+        lifecycle_tooltip=lifecycle_tooltip,
+        source_type_label=source_type_label,
+        source_type_anchor=source_type_anchor,
+        source_type_tooltip=source_type_tooltip,
+        source_url=source_url,
+        source_published_date=source_published_date,
+        source_title=source_title,
+        financial_total_usd=financial_total_usd,
+        financial_caveat=financial_caveat,
+        date_reason=date_reason,
     )
 
 
-def _timeline_view(
-    installations: list[SimpleNamespace],
+def _intelligence_history_view(
     incidents: list[SimpleNamespace],
     signals: list[SimpleNamespace],
 ) -> tuple[list[SimpleNamespace], list[SimpleNamespace]]:
-    """Merge Installations/Incidents/Signals into one chronological timeline
-    for airport_detail.html, alongside (not instead of) the existing
-    per-entity tables. Year source per entity: Installation.install_year,
-    Incident.incident_date, and for Signal a fallback chain
-    (target_year -> planning_year) since target_year is populated on only a
-    handful of signals database-wide while planning_year is what the
-    Signals table already displays - a strict target_year-only reading
-    would dump almost every signal into "Odaterat" even when a year is in
-    fact known. manual_year_estimate is deliberately excluded from this
-    chain, even as a last resort: it's a personal, unverified guess (see
-    scripts/annotate_signal.py) and this timeline is part of the public
-    static export - falling back to it would put that guess on the page as
-    if it were a resolved year.
-
-    Events without a resolvable year go to a separate `undated` list instead
-    of the chronological one, per the "Odaterat" section requirement -
-    Incident.incident_date is a required (non-nullable) column, so incidents
-    always land in the chronological list.
-    """
+    """Chronological PROJECT/EVENT history for airport_detail.html's
+    "Intelligenshistorik" section - Signals and Incidents only (see this
+    module's own "public information model" note above for why Installation
+    rows were removed from this merge in Mission #4; they keep their own
+    dedicated, unchanged "Historisk EMAS-kontext" disclosure instead).
+    Deliberately implies no causal relationship between adjacent events -
+    each event stands on its own real date and its own real source."""
     dated: list[SimpleNamespace] = []
     undated: list[SimpleNamespace] = []
-
-    for installation in installations:
-        subtitle = " · ".join(
-            p for p in (
-                installation.status,
-                f"Bana {installation.runway_end}" if installation.runway_end else None,
-            ) if p
-        ) or None
-        event = _timeline_event(
-            kind="installation",
-            id=installation.id,
-            year=installation.install_year,
-            day=None,
-            category_class="new",
-            category_label="Installation",
-            title=installation.type or "Installation",
-            subtitle=subtitle,
-        )
-        (dated if event.year else undated).append(event)
 
     for incident in incidents:
         event = _timeline_event(
@@ -613,24 +657,44 @@ def _timeline_view(
             id=incident.id,
             year=incident.incident_date.year,
             day=incident.incident_date,
+            event_type="incident",
             category_class="incident",
             category_label="Incident",
             title=incident.incident_type,
             subtitle="EMAS aktiverat" if incident.emas_engaged else "EMAS inte aktiverat",
+            source_url=incident.source_url,
         )
         dated.append(event)
 
     for signal in signals:
         year = signal.target_year or signal.planning_year
+        is_funding = signal.source_type in _GRANT_SOURCE_TYPES_TIMELINE
+        event_type = "funding" if is_funding else "project"
+        date_reason = None
+        if year is None:
+            date_reason = "no_event_date" if signal.source_published_date else "no_date"
         event = _timeline_event(
             kind="signal",
             id=signal.id,
             year=year,
             day=None,
+            event_type=event_type,
             category_class=signal.category_class,
             category_label=signal.category_label,
             title=signal.title,
-            subtitle=signal.status,
+            subtitle=signal.status_label,
+            lifecycle_label=signal.lifecycle_label,
+            lifecycle_class=signal.lifecycle_class,
+            lifecycle_tooltip=signal.lifecycle_tooltip,
+            source_type_label=signal.source_type_label,
+            source_type_anchor=signal.source_type_anchor,
+            source_type_tooltip=signal.source_type_tooltip,
+            source_url=signal.source_url,
+            source_published_date=signal.source_published_date,
+            source_title=signal.source_title,
+            financial_total_usd=(signal.estimated_total_value_usd if is_funding else None),
+            financial_caveat=(_FUNDING_CAVEAT if is_funding else None),
+            date_reason=date_reason,
         )
         (dated if event.year else undated).append(event)
 
@@ -1244,9 +1308,105 @@ def _airport_location_view(airport: Airport) -> "SimpleNamespace | None":
     )
 
 
-def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleNamespace:
+# ("RWI - Juicy Design Mission #4" mission) "Bevis" - one row per distinct
+# real Source cited by this airport's public Signals or Installations
+# (deduplicated by the Source's own title+URL+published_date, since neither
+# view model carries the raw Source.id and two distinct real Source rows
+# sharing all three is not a real risk in this dataset), each optionally
+# carrying its governed Claim evidence.
+#
+# Claims are read via the exact same already-governed, already-reviewed
+# service this repository already uses for signal_detail.html's own
+# evidence card (_evidence_view -> get_manual_claims_for_source_assertion) -
+# never a second claims-reading implementation. A Signal's
+# supporting_source_assertions is walked from the ORM object itself
+# (`orm_signals_by_id`), not re-queried. A source with no governed claim
+# still renders here as a plain, source-backed citation - Section 9's own
+# instruction that evidence must "feel like supporting intelligence" even
+# for an airport (e.g. BOS) with no transcribed claim yet.
+def _airport_evidence_view(
+    orm_signals_by_id: dict[int, Signal],
+    signal_views: list[SimpleNamespace],
+    installation_views: list[SimpleNamespace],
+    *, session: Session,
+) -> tuple[SimpleNamespace, ...]:
+    order: list[tuple] = []
+    items: dict[tuple, SimpleNamespace] = {}
+
+    for view in signal_views:
+        if not view.source_title:
+            continue
+        key = (view.source_title, view.source_url, view.source_published_date)
+        if key in items:
+            continue
+        orm_signal = orm_signals_by_id.get(view.id)
+        claims = _evidence_view(orm_signal, session=session) if orm_signal is not None else ()
+        items[key] = SimpleNamespace(
+            source_title=view.source_title,
+            source_publisher=view.source_publisher,
+            source_type=view.source_type,
+            source_type_label=view.source_type_label,
+            source_type_anchor=view.source_type_anchor,
+            source_type_tooltip=view.source_type_tooltip,
+            source_url=view.source_url,
+            source_published_date=view.source_published_date,
+            claims=claims,
+        )
+        order.append(key)
+
+    for view in installation_views:
+        if not view.source_title:
+            continue
+        key = (view.source_title, view.source_url, view.source_published_date)
+        if key in items:
+            continue
+        items[key] = SimpleNamespace(
+            source_title=view.source_title,
+            source_publisher=view.source_publisher,
+            source_type=view.source_type,
+            source_type_label=view.source_type_label,
+            source_type_anchor=view.source_type_anchor,
+            source_type_tooltip=view.source_type_tooltip,
+            source_url=view.source_url,
+            source_published_date=view.source_published_date,
+            claims=(),
+        )
+        order.append(key)
+
+    # Sources with governed claims (richer, higher-value evidence) first;
+    # ties broken by most-recently-published, then title, for a stable,
+    # deterministic order never dependent on dict/insertion happenstance.
+    return tuple(sorted(
+        (items[k] for k in order),
+        key=lambda it: (
+            0 if it.claims else 1,
+            -(it.source_published_date.toordinal() if it.source_published_date else 0),
+            it.source_title,
+        ),
+    ))
+
+
+# ("RWI - Juicy Design Mission #4 - Visual Polish Checkpoint" mission)
+# Section-level counts for Underlag's own heading ("6 källor" /
+# "1 källa - 4 granskade sakuppgifter") - purely derived, deterministic
+# sums over the already-computed `evidence` tuple (source_count is just
+# len(evidence); claim_count sums each source's own already-governed
+# `claims` tuple). Adds no new evidence-eligibility, ordering, or
+# claim-retrieval logic of its own.
+def _evidence_summary_view(evidence: "tuple[SimpleNamespace, ...]") -> SimpleNamespace:
+    return SimpleNamespace(
+        source_count=len(evidence),
+        claim_count=sum(len(s.claims) for s in evidence),
+    )
+
+
+def _airport_view(
+    airport: Airport, *, today: date, session: Session
+) -> "tuple[SimpleNamespace, tuple[SimpleNamespace, ...]]":
+    public_orm_signals = [s for s in airport.signals if _is_public_signal(s)]
+    orm_signals_by_id = {s.id: s for s in public_orm_signals}
     signal_views = sorted(
-        (_signal_view(s, today=today) for s in airport.signals if _is_public_signal(s)),
+        (_signal_view(s, today=today) for s in public_orm_signals),
         key=_signal_sort_key,
     )
     installation_views = [_installation_view(i) for i in airport.installations]
@@ -1258,13 +1418,24 @@ def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleN
             incident_type=i.incident_type,
             emas_engaged=i.emas_engaged,
             updated_at=i.updated_at,
+            # ("RWI - Juicy Design Mission #4" mission) Already-real, already-
+            # public Incident field, not previously threaded onto this view -
+            # feeds the new Intelligenshistorik event's own source link.
+            source_url=i.source_url,
         )
         for i in airport.incidents
     ]
     primary_signals = [s for s in signal_views if s.source_type not in {"usaspending_grant", "aip_grant", "iija_grant"}]
     funding_signals = [s for s in signal_views if s not in primary_signals]
-    timeline_dated, timeline_undated = _timeline_view(installation_views, incident_views, signal_views)
-    return SimpleNamespace(
+    # ("RWI - Juicy Design Mission #4" mission) Replaces the former merged
+    # Installation+Incident+Signal Tidslinje - see _intelligence_history_view's
+    # own docstring and this module's "public information model" note above
+    # for why Installations no longer feed this chronological view.
+    intelligence_history_dated, intelligence_history_undated = _intelligence_history_view(
+        incident_views, signal_views
+    )
+    evidence = _airport_evidence_view(orm_signals_by_id, signal_views, installation_views, session=session)
+    view = SimpleNamespace(
         id=airport.id,
         # ("RWI - Juicy Design Mission #1" mission) The single headline
         # signal for this airport's new "project summary" hero card - the
@@ -1330,9 +1501,24 @@ def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleN
         current_emas=current_emas,
         current_status_unverified=(airport.id == 6 and not current_emas),
         incidents=incident_views,
-        timeline_dated=timeline_dated,
-        timeline_undated=timeline_undated,
+        # ("RWI - Juicy Design Mission #4" mission) See
+        # _intelligence_history_view's own docstring - Signal/Incident
+        # chronology only, Installation history moved out entirely (now
+        # exclusively in the "Historisk EMAS-kontext" disclosure below).
+        intelligence_history_dated=intelligence_history_dated,
+        intelligence_history_undated=intelligence_history_undated,
     )
+    # ("RWI - Juicy Design Mission #4" mission) `evidence` (distinct, real
+    # Source citations backing this airport, each with its governed Claim
+    # evidence when one exists - _airport_evidence_view's own docstring) is
+    # deliberately returned SEPARATELY from the airport view object, never
+    # attached to it - the exact same discipline _build()'s own "DATA.JSON"
+    # note already documents for signal evidence: airport_views feeds
+    # data.json directly, so anything attached to the view itself is
+    # published there too. A literal claim excerpt must never be duplicated
+    # into that payload (see test_data_json_excludes_literal_claim_evidence_-
+    # but_includes_alias, the exact regression this split prevents).
+    return view, evidence
 
 
 def _json_default(value):
@@ -1382,6 +1568,11 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
             selectinload(Airport.signals).selectinload(Signal.airport),
             selectinload(Airport.signals).selectinload(Signal.runway),
             selectinload(Airport.signals).selectinload(Signal.source),
+            # ("RWI - Juicy Design Mission #4" mission) Needed by
+            # _airport_evidence_view's per-signal _evidence_view() call -
+            # same eager-load discipline the standalone signals query below
+            # already applies for signal_detail.html's own evidence card.
+            selectinload(Airport.signals).selectinload(Signal.supporting_source_assertions),
             selectinload(Airport.runways).selectinload(Runway.runway_ends),
             selectinload(Airport.installations).selectinload(Installation.source),
             selectinload(Airport.incidents),
@@ -1389,7 +1580,12 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
             selectinload(Airport.source_assertions).selectinload(SourceAssertion.source),
         ).order_by(Airport.name)
     ).all()
-    airport_views = [_airport_view(a, today=today, session=session) for a in airports]
+    # ("RWI - Juicy Design Mission #4" mission) `evidence` is threaded
+    # per-airport, separately from `airport_views` (which feeds data.json
+    # directly) - see _airport_view's own "DATA.JSON" note.
+    airport_pairs = [_airport_view(a, today=today, session=session) for a in airports]
+    airport_views = [view for view, _evidence in airport_pairs]
+    airport_evidence_by_id = {view.id: evidence for view, evidence in airport_pairs}
 
     all_signals = session.scalars(
         select(Signal).options(
@@ -1503,6 +1699,10 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
             map_viewbox_width=_MAP_VIEWBOX_WIDTH,
             map_viewbox_height=_MAP_VIEWBOX_HEIGHT,
             world_land_path=_WORLD_LAND_PATH,
+            # ("RWI - Juicy Design Mission #4" mission) Template-only, never
+            # attached to `airport` itself - see the DATA.JSON note above.
+            evidence=airport_evidence_by_id[airport.id],
+            evidence_summary=_evidence_summary_view(airport_evidence_by_id[airport.id]),
         )
 
     render(
