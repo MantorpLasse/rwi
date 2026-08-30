@@ -19,6 +19,7 @@ from app.models import (
     Signal,
     SignalDisposition,
     SignalDispositionMember,
+    SignalPublicationAction,
     Source,
     SourceAssertion,
     SourceAssertionEvidenceBag,
@@ -442,6 +443,15 @@ EXPECTED_COLUMNS = {
         "relationship_scope": ("VARCHAR(200)", True, None, None),
         "created_at": ("DATETIME", False, ("callable",), None),
     },
+    "signal_publication_actions": {
+        "id": ("INTEGER", False, None, None),
+        "signal_id": ("INTEGER", False, None, None),
+        "action": ("VARCHAR(20)", False, None, None),
+        "reason": ("TEXT", False, None, None),
+        "reviewer": ("VARCHAR(100)", False, None, None),
+        "created_at": ("DATETIME", False, ("callable",), None),
+        "supersedes_action_id": ("INTEGER", True, None, None),
+    },
 }
 
 EXPECTED_PRIMARY_KEYS = {table_name: ("id",) for table_name in EXPECTED_COLUMNS}
@@ -575,6 +585,10 @@ EXPECTED_FOREIGN_KEYS = {
     },
     "manual_claim_evidences": {
         ("source_assertion_id", "source_assertions.id"),
+    },
+    "signal_publication_actions": {
+        ("signal_id", "signals.id"),
+        ("supersedes_action_id", "signal_publication_actions.id"),
     },
 }
 
@@ -733,6 +747,10 @@ EXPECTED_INDEXES = {
     "manual_claim_evidences": {
         ("ix_manual_claim_evidences_source_assertion_id", ("source_assertion_id",), False),
     },
+    "signal_publication_actions": {
+        ("ix_signal_publication_actions_signal_id", ("signal_id",), False),
+        ("ix_signal_publication_actions_supersedes_action_id", ("supersedes_action_id",), False),
+    },
 }
 
 DEFAULT_CASCADE = frozenset({"merge", "save-update"})
@@ -877,6 +895,10 @@ EXPECTED_RELATIONSHIPS = {
     },
     "ManualClaimEvidence": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),
+    },
+    "SignalPublicationAction": {
+        "signal": ("Signal", None, DEFAULT_CASCADE),
+        "supersedes": ("SignalPublicationAction", None, DEFAULT_CASCADE),
     },
     "IdentityGuardEvaluation": {
         "source_assertion": ("SourceAssertion", None, DEFAULT_CASCADE),

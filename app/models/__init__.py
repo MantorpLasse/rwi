@@ -27,6 +27,7 @@ from app.models.source_assertion_cross_source_alias_attestation import (
     SourceAssertionCrossSourceAliasAttestation,
 )
 from app.models.manual_claim_evidence import ManualClaimEvidence
+from app.models.signal_publication_action import SignalPublicationAction
 
 __all__ = [
     "Airport",
@@ -49,6 +50,7 @@ __all__ = [
     "Signal",
     "SignalDisposition",
     "SignalDispositionMember",
+    "SignalPublicationAction",
     "Source",
     "SourceAssertion",
     "SourceAssertionCrossSourceAliasAttestation",
