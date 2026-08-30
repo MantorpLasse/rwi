@@ -1,144 +1,342 @@
 {% extends "base.html" %}
-{% from "_components.html" import gauge, cat, airport_label %}
+{% from "_components.html" import gauge, cat, airport_label, sign %}
 {% block title %}Runway Safe Intelligence{% endblock %}
 {% block content %}
-<section class="hero-intelligence hero-runway">
-  <div class="hero-copy"><p class="eyebrow">Aviation safety intelligence</p><h1>Runway Safe Intelligence</h1><p class="subtitle">{{ t("hero_statement") }}</p></div>
+{# ("RWI - Juicy Design Mission #2", "Visual Correction Pass - V2 Target")
+   Cinematic hero: the real, authorized rwi-hero-emas.jpg as atmospheric
+   brand imagery (never evidence, never a claim about a specific real
+   installation - see the image's own alt text below), a mostly-left-side
+   overlay so the image stays clearly visible (V2's own explicit
+   correction), and the real KPI cards - individually gold-bordered
+   "intelligence cards" - sitting over the hero's own lower region. Every
+   KPI value below is a real, already-computed, deterministic read
+   (build.py) - no month-over-month delta, no invented trend. #}
+<section class="hero-v2">
+  <img class="hero-v2-image" src="{{ root }}/images/rwi-hero-emas.jpg" alt="" role="presentation">
+  <div class="hero-v2-overlay"></div>
+  <div class="hero-v2-inner">
+    <p class="eyebrow">Aviation safety intelligence</p>
+    <h1 class="hero-v2-title">
+      {{ t("hero_headline_1") }}
+      <span class="hero-v2-accent">{{ t("hero_headline_2") }}</span>
+      {{ t("hero_headline_3") }}
+    </h1>
+    <p class="hero-v2-subtitle">{{ t("hero_statement") }}</p>
+    <a class="btn-primary" href="{{ root }}/signals/index.html">{{ t("view_all_signals") }} →</a>
+
+    <div class="hero-kpi-grid">
+      <div class="hero-kpi">
+        <span class="hero-kpi-icon" aria-hidden="true">🛫</span>
+        <div>
+          <div class="hero-kpi-value">{{ airport_count }}</div>
+          <div class="hero-kpi-label">Övervakade flygplatser</div>
+        </div>
+      </div>
+      <div class="hero-kpi">
+        <span class="hero-kpi-icon" aria-hidden="true">📡</span>
+        <div>
+          <div class="hero-kpi-value" style="color:var(--verified)">{{ active_opportunity_count }}</div>
+          <div class="hero-kpi-label">Aktiva möjligheter</div>
+        </div>
+      </div>
+      <div class="hero-kpi">
+        <span class="hero-kpi-icon" aria-hidden="true">🚧</span>
+        <div>
+          <div class="hero-kpi-value" style="color:var(--med-ink)">{{ in_progress_count }}</div>
+          <div class="hero-kpi-label">Projekt i rörelse</div>
+        </div>
+      </div>
+      <div class="hero-kpi">
+        <span class="hero-kpi-icon" aria-hidden="true">🛡️</span>
+        <div>
+          <div class="hero-kpi-value">{{ installation_count }}</div>
+          <div class="hero-kpi-label">EMAS-installationer</div>
+        </div>
+      </div>
+    </div>
+  </div>
 </section>
 
-<div class="stat-grid">
-  <div class="stat"><div class="label">Flygplatser</div><div class="value">{{ airport_count }}</div></div>
-  <div class="stat"><div class="label">Aktiva möjligheter</div><div class="value" style="color:var(--verified)">{{ active_opportunity_count }}</div></div>
-  <div class="stat"><div class="label">Historiska installationsposter</div><div class="value">{{ installation_count }}</div></div>
-  <div class="stat"><div class="label">Starkt källstöd</div><div class="value" style="color:var(--high)">{{ high_confidence_count }}</div></div>
-</div>
+{# Row 1: Signalöversikt (primary, wide) + Marknadsläge/Projekt per stadium
+   in a narrower side column - V2's own top-dashboard composition. #}
+<div class="dashboard-grid">
+  <div class="dashboard-col-main">
 
-{% if market_summary %}
-<div class="card">
-  <div class="card-header">Marknader<span class="card-action" style="color:var(--text-faint); font-weight:400">Signaler per land</span></div>
-  <div class="card-body market-summary">
-    {% for m in market_summary %}
-    <div class="market-row">
-      <div class="market-country">{{ m.country }}</div>
-      <div class="market-bar-track"><div class="market-bar-fill" style="width:{{ m.share_pct }}%"></div></div>
-      <div class="market-count mono">{{ m.count }}</div>
+    <div class="card panel-strong">
+      <div class="card-header">{{ t("signals_snapshot") }}<a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_signals") }} →</a></div>
+      <table>
+        <thead>
+          <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th></tr>
+        </thead>
+        <tbody>
+          {% for signal in top_signals %}
+          <tr>
+            <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
+            <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
+            <td data-label="Status"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
+            <td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td>
+            <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
+            <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
 
-<div class="card">
-  <div class="card-header">Senast uppdaterat</div>
-  <div class="card-body" style="padding-bottom:0"><p class="timeline-meta" style="margin:0">Aktuella projekt- och källuppdateringar. Historiska incidenter och rena bevakningsuppgifter visas inte här.</p></div>
-  {% if recent_changes %}
-  <div class="intelligence-feed" role="table" aria-label="Senast uppdaterat">
-      <div class="intelligence-head" role="row">
-        <div role="columnheader">TYP</div>
-        <div role="columnheader">FLYGPLATS</div>
-        <div role="columnheader">BESKRIVNING</div>
-        <div role="columnheader">DATUM</div>
-      </div>
-      {% for entry in recent_changes %}<article class="intelligence-item">
-        <div class="intelligence-type">{{ cat(entry.category_label, entry.category_class) }}</div>
-        <div class="intelligence-place"><a href="{{ root }}/airports/{{ entry.airport_id }}.html">{{ airport_label(entry.airport_code, entry.airport_name) }}</a><span>{{ entry.airport_name }}</span></div>
-        <div class="intelligence-story">
-          {% if entry.kind == "signal" %}
-          <a href="{{ root }}/signals/{{ entry.id }}.html">{{ entry.title }}</a>
-          {% elif entry.kind == "installation" %}
-          <a href="{{ root }}/airports/{{ entry.airport_id }}.html#installation-{{ entry.id }}">{{ entry.title }}</a>
-          {% else %}
-          <a href="{{ root }}/airports/{{ entry.airport_id }}.html#incident-{{ entry.id }}">{{ entry.title }}</a>
-          {% endif %}
+  </div>
+
+  <div class="dashboard-col-side">
+
+    {# One dominant market card showing its REAL share of the real total
+       (pct_of_total - build.py's own already-computed field, never a value
+       copied from the reference image), plus a compact proportional bar
+       list for every other real market - deliberately NOT equal-weight
+       spotlight cards, so a market with 1 real Signal is never visually
+       inflated to look comparable to one with dozens (see
+       _market_summary_view()'s own docstring). No map: no reliable,
+       complete airport coordinate coverage exists. #}
+    <div class="card panel-strong">
+      <div class="card-header">{{ t("market_pulse") }}</div>
+      {% if market_summary %}
+      <div class="card-body market-pulse">
+        {% for m in market_summary if m.is_dominant %}
+        <div class="market-dominant">
+          <div class="market-dominant-flag">{{ m.flag or "" }}</div>
+          <div>
+            <div class="market-dominant-country">{{ m.country }}</div>
+            <div class="market-dominant-count"><strong>{{ m.pct_of_total }}%</strong> av aktiviteten · {{ m.count }} signaler</div>
+          </div>
         </div>
-        <time class="mono intelligence-date" datetime="{{ entry.date_label }}">{{ entry.date_label }}</time>
-      </article>{% endfor %}
-  </div>
-  <div class="card-body" style="padding-top:14px"><a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_updates") }} →</a></div>
-  {% else %}
-  <div class="empty-state">Ändringsloggen startade {{ changelog_start_date }}. Ändringar före dess finns inte registrerade.</div>
-  {% endif %}
-</div>
-
-<div class="card">
-  <div class="card-header">EMAS-installationer över tid</div>
-  {% if trend %}
-  <div class="card-body">
-    <div class="trend-legend">
-      <span class="trend-legend-item"><span class="trend-swatch trend-swatch-install"></span>Installationer (bekräftat)</span>
-      <span class="trend-legend-item"><span class="trend-swatch trend-swatch-signal"></span>Signaler (prognos, planerat år)</span>
-    </div>
-
-    <div class="trend-scroll">
-    <svg class="trend-chart" viewBox="0 0 {{ trend.width }} {{ trend.bar_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Nya installationer och signaler per år">
-      <defs>
-        <pattern id="trend-hatch" width="5" height="5" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-          <line x1="0" y1="0" x2="0" y2="5" stroke="var(--low-ink)" stroke-width="1.5" opacity="0.7" />
-        </pattern>
-      </defs>
-      {% for tick in trend.ticks %}
-      <line x1="{{ tick.x }}" y1="4" x2="{{ tick.x }}" y2="{{ trend.bar_baseline_y }}" class="trend-gridline" />
-      {% endfor %}
-      <line x1="{{ trend.bars[0].install_x - 4 }}" y1="{{ trend.bar_baseline_y }}" x2="{{ trend.width - 8 }}" y2="{{ trend.bar_baseline_y }}" class="trend-baseline" />
-      {% for bar in trend.bars %}
-        {% if bar.install_h > 0 %}
-        <rect x="{{ bar.install_x }}" y="{{ bar.install_y }}" width="{{ bar.bar_w }}" height="{{ bar.install_h }}" rx="1.5" class="trend-bar-install">
-          <title>{{ bar.year }} · Installationer: {{ bar.install_count }}</title>
-        </rect>
-        {% endif %}
-        {% if bar.signal_h > 0 %}
-        <rect x="{{ bar.signal_x }}" y="{{ bar.signal_y }}" width="{{ bar.bar_w }}" height="{{ bar.signal_h }}" rx="1.5" class="trend-bar-signal">
-          <title>{{ bar.year }} · Signaler (prognos): {{ bar.signal_count }}</title>
-        </rect>
-        {% endif %}
-      {% endfor %}
-    </svg>
-
-    <svg class="trend-chart trend-chart-cumulative" viewBox="0 0 {{ trend.width }} {{ trend.line_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Kumulativt antal installationer per år">
-      {% for tick in trend.ticks %}
-      <line x1="{{ tick.x }}" y1="0" x2="{{ tick.x }}" y2="{{ trend.line_baseline_y }}" class="trend-gridline" />
-      <text x="{{ tick.x }}" y="{{ trend.line_height - 4 }}" class="trend-tick-label" text-anchor="middle">{{ tick.year }}</text>
-      {% endfor %}
-      <line x1="{{ trend.points[0].x }}" y1="{{ trend.line_baseline_y }}" x2="{{ trend.points[-1].x }}" y2="{{ trend.line_baseline_y }}" class="trend-baseline" />
-      <path d="{{ trend.area_path }}" class="trend-area"></path>
-      <path d="{{ trend.line_path }}" class="trend-line"></path>
-      {% for p in trend.points %}
-      {% if p.year % 5 == 0 %}
-      <circle cx="{{ p.x }}" cy="{{ p.y }}" r="2.5" class="trend-point">
-        <title>{{ p.year }} · Totalt installerat: {{ p.cumulative }}</title>
-      </circle>
+        {% endfor %}
+        <div class="market-secondary-list">
+          {% for m in market_summary %}
+          <div class="market-secondary-row">
+            <span class="market-secondary-name">{{ m.flag or "" }} {{ m.country }}</span>
+            <div class="market-secondary-bar-track"><div class="market-secondary-bar-fill" style="width:{{ m.pct_of_total }}%"></div></div>
+            <span class="mono">{{ m.pct_of_total }}%</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty-state">Ingen marknadsdata ännu.</div>
       {% endif %}
-      {% endfor %}
-    </svg>
     </div>
 
-    <p class="trend-caption">
-      {{ trend.total_installations }} installationer med känt installationsår (av {{ installation_count }} totalt) och {{ trend.total_signals }} signaler med bedömt år (av {{ signal_count }} totalt), {{ trend.start_year }}–{{ trend.end_year }}. Signaler är planerade/möjliga projekt, inte bekräftade installationer.
-    </p>
+    {# Real, deterministic status_label/status_role distribution - a pure
+       SVG donut, no chart library (build.py's _stage_distribution_view
+       precomputes the stroke geometry, same division of labour as the
+       install-trend chart below). #}
+    <div class="card panel-strong">
+      <div class="card-header">{{ t("stage_distribution") }}</div>
+      {% if stage_distribution %}
+      <div class="card-body stage-donut-wrap">
+        <svg viewBox="0 0 140 140" class="stage-donut" role="img" aria-label="{{ t('stage_distribution') }}">
+          <g transform="rotate(-90 70 70)">
+            <circle cx="70" cy="70" r="{{ donut_radius }}" class="stage-donut-track" />
+            {% for seg in stage_distribution %}
+            <circle cx="70" cy="70" r="{{ donut_radius }}" class="stage-donut-seg stage-role-{{ seg.role }}"
+                    stroke-dasharray="{{ seg.dash_array }}" stroke-dashoffset="{{ seg.dash_offset }}">
+              <title>{{ seg.label }}: {{ seg.count }} ({{ seg.pct }}%)</title>
+            </circle>
+            {% endfor %}
+          </g>
+          <text x="70" y="66" text-anchor="middle" class="stage-donut-total">{{ signal_count }}</text>
+          <text x="70" y="84" text-anchor="middle" class="stage-donut-total-label">signaler</text>
+        </svg>
+        <div class="stage-donut-legend">
+          {% for seg in stage_distribution %}
+          <div class="stage-legend-row"><span class="stage-legend-dot stage-role-{{ seg.role }}"></span>{{ seg.label }}<span class="mono">{{ seg.pct }}%</span></div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty-state">Ingen signaldata ännu.</div>
+      {% endif %}
+    </div>
+
   </div>
-  {% else %}
-  <div class="empty-state">Ingen daterad installations- eller signaldata ännu.</div>
-  {% endif %}
 </div>
 
-<div class="card">
-  <div class="card-header">Utvalda signaler <a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_signals") }} →</a></div>
-  <table>
-    <thead>
-      <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th></tr>
-    </thead>
-    <tbody>
-      {% for signal in top_signals %}
-      <tr>
-        <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
-        <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-        <td data-label="Status"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
-        <td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td>
-        <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
-        <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
-      </tr>
+{# ("RWI - Juicy Design Mission #2 - V2.3/V2.4" missions) Global intelligens
+   + Utveckling - country-LEVEL geographic intelligence (see build.py's own
+   geo-recon docstring on _global_intelligence_view() for exactly why:
+   70/88 Airports have governed coordinates, but every one is a USA row -
+   no non-US market has any persisted coordinate at all, so an
+   airport-point map would silently omit every real international market
+   this panel exists to show). The map is a REAL, recognizable world-land
+   silhouette (world_land_path - a licensed, documented local asset, see
+   app/static_export/geo/PROVENANCE.md - never a fabricated/pseudo map)
+   with real, proportional country nodes at representative-centroid
+   positions (build.py's own small, non-exhaustive _COUNTRY_MAP_POSITION -
+   never per-airport precision) - node size/glow reflects real relative
+   activity (market_summary, the exact same numbers Marknadsläge already
+   shows - one single "activity" definition for the whole page). The
+   legend below iterates `market_summary` directly (not the node list), so
+   a real market whose country has no map pin still shows its real numbers
+   - map placement is decorative, never a gate on real data. Reuses
+   .bottom-grid (already-approved 2-column intelligence-row pattern from
+   V2.2) rather than inventing a third grid class. #}
+<div class="bottom-grid">
+
+  <div class="card panel-strong map-card">
+    <div class="card-header">{{ t("global_intelligence") }}<span class="card-action" style="color:var(--text-faint); font-weight:400">{{ t("global_intelligence_eyebrow") }}</span></div>
+    {% if market_summary %}
+    <div class="card-body">
+      <svg class="global-map" viewBox="0 0 {{ map_viewbox_width }} {{ map_viewbox_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('global_intelligence') }}">
+        <defs>
+          <radialGradient id="map-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.55"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        {# Real world land silhouette (see PROVENANCE.md) - the actual
+           visual "wow", never a decorative stand-in. #}
+        <path d="{{ world_land_path }}" class="map-land" fill-rule="evenodd"/>
+        {% for node in global_intelligence %}
+        {% if node.is_dominant %}<circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius * 2.6 }}" fill="url(#map-glow)"/>{% endif %}
+        {% endfor %}
+        {% for node in global_intelligence %}
+        <circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius }}" class="map-node{{ ' map-node-dominant' if node.is_dominant else '' }}">
+          <title>{{ node.country }}: {{ node.count }} signaler ({{ node.pct_of_total }}% av aktiviteten)</title>
+        </circle>
+        {% endfor %}
+      </svg>
+      <div class="map-legend">
+        {% for m in market_summary %}
+        <div class="map-legend-item{{ ' map-legend-item-dominant' if m.is_dominant else '' }}">
+          <span class="map-legend-flag">{{ m.flag or "" }}</span>
+          <span class="map-legend-country">{{ m.country }}</span>
+          <span class="map-legend-pct mono">{{ m.pct_of_total }}%</span>
+          <span class="map-legend-count">{{ m.count }} signaler</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <div class="empty-state">Ingen aktivitetsdata ännu.</div>
+    {% endif %}
+  </div>
+
+  <div class="card panel-strong">
+    <div class="card-header">{{ t("important_developments") }}<span class="card-action" style="color:var(--text-faint); font-weight:400">{{ t("important_developments_eyebrow") }}</span></div>
+    {% if important_developments %}
+    <div class="card-body important-developments">
+      {% for signal in important_developments %}
+      <a class="important-dev-row" href="{{ root }}/signals/{{ signal.id }}.html">
+        <span class="pill status {{ signal.status_role }}">{{ signal.status_label }}</span>
+        <span class="important-dev-body">
+          <span class="important-dev-airport">{{ sign(signal.airport_code, signal.airport_name) }} {{ signal.airport_name }}</span>
+          <span class="important-dev-title">{{ signal.title }}</span>
+        </span>
+        <span class="important-dev-year mono">{{ signal.planning_year or "–" }}</span>
+      </a>
       {% endfor %}
-    </tbody>
-  </table>
+    </div>
+    {% else %}
+    <div class="empty-state">{{ t("important_developments_empty") }}</div>
+    {% endif %}
+  </div>
+
+</div>
+
+{# Row 2: EMAS-aktivitet över tid + Senast uppdaterat, side by side instead
+   of the initial pass's full-width stacked cards - the density correction
+   this pass's own instruction Phase 3/4 asks for. #}
+<div class="bottom-grid">
+
+  <div class="card panel-strong">
+    <div class="card-header">EMAS-aktivitet över tid</div>
+    {% if trend %}
+    <div class="card-body">
+      <div class="trend-legend">
+        <span class="trend-legend-item"><span class="trend-swatch trend-swatch-install"></span>Installationer (bekräftat)</span>
+        <span class="trend-legend-item"><span class="trend-swatch trend-swatch-signal"></span>Signaler (prognos, planerat år)</span>
+      </div>
+
+      <div class="trend-scroll">
+      <svg class="trend-chart" viewBox="0 0 {{ trend.width }} {{ trend.bar_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Nya installationer och signaler per år">
+        <defs>
+          <pattern id="trend-hatch" width="5" height="5" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="0" x2="0" y2="5" stroke="var(--low-ink)" stroke-width="1.5" opacity="0.7" />
+          </pattern>
+        </defs>
+        {% for tick in trend.ticks %}
+        <line x1="{{ tick.x }}" y1="4" x2="{{ tick.x }}" y2="{{ trend.bar_baseline_y }}" class="trend-gridline" />
+        {% endfor %}
+        <line x1="{{ trend.bars[0].install_x - 4 }}" y1="{{ trend.bar_baseline_y }}" x2="{{ trend.width - 8 }}" y2="{{ trend.bar_baseline_y }}" class="trend-baseline" />
+        {% for bar in trend.bars %}
+          {% if bar.install_h > 0 %}
+          <rect x="{{ bar.install_x }}" y="{{ bar.install_y }}" width="{{ bar.bar_w }}" height="{{ bar.install_h }}" rx="1.5" class="trend-bar-install">
+            <title>{{ bar.year }} · Installationer: {{ bar.install_count }}</title>
+          </rect>
+          {% endif %}
+          {% if bar.signal_h > 0 %}
+          <rect x="{{ bar.signal_x }}" y="{{ bar.signal_y }}" width="{{ bar.bar_w }}" height="{{ bar.signal_h }}" rx="1.5" class="trend-bar-signal">
+            <title>{{ bar.year }} · Signaler (prognos): {{ bar.signal_count }}</title>
+          </rect>
+          {% endif %}
+        {% endfor %}
+      </svg>
+
+      <svg class="trend-chart trend-chart-cumulative" viewBox="0 0 {{ trend.width }} {{ trend.line_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Kumulativt antal installationer per år">
+        {% for tick in trend.ticks %}
+        <line x1="{{ tick.x }}" y1="0" x2="{{ tick.x }}" y2="{{ trend.line_baseline_y }}" class="trend-gridline" />
+        <text x="{{ tick.x }}" y="{{ trend.line_height - 4 }}" class="trend-tick-label" text-anchor="middle">{{ tick.year }}</text>
+        {% endfor %}
+        <line x1="{{ trend.points[0].x }}" y1="{{ trend.line_baseline_y }}" x2="{{ trend.points[-1].x }}" y2="{{ trend.line_baseline_y }}" class="trend-baseline" />
+        <path d="{{ trend.area_path }}" class="trend-area"></path>
+        <path d="{{ trend.line_path }}" class="trend-line"></path>
+        {% for p in trend.points %}
+        {% if p.year % 5 == 0 %}
+        <circle cx="{{ p.x }}" cy="{{ p.y }}" r="2.5" class="trend-point">
+          <title>{{ p.year }} · Totalt installerat: {{ p.cumulative }}</title>
+        </circle>
+        {% endif %}
+        {% endfor %}
+      </svg>
+      </div>
+
+      <p class="trend-caption">
+        {{ trend.total_installations }} installationer med känt installationsår (av {{ installation_count }} totalt) och {{ trend.total_signals }} signaler med bedömt år (av {{ signal_count }} totalt), {{ trend.start_year }}–{{ trend.end_year }}. Signaler är planerade/möjliga projekt, inte bekräftade installationer.
+      </p>
+    </div>
+    {% else %}
+    <div class="empty-state">Ingen daterad installations- eller signaldata ännu.</div>
+    {% endif %}
+  </div>
+
+  <div class="card panel-strong">
+    <div class="card-header">Senast uppdaterat</div>
+    <div class="card-body" style="padding-bottom:0"><p class="timeline-meta" style="margin:0">Aktuella projekt- och källuppdateringar. Historiska incidenter och rena bevakningsuppgifter visas inte här.</p></div>
+    {% if recent_changes %}
+    <div class="intelligence-feed" role="table" aria-label="Senast uppdaterat">
+        <div class="intelligence-head" role="row">
+          <div role="columnheader">TYP</div>
+          <div role="columnheader">FLYGPLATS</div>
+          <div role="columnheader">BESKRIVNING</div>
+          <div role="columnheader">DATUM</div>
+        </div>
+        {% for entry in recent_changes %}<article class="intelligence-item">
+          <div class="intelligence-type">{{ cat(entry.category_label, entry.category_class) }}</div>
+          <div class="intelligence-place"><a href="{{ root }}/airports/{{ entry.airport_id }}.html">{{ airport_label(entry.airport_code, entry.airport_name) }}</a><span>{{ entry.airport_name }}</span></div>
+          <div class="intelligence-story">
+            {% if entry.kind == "signal" %}
+            <a href="{{ root }}/signals/{{ entry.id }}.html">{{ entry.title }}</a>
+            {% elif entry.kind == "installation" %}
+            <a href="{{ root }}/airports/{{ entry.airport_id }}.html#installation-{{ entry.id }}">{{ entry.title }}</a>
+            {% else %}
+            <a href="{{ root }}/airports/{{ entry.airport_id }}.html#incident-{{ entry.id }}">{{ entry.title }}</a>
+            {% endif %}
+          </div>
+          <time class="mono intelligence-date" datetime="{{ entry.date_label }}">{{ entry.date_label }}</time>
+        </article>{% endfor %}
+    </div>
+    <div class="card-body" style="padding-top:14px"><a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_updates") }} →</a></div>
+    {% else %}
+    <div class="empty-state">Ändringsloggen startade {{ changelog_start_date }}. Ändringar före dess finns inte registrerade.</div>
+    {% endif %}
+  </div>
+
 </div>
 {% endblock %}

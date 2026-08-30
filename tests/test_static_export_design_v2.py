@@ -136,7 +136,12 @@ def test_overview_active_opportunity_count_is_real_and_deterministic(tmp_path):
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
     assert "Aktiva möjligheter" in html
-    m = re.search(r'Aktiva möjligheter</div><div class="value"[^>]*>(\d+)</div>', html)
+    # ("RWI - Juicy Design Mission #2" mission) The Overview KPI markup was
+    # intentionally replaced (`.stat`/`.value`, label-then-value -> the new
+    # hero-integrated `.hero-kpi`/`.hero-kpi-value`, value-then-label) by
+    # that mission's authorized visual overhaul - this assertion follows
+    # that change; the underlying metric/value is unchanged.
+    m = re.search(r'<div class="hero-kpi-value"[^>]*>(\d+)</div>\s*<div class="hero-kpi-label">Aktiva möjligheter</div>', html)
     assert m is not None
     assert int(m.group(1)) == 1  # exactly the one under-construction signal seeded
 
@@ -148,7 +153,10 @@ def test_overview_market_summary_reflects_real_country_counts(tmp_path):
         _seed_sacheon_shaped(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
-    assert "Marknader" in html
+    # ("RWI - Juicy Design Mission #2" mission) The market-summary card was
+    # renamed "Marknader" -> "Marknadsläge" (t("market_pulse")) as part of
+    # that mission's own "Market Pulse" redesign.
+    assert "Marknadsläge" in html
     assert "USA" in html
     assert "South Korea" in html
     data = json.loads((tmp_path / "site" / "data.json").read_text(encoding="utf-8"))
@@ -175,24 +183,39 @@ def test_bos_shaped_airport_detail_renders_project_summary(tmp_path):
         airport = _seed_bos_shaped(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = (tmp_path / "site" / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
-    assert 'class="project-summary"' in html
-    assert 'class="hero-status construction"' in html
+    # ("RWI - Juicy Design Mission #2 - Visual Correction Pass") The
+    # project-summary section is now also `.card.panel-strong` (moved into
+    # the new 3-column .airport-body-grid) - `project-summary` is still a
+    # class token on the element, just not the sole class attribute value.
+    assert 'project-summary' in html
+    # The dominant status badge moved from inside `.project-summary` into
+    # the new `.airport-header` (Mission #2's own header-strengthening
+    # change) - still present on the page, still exactly the same real
+    # status_role/status_label.
+    assert 'class="hero-status hero-status-lg construction"' in html
     assert "Under byggnation" in html
 
 
 def test_bos_shaped_primary_state_not_contradicted_by_another_equally_prominent_badge(tmp_path):
-    """Exactly one `.hero-status` (the dominant descriptor) appears in the
-    project-summary section; the lifecycle badge is present but carries its
-    own distinct, smaller `.project-summary-lifecycle` class, never a
-    second `.hero-status`."""
+    """Exactly one `.hero-status` (the dominant descriptor) appears
+    anywhere on the page (in the header, since "RWI - Juicy Design Mission
+    #2"); the lifecycle badge lives in the project-summary's own
+    `.quick-facts` strip with a plain `.lifecycle` class, never a second
+    `.hero-status`."""
     engine = _engine()
     with Session(engine) as session:
         airport = _seed_bos_shaped(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = (tmp_path / "site" / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
-    section = re.search(r'<section class="project-summary">.*?</section>', html, re.S).group(0)
-    assert section.count('class="hero-status') == 1
-    assert 'class="lifecycle project-summary-lifecycle' in section
+    assert html.count('class="hero-status') == 1
+    # ("RWI - Juicy Design Mission #2 - Visual Correction Pass") The
+    # quick-facts strip (carrying the lifecycle badge) now sits directly
+    # under the header, outside the project-summary <section> - it must
+    # still contain no second .hero-status, and the header itself must be
+    # the sole owner of that class.
+    quick_facts = re.search(r'<div class="quick-facts">.*?(?=<div class="airport-body-grid">)', html, re.S).group(0)
+    assert 'class="hero-status' not in quick_facts
+    assert re.search(r'class="lifecycle [a-z]+"', quick_facts)
 
 
 # ---------------------------------------------------------------------------

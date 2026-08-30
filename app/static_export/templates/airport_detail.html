@@ -3,76 +3,112 @@
 {% block title %}{{ airport.name }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a></div>
-<h1><span style="margin-right:10px; display:inline-block">{{ sign(airport.iata_code or airport.icao_code or airport.faa_code or "–", airport.name) }}</span>{{ airport.name }}</h1>
-<p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
-{% if airport.local_names %}<p class="subtitle" style="margin-top:-8px; color:var(--text-dim)">{{ airport.local_names|join(" · ") }}</p>{% endif %}
-
-{# ("RWI - Juicy Design Mission #1" mission) One dominant project-intelligence
-   summary for the airport's own top-ranked, non-funding public Signal
-   (build.py's already-established _signal_sort_key ordering - see
-   Airport.primary_signal's own docstring). Establishes a presentation-only
-   hierarchy that does not exist anywhere else on the site yet: status_label
-   (already public-safe/qualified by presentation.py's public_signal_state())
-   is the ONE visually dominant descriptor; category is plain metadata;
-   lifecycle is a small, secondary qualifier badge, never equal-weight with
-   status. "Varför RWI bevakar detta" reuses signal.lifecycle_tooltip -
-   already-authored, already-reviewed, deterministic per-state copy
-   (app/static_export/presentation.py's LIFECYCLE_PRESENTATION) - never new
-   speculative commentary. #}
-{% if airport.primary_signal %}
-<section class="project-summary">
-  <p class="eyebrow">Vad händer just nu</p>
-  <div class="project-summary-head">
-    <span class="hero-status {{ airport.primary_signal.status_role }}">{{ airport.primary_signal.status_label }}</span>
-    {% if airport.primary_signal.lifecycle_label %}<span class="lifecycle project-summary-lifecycle {{ airport.primary_signal.lifecycle_class }}" title="{{ airport.primary_signal.lifecycle_tooltip }}">{{ airport.primary_signal.lifecycle_label }}</span>{% endif %}
+{# ("RWI - Juicy Design Mission #2" mission) Stronger header: title/subtitle
+   left, the airport's own dominant project status (Mission #1's
+   Airport.primary_signal) as one large badge top-right - the exact
+   composition docs/design/rwi-visual-target.png uses, built entirely from
+   already-real fields (no new data). country_flag is purely decorative
+   (build.py's own small, non-exhaustive _COUNTRY_FLAG map). #}
+<div class="airport-header">
+  <div>
+    <h1><span style="margin-right:10px; display:inline-block">{{ sign(airport.iata_code or airport.icao_code or airport.faa_code or "–", airport.name) }}</span>{{ airport.name }}{% if airport.country_flag %} <span class="airport-flag">{{ airport.country_flag }}</span>{% endif %}</h1>
+    <p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
+    {% if airport.local_names %}<p class="subtitle" style="margin-top:-8px; color:var(--text-dim)">{{ airport.local_names|join(" · ") }}</p>{% endif %}
   </div>
-  <h2 class="project-summary-title"><a href="{{ root }}/signals/{{ airport.primary_signal.id }}.html">{{ airport.primary_signal.title }}</a></h2>
-  {% if airport.primary_signal.public_qualification %}<p class="timeline-meta">{{ airport.primary_signal.public_qualification }}</p>{% endif %}
-  <div class="project-summary-meta">
-    <span class="project-summary-meta-item"><span class="project-summary-meta-label">{{ t("project_type") }}</span>{{ cat(airport.primary_signal.category_label, airport.primary_signal.category_class) }}</span>
-    <span class="project-summary-meta-item"><span class="project-summary-meta-label">Styrka i underlaget</span>{{ gauge(airport.primary_signal.confidence_level, airport.primary_signal.confidence_label, root) }}</span>
-    {% if airport.primary_signal.planning_year %}<span class="project-summary-meta-item"><span class="project-summary-meta-label">{{ t("year") }}</span><span class="mono">{{ airport.primary_signal.planning_year }}</span></span>{% endif %}
-  </div>
-  {% if airport.primary_signal.lifecycle_tooltip %}
-  <p class="project-summary-why"><strong>Varför RWI bevakar detta:</strong> {{ airport.primary_signal.lifecycle_tooltip }}</p>
+  {% if airport.primary_signal %}
+  <span class="hero-status hero-status-lg {{ airport.primary_signal.status_role }}">{{ airport.primary_signal.status_label }}</span>
   {% endif %}
-  {% if airport.signals|length > 1 %}<p class="timeline-meta">+{{ airport.signals|length - 1 }} till nedan under "{{ t("projects") }}".</p>{% endif %}
-</section>
+</div>
+
+{# ("RWI - Juicy Design Mission #2 - Visual Correction Pass") A lightweight
+   quick-facts strip now sits directly under the header, not boxed inside a
+   card - V2's own "quick-fact strip integrated into header area". Fields
+   unchanged from the initial pass: category/lifecycle/confidence/year as
+   equal-weight plain metadata, never competing with the header's one
+   dominant status badge. #}
+{% if airport.primary_signal %}
+<div class="quick-facts">
+  <div class="quick-fact">
+    <div class="quick-fact-label">{{ t("project_type") }}</div>
+    <div class="quick-fact-value">{{ cat(airport.primary_signal.category_label, airport.primary_signal.category_class) }}</div>
+  </div>
+  {% if airport.primary_signal.lifecycle_label %}
+  <div class="quick-fact">
+    <div class="quick-fact-label">Läge</div>
+    <div class="quick-fact-value"><span class="lifecycle {{ airport.primary_signal.lifecycle_class }}" title="{{ airport.primary_signal.lifecycle_tooltip }}">{{ airport.primary_signal.lifecycle_label }}</span></div>
+  </div>
+  {% endif %}
+  <div class="quick-fact">
+    <div class="quick-fact-label">Styrka i underlaget</div>
+    <div class="quick-fact-value">{{ gauge(airport.primary_signal.confidence_level, airport.primary_signal.confidence_label, root) }}</div>
+  </div>
+  {% if airport.primary_signal.planning_year %}
+  <div class="quick-fact">
+    <div class="quick-fact-label">{{ t("year") }}</div>
+    <div class="quick-fact-value mono">{{ airport.primary_signal.planning_year }}</div>
+  </div>
+  {% endif %}
+</div>
 {% endif %}
+
+{# Real 3-column body row (Projektsammanfattning / Banor / EMAS idag)
+   replacing the initial pass's 2-column-plus-full-width-table stack -
+   "fewer giant stacked rectangles, make better use of desktop width".
+   Collapses gracefully to 2 (or 1) columns when primary_signal is absent -
+   CSS grid, no JS, no invented content for a missing card. #}
+<div class="airport-body-grid">
+  {% if airport.primary_signal %}
+  {# One dominant project-intelligence summary for the airport's own
+     top-ranked, non-funding public Signal (build.py's already-established
+     _signal_sort_key ordering - see Airport.primary_signal's own
+     docstring). "Varför RWI bevakar detta" reuses signal.lifecycle_tooltip
+     - already-authored, already-reviewed, deterministic per-state copy
+     (LIFECYCLE_PRESENTATION) - never new speculative commentary. #}
+  <section class="card panel-strong project-summary">
+    <div class="card-header">Vad händer just nu</div>
+    <div class="card-body">
+      <h2 class="project-summary-title"><a href="{{ root }}/signals/{{ airport.primary_signal.id }}.html">{{ airport.primary_signal.title }}</a></h2>
+      {% if airport.primary_signal.public_qualification %}<p class="timeline-meta">{{ airport.primary_signal.public_qualification }}</p>{% endif %}
+      {% if airport.primary_signal.lifecycle_tooltip %}
+      <p class="project-summary-why"><strong>Varför RWI bevakar detta:</strong> {{ airport.primary_signal.lifecycle_tooltip }}</p>
+      {% endif %}
+      {% if airport.signals|length > 1 %}<p class="timeline-meta">+{{ airport.signals|length - 1 }} till nedan under "{{ t("projects") }}".</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  <div class="card panel-strong">
+    <div class="card-header">{{ t("runways") }}</div>
+    {% if airport.runways %}
+    <div class="card-body">
+      <div style="display:flex; flex-wrap:wrap; gap:8px">{% for runway in airport.runways %}<span class="pill status">{{ runway.designation }}</span>{% endfor %}</div>
+    </div>
+    {% else %}<div class="empty-state empty-state-compact">Ingen banuppgift registrerad.</div>{% endif %}
+  </div>
+
+  <div class="card panel-strong">
+    <div class="card-header">{{ t("current_emas") }}</div>
+    {% if airport.current_emas %}
+    <div class="card-body" style="display:flex; flex-direction:column; gap:12px">
+      {% for item in airport.current_emas %}
+      <div>
+        <span class="pill status">{{ item.primary_label }}</span>
+        <span class="timeline-meta" style="margin-left:8px">{{ item.evidence_basis_label }}</span>
+        <p class="timeline-meta" style="margin:4px 0 0">{{ item.provenance_text }}</p>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}{% if airport.current_status_unverified %}<div class="empty-state empty-state-compact"><strong>{{ t("current_status_unverified") }}</strong><br>{{ t("current_status_unverified_detail") }}</div>{% else %}<div class="empty-state empty-state-compact">Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens.</div>{% endif %}{% endif %}
+  </div>
+</div>
 
 {# grid-2's second column only ever holds the (rare) website link, so the
    two-column layout is only used when there's actually something to put
    in it - otherwise an empty reserved column would leave a large blank
-   sidebar on almost every airport page. "Banor" (governed canonical
-   runway inventory) lives in the main column below, not this one - see
-   docs/product/public-canonical-runway-inventory-report.md. #}
+   sidebar on almost every airport page. #}
 <div class="{{ 'grid-2' if airport.website_url else '' }}">
   <div>
-    <div class="card">
-      <div class="card-header">{{ t("runways") }}</div>
-      {% if airport.runways %}
-      <div class="card-body">
-        <div style="display:flex; flex-wrap:wrap; gap:8px">{% for runway in airport.runways %}<span class="pill status">{{ runway.designation }}</span>{% endfor %}</div>
-      </div>
-      {% else %}<div class="empty-state">Ingen banuppgift registrerad.</div>{% endif %}
-    </div>
-
-    <div class="card">
-      <div class="card-header">{{ t("current_emas") }}</div>
-      {% if airport.current_emas %}
-      <div class="card-body" style="display:flex; flex-direction:column; gap:12px">
-        {% for item in airport.current_emas %}
-        <div>
-          <span class="pill status">{{ item.primary_label }}</span>
-          <span class="timeline-meta" style="margin-left:8px">{{ item.evidence_basis_label }}</span>
-          <p class="timeline-meta" style="margin:4px 0 0">{{ item.provenance_text }}</p>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}{% if airport.current_status_unverified %}<div class="empty-state"><strong>{{ t("current_status_unverified") }}</strong><br>{{ t("current_status_unverified_detail") }}</div>{% else %}<div class="empty-state">Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens.</div>{% endif %}{% endif %}
-    </div>
-
-    <div class="card">
+    <div class="card panel-strong">
       <div class="card-header">{{ t("projects") }}</div>
       {% if airport.signals %}
       <table><thead><tr><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th></tr></thead><tbody>
@@ -84,7 +120,7 @@
       {% else %}<div class="empty-state">Inga offentliga projekt- eller bevakningsuppgifter registrerade.</div>{% endif %}
     </div>
 
-    <div class="card">
+    <div class="card panel-strong">
       <div class="card-header">Tidslinje</div>
       {% if airport.timeline_dated %}
       <div class="card-body">

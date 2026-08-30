@@ -56,7 +56,12 @@ def test_build_site_writes_expected_pages_and_data(tmp_path):
 
     index_html = (output / "index.html").read_text(encoding="utf-8")
     assert "Runway 15/33 future EMAS" in index_html
-    assert '<div class="value">1</div>' in index_html
+    # ("RWI - Juicy Design Mission #2" mission) The Overview KPI markup was
+    # intentionally replaced (`.stat`/`.value` -> the new hero-integrated
+    # `.hero-kpi`/`.hero-kpi-value`) as part of that mission's authorized
+    # visual overhaul - this assertion follows that change; the underlying
+    # value (1 seeded airport) is unchanged.
+    assert '<div class="hero-kpi-value">1</div>' in index_html
 
     signal_html = (output / "signals" / "1.html").read_text(encoding="utf-8")
     assert "ASE" in signal_html

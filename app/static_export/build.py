@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from collections import Counter
 from dataclasses import asdict, is_dataclass
@@ -880,27 +881,266 @@ def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNa
     ]
 
 
-# ("RWI - Juicy Design Mission #1" mission) Real, deterministic per-country
-# breakdown of public Signals - the Overview's "clean geographic/market
-# summary" (mission Phase 3's own explicit preference over a fabricated
-# map: this repository has no reliable, complete airport coordinate
-# coverage, so no map is built). Counts only, from signal_views'
-# already-computed `country` field (Airport.country, always present) - no
-# geocoding, no invented region groupings, no percentage-of-market claim.
-# Sorted by count descending, country name ascending as a stable tie-break;
-# the resulting order is itself the honest "where is activity concentrated"
-# signal the mission asks for, with the USA naturally landing first because
-# the real data says so (see build.py module-level recon: 64 of 67 public
-# Signals are U.S. airports).
+# Purely typographic/decorative - a real country name already present on
+# every signal_view (Airport.country) gets a flag emoji next to it, nothing
+# more. Deliberately not exhaustive: an unmapped country (any real value not
+# listed here) simply renders with no flag - see _market_summary_view's own
+# template usage - never a placeholder/wrong flag, and never a reason to
+# block the build.
+_COUNTRY_FLAG = {
+    "USA": "🇺🇸", "United States": "🇺🇸", "Brazil": "🇧🇷", "New Zealand": "🇳🇿",
+    "South Korea": "🇰🇷", "Canada": "🇨🇦", "Mexico": "🇲🇽", "United Kingdom": "🇬🇧",
+    "Sweden": "🇸🇪", "Norway": "🇳🇴", "Finland": "🇫🇮", "Denmark": "🇩🇰",
+    "Germany": "🇩🇪", "France": "🇫🇷", "Japan": "🇯🇵", "China": "🇨🇳",
+    "Australia": "🇦🇺", "India": "🇮🇳",
+}
+
+
+# ("RWI - Juicy Design Mission #1" mission, restyled by "RWI - Juicy Design
+# Mission #2") Real, deterministic per-country breakdown of public Signals -
+# the Overview's "clean geographic/market summary" (no fabricated map: this
+# repository has no reliable, complete airport coordinate coverage). Counts
+# only, from signal_views' already-computed `country` field (Airport.country,
+# always present) - no geocoding, no invented region groupings.
+#
+# `is_dominant` marks only the single largest market (ties broken by country
+# name, same as the sort itself) - Mission #2's own explicit instruction not
+# to visually inflate a small market applies with equal force in the other
+# direction: the real leading market must be the one visually emphasized,
+# never an arbitrary top-N cutoff that could flatter a minor one. Every
+# other market renders at the same, smaller, plain-list weight - genuinely
+# proportional to the real gap in the data (see the module's own real-data
+# recon: USA=64 vs every other real country=1).
 def _market_summary_view(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
     counts = Counter(s.country for s in signal_views if s.country)
     if not counts:
         return []
     max_count = max(counts.values())
+    total = sum(counts.values())
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return [
-        SimpleNamespace(country=country, count=count, share_pct=round(100 * count / max_count))
-        for country, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        SimpleNamespace(
+            country=country,
+            flag=_COUNTRY_FLAG.get(country),
+            count=count,
+            share_pct=round(100 * count / max_count),
+            pct_of_total=round(100 * count / total),
+            is_dominant=(index == 0),
+        )
+        for index, (country, count) in enumerate(ordered)
     ]
+
+
+# One representative display label per STATUS_PRESENTATION `role` (never a
+# new status taxonomy - presentation.py's own existing role vocabulary,
+# reused verbatim: DESIGN_BRIEF.md's "build this mapping in one place").
+# Grouping by role rather than by the finer-grained raw status text is
+# deliberate: several distinct real status values legitimately share one
+# role (alp/cip/master_plan -> "planning"), and the reference's own donut
+# is a small handful of stage buckets, not one slice per raw database
+# value. "identified" is intentionally omitted here - its label is always
+# the already-approved public research-watch copy (text("research_watch")),
+# fetched dynamically so it stays in sync with that single source of truth
+# rather than being duplicated as a second, driftable copy of the same
+# string.
+_STATUS_ROLE_LABEL = {
+    "completed": "Färdigställd",
+    "funded": "Finansierad",
+    "design": "Projektering",
+    "procurement": "Upphandling",
+    "construction": "Under byggnation",
+    "review": "Miljöprövning",
+    "planning": "Planering",
+    "unknown": "Ej klassificerad",
+}
+
+# ("RWI - Juicy Design Mission #2" mission) Real, deterministic distribution
+# of public Signals across pipeline stage (status_view()'s own `role`
+# grouping - the same one .pill.status/.hero-status color classes already
+# use). Real percentages of the real total, never invented. A role-bucket
+# with only a single Signal is folded into "Övrigt" (Other) whenever at
+# least two such singleton buckets exist - a real-count aggregation, not a
+# fabricated category (see the module's own real-data recon: without this,
+# the donut would show three separate 1-of-67 slivers). Returns () for an
+# empty signal_views (template shows an empty-state instead of a broken
+# chart).
+#
+# `dash_array`/`dash_offset` are precomputed SVG stroke geometry for a pure-
+# CSS/SVG donut (same "compute the geometry once, in Python, template only
+# loops over ready-made numbers" division of labour _trend_view() already
+# established for the install-trend chart - no chart library here either).
+_DONUT_RADIUS = 54
+_DONUT_CIRCUMFERENCE = round(2 * 3.14159265358979 * _DONUT_RADIUS, 2)
+_STAGE_OTHER_ROLE = "unknown"  # reuses the existing neutral/muted color token; never a fabricated new role color
+
+
+def _stage_distribution_view(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
+    total = len(signal_views)
+    if not total:
+        return []
+    role_counts = Counter(v.status_role for v in signal_views)
+
+    singleton_roles = {role for role, count in role_counts.items() if count == 1}
+    fold_singletons = len(singleton_roles) >= 2
+    other_count = sum(count for role, count in role_counts.items() if fold_singletons and role in singleton_roles)
+
+    buckets: list[tuple[str, str, int]] = []  # (label, role, count)
+    for role, count in role_counts.items():
+        if fold_singletons and role in singleton_roles:
+            continue
+        label = text("research_watch") if role == "identified" else _STATUS_ROLE_LABEL.get(role, role)
+        buckets.append((label, role, count))
+    if other_count:
+        buckets.append(("Övrigt", _STAGE_OTHER_ROLE, other_count))
+
+    buckets.sort(key=lambda item: -item[2])
+
+    segments = []
+    offset = 0.0
+    for label, role, count in buckets:
+        fraction = count / total
+        arc = round(fraction * _DONUT_CIRCUMFERENCE, 2)
+        segments.append(
+            SimpleNamespace(
+                label=label, role=role, count=count, pct=round(100 * fraction),
+                dash_array=f"{arc} {_DONUT_CIRCUMFERENCE}",
+                dash_offset=round(-offset, 2),
+            )
+        )
+        offset += arc
+    return segments
+
+
+# ("RWI - Juicy Design Mission #2 - V2.3/V2.4" missions) Geo recon (real,
+# live read against data/runway_safe.db, reproduced here as the single
+# source of truth for why this is COUNTRY-LEVEL, never airport-point,
+# geographic intelligence): 70 of 88 Airports carry governed latitude/
+# longitude - but every one of those 70 is a USA row, populated exclusively
+# by scripts/import_faa_csv.py (a US-only FAA dataset). Every non-US
+# Airport with real current activity (Brazil, New Zealand, South Korea -
+# the exact countries _market_summary_view's own real-data recon already
+# found) has NULL latitude/longitude - zero exceptions. Airport-point mode
+# would therefore render real dots for the USA only and silently omit
+# every other real market from a component whose entire purpose is showing
+# where RWI sees GLOBAL activity - the opposite of this mission's own
+# intent. Mission Section 6 itself authorizes exactly this fallback ("If
+# coordinates do NOT exist: country mode only. That is completely
+# acceptable").
+#
+# V2.4's own map-geometry recon: no world-map SVG/GeoJSON existed anywhere
+# in this repository. Rather than fall back to an abstract diagram
+# (V2.4's own explicit instruction), a real world landmass silhouette was
+# sourced from `world-atlas` (topojson/world-atlas, ISC license, built from
+# Natural Earth's own public-domain 1:110m land-boundary data) - see
+# app/static_export/geo/PROVENANCE.md for the exact fetch, license text,
+# and the (lossless, standard) TopoJSON-decode/equirectangular-projection/
+# antimeridian-split processing applied to produce
+# app/static_export/geo/world_land_110m.path.txt, read once at import time
+# below. This is a genuine, recognizable world map - never a pseudo-map,
+# never downloaded silently (documented, licensed, redistributable, per
+# Section 3's own requirement).
+#
+# Country markers still never claim per-airport precision (Section 4): each
+# real country in `market_summary` is placed at one small, hand-authored,
+# non-exhaustive REPRESENTATIVE country-centroid position
+# (_COUNTRY_MAP_POSITION - common-knowledge approximate geographic
+# centroids, not derived from or claiming to be any governed RWI Airport
+# coordinate) - the exact same "small, non-exhaustive, gracefully-omit-if-
+# missing" discipline _COUNTRY_FLAG already established. A real country not
+# in this dict simply gets no map pin (its real numbers still appear in the
+# legend, which is never gated on map placement).
+_MAP_VIEWBOX_WIDTH = 900
+_MAP_VIEWBOX_HEIGHT = 360
+_MAP_NODE_MIN_RADIUS = 7
+_MAP_NODE_MAX_RADIUS = 30
+_MAP_LAT_MAX = 83  # matches the exact projection used to produce world_land_110m.path.txt
+_MAP_PX_PER_DEG = _MAP_VIEWBOX_WIDTH / 360.0
+
+_WORLD_LAND_PATH = (Path(__file__).parent / "geo" / "world_land_110m.path.txt").read_text(encoding="utf-8")
+
+# Approximate geographic centroids (whole-degree lon/lat, common public
+# knowledge - e.g. the same rough country-center points widely published in
+# atlases/reference works), never a governed RWI coordinate and never
+# claiming per-airport precision. Same country set as _COUNTRY_FLAG above,
+# for the same "small, non-exhaustive, safe to be incomplete" reason.
+_COUNTRY_MAP_POSITION = {
+    "USA": (-98.5, 39.8), "United States": (-98.5, 39.8), "Brazil": (-51.9, -14.2),
+    "New Zealand": (172.8, -41.5), "South Korea": (127.8, 36.5), "Canada": (-106.3, 56.1),
+    "Mexico": (-102.5, 23.6), "United Kingdom": (-3.4, 55.4), "Sweden": (18.6, 60.1),
+    "Norway": (8.5, 60.5), "Finland": (25.7, 61.9), "Denmark": (9.5, 56.3),
+    "Germany": (10.5, 51.2), "France": (2.2, 46.2), "Japan": (138.3, 36.2),
+    "China": (104.2, 35.9), "Australia": (133.8, -25.3), "India": (78.9, 20.6),
+}
+
+
+def _project_lon_lat(lon: float, lat: float) -> "tuple[float, float]":
+    """The exact same equirectangular projection used to produce
+    world_land_110m.path.txt (see PROVENANCE.md) - so a country marker and
+    the land silhouette beneath it always share one coordinate system."""
+    x = (lon + 180) * _MAP_PX_PER_DEG
+    y = (_MAP_LAT_MAX - lat) * _MAP_PX_PER_DEG
+    return round(x, 1), round(y, 1)
+
+
+def _global_intelligence_view(market_summary: "list[SimpleNamespace]") -> "tuple[SimpleNamespace, ...]":
+    """Deterministic node geometry for the "Global intelligens" panel, built
+    entirely from `market_summary` (already-computed, already-real per-
+    country activity - _market_summary_view() itself, no second data
+    source, no new "activity" definition) plus the small, non-exhaustive
+    `_COUNTRY_MAP_POSITION` lookup above. Node radius is
+    sqrt(pct_of_total / max_pct)-scaled between a min/max pixel radius
+    (sqrt, not linear, so relative AREA - the visually perceived quantity
+    for a filled circle - stays proportional to the real share). The
+    min-radius floor is Section header 5/6's own "smaller markets remain
+    clearly visible" instruction - a real 1-Signal market is still drawn,
+    just small, never zero-sized/hidden. A real market whose country is not
+    in `_COUNTRY_MAP_POSITION` is simply omitted from the returned tuple -
+    its real numbers still render in the template's own legend list, which
+    is built from `market_summary` directly, never gated on map placement."""
+    nodes = []
+    if market_summary:
+        max_pct = max(m.pct_of_total for m in market_summary) or 1
+        for m in market_summary:
+            position = _COUNTRY_MAP_POSITION.get(m.country)
+            if position is None:
+                continue
+            x, y = _project_lon_lat(*position)
+            scale = math.sqrt(m.pct_of_total / max_pct)
+            radius = _MAP_NODE_MIN_RADIUS + scale * (_MAP_NODE_MAX_RADIUS - _MAP_NODE_MIN_RADIUS)
+            nodes.append(
+                SimpleNamespace(
+                    country=m.country, flag=m.flag, count=m.count, pct_of_total=m.pct_of_total,
+                    is_dominant=m.is_dominant, x=x, y=y, radius=round(radius, 1),
+                )
+            )
+    return tuple(nodes)
+
+
+# ("RWI - Juicy Design Mission #2 - V2.3" mission) "Viktiga utvecklingar" -
+# a small, deterministic, EXPLAINABLE selection, never an invented
+# "importance score" and never a claim of AI ranking (no such governed
+# mechanism exists in this repository). The rule: real public Signals
+# currently in the most advanced/committed real pipeline stages - under
+# construction, in procurement, or funded - using the exact same
+# status_role vocabulary .hero-status/.pill.status already color-code
+# sitewide (never a new taxonomy). This is deliberately NOT the same
+# selection as Signalöversikt's own top_signals (score-ranked, unfiltered
+# by stage) - some overlap between the two lists is expected and honest
+# (a real construction-stage Signal legitimately belongs in both a
+# "highest-scored" list and a "most advanced-stage" list), not a bug to
+# engineer away. Ties within a stage are broken by the same
+# _signal_sort_key() every other ranked list on this page already uses -
+# no new ordering rule invented. Returns () when no Signal currently
+# occupies one of these stages (an honest, real possibility - the template
+# shows an empty-state, never a fabricated placeholder).
+_COMMITTED_PIPELINE_ROLES = frozenset({"construction", "procurement", "funded"})
+
+
+def _important_developments_view(
+    signal_views: "list[SimpleNamespace]", *, limit: int = 5
+) -> "tuple[SimpleNamespace, ...]":
+    committed = [s for s in signal_views if s.status_role in _COMMITTED_PIPELINE_ROLES]
+    return tuple(sorted(committed, key=_signal_sort_key)[:limit])
 
 
 def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleNamespace:
@@ -941,6 +1181,11 @@ def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleN
         city=airport.city,
         state_region=airport.state_region,
         country=airport.country,
+        # ("RWI - Juicy Design Mission #2" mission) Purely decorative -
+        # reuses the exact same _COUNTRY_FLAG mapping the Overview market
+        # summary already uses; None (no flag rendered) for any country not
+        # in that small, non-exhaustive dict, never a wrong/placeholder flag.
+        country_flag=_COUNTRY_FLAG.get(airport.country),
         latitude=airport.latitude,
         longitude=airport.longitude,
         website_url=airport.website_url,
@@ -1065,6 +1310,12 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
         template = env.get_template(name)
         path.write_text(template.render(generated_at=generated_at, **context), encoding="utf-8")
 
+    # ("RWI - Juicy Design Mission #2 - V2.3" mission) Computed once, fed to
+    # BOTH Marknadsläge and the new Global intelligens map - one single
+    # definition of "activity" for the whole Overview, never two different
+    # country-count computations that could silently drift apart.
+    market_summary = _market_summary_view(signal_views)
+
     render(
         "index.html",
         output_dir / "index.html",
@@ -1082,8 +1333,29 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
         # itself is kept (used by the trend caption and available in
         # data.json) - only the hero bar's own stat selection changed.
         active_opportunity_count=sum(1 for s in signal_views if s.lifecycle_state == "active_opportunity"),
+        # ("RWI - Juicy Design Mission #2" mission) Real count of Signals
+        # currently in an explicit, committed pipeline status - the exact
+        # same status vocabulary app.static_export.signal_lifecycle's own
+        # _ACTIVE_TRACK_STATUSES already treats as "real, recent evidence of
+        # intent" (that module-private constant is not imported here to
+        # avoid a cross-module coupling on a private name; the six literal
+        # values are the entire real vocabulary and have not changed since
+        # SLT1 shipped). Never inferred from lifecycle_state (a different,
+        # broader read that also includes e.g. future-dated identified rows).
+        in_progress_count=sum(
+            1 for s in signal_views
+            if s.status in {"design", "procurement", "under construction", "cip", "alp", "funded"}
+        ),
         top_signals=signal_views[:5],
-        market_summary=_market_summary_view(signal_views),
+        market_summary=market_summary,
+        stage_distribution=_stage_distribution_view(signal_views),
+        donut_circumference=_DONUT_CIRCUMFERENCE,
+        donut_radius=_DONUT_RADIUS,
+        global_intelligence=_global_intelligence_view(market_summary),
+        map_viewbox_width=_MAP_VIEWBOX_WIDTH,
+        map_viewbox_height=_MAP_VIEWBOX_HEIGHT,
+        world_land_path=_WORLD_LAND_PATH,
+        important_developments=_important_developments_view(signal_views),
         trend=_trend_view([i for a in airport_views for i in a.installations], signal_views),
         recent_changes=_recent_changes_view(airport_views, signal_views),
         changelog_start_date=_CHANGELOG_START_DATE.isoformat(),

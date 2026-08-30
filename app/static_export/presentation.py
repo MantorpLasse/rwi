@@ -25,6 +25,23 @@ LOCALES = {
         "evidence_eyebrow": "Granskade sakuppgifter med originalutdrag, kopplade till källan nedan",
         "original_excerpt": "Originalutdrag",
         "score_tooltip": "Bedömning av underlagets styrka och tillförlitlighet – inte sannolikheten att en viss leverantör vinner projektet.",
+        # ("RWI - Juicy Design Mission #2" mission)
+        "hero_headline_1": "Global intelligens.",
+        "hero_headline_2": "Tidigare insikt.",
+        "hero_headline_3": "Bansäkerhet börjar här.",
+        "market_pulse": "Marknadsläge",
+        "stage_distribution": "Projekt per stadium",
+        "signals_snapshot": "Signalöversikt",
+        # ("RWI - Juicy Design Mission #2 - V2.3" mission)
+        "global_intelligence": "Global intelligens",
+        "global_intelligence_eyebrow": "Var RWI ser verklig aktivitet just nu – landbaserad, inte en exakt karta",
+        # ("RWI - Juicy Design Mission #2 - V2.4" mission) Shortened from
+        # "Viktiga utvecklingar" - the longer heading wrapped onto two
+        # lines at desktop width next to the new map card. Same
+        # deterministic selection/real data underneath, heading text only.
+        "important_developments": "Utveckling",
+        "important_developments_eyebrow": "Projekt i mest avancerat skede just nu – byggnation, upphandling eller finansiering",
+        "important_developments_empty": "Inga signaler befinner sig i byggnation, upphandling eller finansiering just nu.",
     },
     "en": {
         "nav_overview": "Overview", "nav_signals": "Signals", "nav_airports": "Airports",
@@ -44,6 +61,17 @@ LOCALES = {
         "evidence_eyebrow": "Governed findings with original excerpts, linked to the source below",
         "original_excerpt": "Original excerpt",
         "score_tooltip": "An assessment of how strong and reliable the evidence is - not the probability that a specific supplier wins the project.",
+        "hero_headline_1": "Global intelligence.",
+        "hero_headline_2": "Earlier insight.",
+        "hero_headline_3": "Runway safety starts here.",
+        "market_pulse": "Market pulse",
+        "stage_distribution": "Projects by stage",
+        "signals_snapshot": "Signals snapshot",
+        "global_intelligence": "Global intelligence",
+        "global_intelligence_eyebrow": "Where RWI sees real activity right now - country-based, not a precise map",
+        "important_developments": "Developments",
+        "important_developments_eyebrow": "Projects in the most advanced stage right now - construction, procurement or funding",
+        "important_developments_empty": "No signals are currently in construction, procurement or funding.",
     },
 }
 
