@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.database import SessionLocal
 from app.models import Airport, Installation, PhysicalInstallationIdentity, Runway, RunwayEnd, Signal, SourceAssertion
+from app.services.airport_alias import get_admitted_airport_aliases
+from app.services.evidence_claim_semantics import Claim
+from app.services.manual_claim_evidence import get_manual_claims_for_source_assertion
+from app.services.manual_identity_evidence import normalize_for_containment_check
 from app.services.runway_identity import AmbiguousRunwayDesignationError, normalize_end
 from app.static_export.presentation import lifecycle_view, public_signal_state, status_view, text
 from app.static_export.signal_lifecycle import SignalLifecycleState, derive_signal_lifecycle
@@ -57,6 +61,30 @@ _CATEGORY = {
     "maintenance": ("Underhåll", "study"),
     "replacement_watch": ("Ersättning – bevakas", "replace"),
     "unknown": ("Ej klassificerad", "study"),
+}
+
+# app.services.evidence_claim_semantics.ClaimCategory.value -> public-facing
+# label ("RWI - Sacheon Evidence Surfacing - View-Model Slice" mission).
+# The single place this mapping lives, per DESIGN_BRIEF.md's "Bygg denna
+# mappning på ett ställe" - never a raw ClaimCategory value in a template.
+# Generic over every existing member, never keyed on a specific claim's own
+# content.
+_CLAIM_CATEGORY_LABEL = {
+    "explicit_document_fact": "Bekräftat sakförhållande",
+    "procedural_request": "Begäran/förfarande",
+    "temporal_statement": "Tidsuppgift",
+    "relationship": "Ansvarig part",
+}
+
+# app.services.evidence_claim_semantics.TemporalQualifier.value -> public-
+# facing label - same single-mapping discipline as _CLAIM_CATEGORY_LABEL.
+_TEMPORAL_QUALIFIER_LABEL = {
+    "historical_fact": "Historiskt förhållande",
+    "current_state_as_of_document_date": "Aktuellt läge vid källans datum",
+    "planned_future_action": "Planerad/kommande åtgärd",
+    "requested_pending_approval": "Begärd, väntar godkännande",
+    "completed": "Genomförd",
+    "unknown": "Okänt tidsläge",
 }
 
 # Source.source_type -> (display label, /ordlista.html anchor, one-sentence
@@ -239,6 +267,83 @@ def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
         source_url=source.url if source else None,
         source_published_date=source.published_date if source else None,
     )
+
+
+# ("RWI - Sacheon Evidence Surfacing - View-Model Slice" mission) Public-safe
+# projection of one governed Claim (app.services.evidence_claim_semantics,
+# produced generically by any extractor - MAC Granicus, USAspending, or
+# ManualClaimEvidence - never a Sacheon/Korean-specific shape). Exposes only
+# what the mission's own public/internal boundary allows: category label,
+# the claim's own already-public-safe `statement` (a normalized restatement,
+# never raw governance text), the literal preserved `raw_text_excerpt` in
+# its ORIGINAL language/script exactly as governed (never translated,
+# summarized, or altered - see Claim.provenance's own docstring), and
+# optional temporal/relationship context. Deliberately excludes:
+# provenance.artifact_identity/source_locator/fragment_hash (internal
+# identity plumbing, not meaningful to a visitor - the Signal's own
+# source_url/source_title already carry the public-facing provenance),
+# `financial` (Signal already has its own dedicated, USD-only financial
+# fields/card - this slice does not duplicate or extend financial
+# semantics), and `relationship.role`/`.scope` (free-text governance
+# classification vocabulary, not intended for direct public display -
+# `claim.statement` already restates the relationship in plain language).
+def _claim_view(claim: Claim) -> SimpleNamespace:
+    temporal_label = None
+    temporal_detail = None
+    if claim.temporal is not None:
+        temporal_label = _TEMPORAL_QUALIFIER_LABEL.get(claim.temporal.qualifier.value, claim.temporal.qualifier.value)
+        temporal_detail = claim.temporal.detail
+    return SimpleNamespace(
+        category_label=_CLAIM_CATEGORY_LABEL.get(claim.category.value, claim.category.value),
+        statement=claim.statement,
+        excerpt=claim.provenance.raw_text_excerpt,
+        temporal_label=temporal_label,
+        temporal_detail=temporal_detail,
+        relationship_party=claim.relationship.party if claim.relationship is not None else None,
+    )
+
+
+# Read-only, per-Signal evidence projection - reuses the existing governed
+# read service (app.services.manual_claim_evidence.get_manual_claims_for_source_assertion)
+# verbatim, never a second, parallel claims-reading implementation. Walks
+# Signal.supporting_source_assertions (the existing governed Signal<-
+# SourceAssertion link, Slice 9C - never a new relationship). Fails safely
+# by construction: a Signal with no supporting SourceAssertion iterates zero
+# times and returns an empty tuple; a SourceAssertion with no
+# ManualClaimEvidence, or whose effective identity is not currently
+# ATTACH_CONFIRMED, is skipped because the read service itself returns None
+# for both cases (see that function's own docstring) - this projection adds
+# no eligibility logic of its own. Deliberately NOT attached to
+# _signal_view()'s own returned object - see _build()'s own "DATA.JSON"
+# note for why evidence is threaded as a separate, signal_detail.html-only
+# template context variable instead.
+def _evidence_view(signal: Signal, *, session: Session) -> "tuple[SimpleNamespace, ...]":
+    claims: "list[Claim]" = []
+    for source_assertion in signal.supporting_source_assertions:
+        found = get_manual_claims_for_source_assertion(session, source_assertion.id)
+        if found:
+            claims.extend(found)
+    return tuple(_claim_view(c) for c in claims)
+
+
+# Read-only public projection of an Airport's currently-ADMITTED aliases
+# (app.services.airport_alias.get_admitted_airport_aliases(), reused
+# verbatim - never a second alias-reading implementation, never a raw query
+# against airport_aliases). REJECTED/RETIRED/superseded rows are already
+# excluded by that function's own "current by recency" derivation - this
+# projection adds no filtering of its own beyond suppressing a duplicate of
+# the canonical name (mission's own explicit instruction), using the exact
+# same normalize_for_containment_check() the alias-admission service itself
+# uses for alias-key comparison (no second normalization implementation).
+# The AirportAlias model carries no local-language/alternate-name TYPE
+# distinction (language/script are audit-only, never read by any matching
+# or presentation code) - so this renders as one plain, undifferentiated
+# alternate/local-name list, exactly as the mission's own fallback
+# instruction requires; no distinction is invented here.
+def _alias_view(airport: Airport, *, session: Session) -> "tuple[str, ...]":
+    aliases = get_admitted_airport_aliases(session, airport.id)
+    canonical_key = normalize_for_containment_check(airport.name or "")
+    return tuple(sorted(a for a in aliases if normalize_for_containment_check(a) != canonical_key))
 
 
 _RUNWAY_TRACKED_INSTALLATION_TYPES = ("EMASMAX", "greenEMAS")
@@ -775,7 +880,7 @@ def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNa
     ]
 
 
-def _airport_view(airport: Airport, *, today: date) -> SimpleNamespace:
+def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleNamespace:
     signal_views = sorted(
         (_signal_view(s, today=today) for s in airport.signals if _is_public_signal(s)),
         key=_signal_sort_key,
@@ -806,6 +911,13 @@ def _airport_view(airport: Airport, *, today: date) -> SimpleNamespace:
         latitude=airport.latitude,
         longitude=airport.longitude,
         website_url=airport.website_url,
+        # Governed, currently-ADMITTED alternate/local names
+        # (app.services.airport_alias) - see _alias_view()'s own docstring
+        # for why this is one plain, undifferentiated list rather than a
+        # local-name/alternate-name distinction the underlying model does
+        # not represent. Empty tuple (never None) when the airport has no
+        # admitted alias, or the alias table has never been migrated.
+        local_names=_alias_view(airport, session=session),
         signal_count=len(signal_views),
         # Governed canonical runway inventory (docs/domain/canonical-runway-
         # runway-end-design.md) - complete for all 76 U.S. airports as of
@@ -888,17 +1000,33 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
             selectinload(Airport.source_assertions).selectinload(SourceAssertion.source),
         ).order_by(Airport.name)
     ).all()
-    airport_views = [_airport_view(a, today=today) for a in airports]
+    airport_views = [_airport_view(a, today=today, session=session) for a in airports]
 
     all_signals = session.scalars(
         select(Signal).options(
             selectinload(Signal.airport),
             selectinload(Signal.runway),
             selectinload(Signal.source),
+            # ("RWI - Sacheon Evidence Surfacing" mission) Bounded by the
+            # number of governed (Slice 9C) SourceAssertions linking to a
+            # Signal, not by total Signal count - see _evidence_view()'s
+            # own docstring. Every pre-existing (legacy) Signal has zero
+            # supporting_source_assertions, so this eager-load costs one
+            # extra empty-result query batch, never a per-row explosion.
+            selectinload(Signal.supporting_source_assertions),
         )
     ).all()
-    signal_views = [_signal_view(s, today=today) for s in all_signals if _is_public_signal(s)]
-    signal_views.sort(key=_signal_sort_key)
+    public_signals = [s for s in all_signals if _is_public_signal(s)]
+    # Paired (ORM signal, public view) list, sorted together, so the
+    # signal_detail.html render loop below can still reach the ORM
+    # object's own supporting_source_assertions for evidence - never by
+    # re-querying, never by attaching evidence onto the shared view object
+    # itself (see the render loop's own "DATA.JSON" note for why).
+    signal_pairs = sorted(
+        ((s, _signal_view(s, today=today)) for s in public_signals),
+        key=lambda pair: _signal_sort_key(pair[1]),
+    )
+    signal_views = [view for _source_signal, view in signal_pairs]
 
     def render(name: str, path: Path, **context) -> None:
         template = env.get_template(name)
@@ -960,12 +1088,21 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
         # requirement) - never invented, never hardcoded.
         lifecycle_counts=_lifecycle_counts_view(signal_views),
     )
-    for signal in signal_views:
+    # ("RWI - Sacheon Evidence Surfacing" mission) DATA.JSON: `evidence` is
+    # deliberately passed as a SEPARATE template context variable here,
+    # never attached to the shared `signal` view object itself - the exact
+    # same discipline this module's own _signal_view() already documents
+    # for `notes`/`manual_year_estimate` ("anything added to it is
+    # published"). `signal_views/data.json` below are therefore completely
+    # unaffected by this slice: no literal claim excerpt, however small,
+    # is duplicated into the global search/data payload.
+    for source_signal, signal in signal_pairs:
         render(
             "signal_detail.html",
             output_dir / "signals" / f"{signal.id}.html",
             root="..",
             signal=signal,
+            evidence=_evidence_view(source_signal, session=session),
         )
 
     data = {

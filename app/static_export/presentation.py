@@ -20,6 +20,11 @@ LOCALES = {
         "view_all_updates": "Visa alla uppdateringar",
         "current_status_unverified": "Aktuell EMAS-status ej verifierad",
         "current_status_unverified_detail": "Historiska källor visar tidigare EMAS-installation. Aktuell fysisk status granskas.",
+        # ("RWI - Sacheon Evidence Surfacing - View-Model Slice" mission)
+        "evidence": "Underlag",
+        "evidence_eyebrow": "Granskade sakuppgifter med originalutdrag, kopplade till källan nedan",
+        "original_excerpt": "Originalutdrag",
+        "score_tooltip": "Bedömning av underlagets styrka och tillförlitlighet – inte sannolikheten att en viss leverantör vinner projektet.",
     },
     "en": {
         "nav_overview": "Overview", "nav_signals": "Signals", "nav_airports": "Airports",
@@ -35,6 +40,10 @@ LOCALES = {
         "view_all_updates": "View all updates",
         "current_status_unverified": "Current EMAS status not verified",
         "current_status_unverified_detail": "Historical sources show an earlier EMAS installation. Current physical status is under review.",
+        "evidence": "Evidence",
+        "evidence_eyebrow": "Governed findings with original excerpts, linked to the source below",
+        "original_excerpt": "Original excerpt",
+        "score_tooltip": "An assessment of how strong and reliable the evidence is - not the probability that a specific supplier wins the project.",
     },
 }
 

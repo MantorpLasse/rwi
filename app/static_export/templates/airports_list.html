@@ -16,7 +16,7 @@
     </thead>
     <tbody>
       {% for airport in airports %}
-      <tr data-search="{{ (airport.name ~ ' ' ~ (airport.iata_code or '') ~ ' ' ~ (airport.icao_code or '') ~ ' ' ~ airport.country)|lower }}">
+      <tr data-search="{{ (airport.name ~ ' ' ~ (airport.iata_code or '') ~ ' ' ~ (airport.icao_code or '') ~ ' ' ~ airport.country ~ ' ' ~ airport.local_names|join(' '))|lower }}">
         <td data-label="Kod"><a href="{{ root }}/airports/{{ airport.id }}.html">{{ sign(airport.iata_code or airport.icao_code or "–", airport.name) }}</a></td>
         <td class="title" data-label="Namn"><a href="{{ root }}/airports/{{ airport.id }}.html">{{ airport.name }}</a></td>
         <td data-label="Land">{{ airport.country }}</td>

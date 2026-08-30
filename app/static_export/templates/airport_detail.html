@@ -5,6 +5,7 @@
 <div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a></div>
 <h1><span style="margin-right:10px; display:inline-block">{{ sign(airport.iata_code or airport.icao_code or airport.faa_code or "–", airport.name) }}</span>{{ airport.name }}</h1>
 <p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
+{% if airport.local_names %}<p class="subtitle" style="margin-top:-8px; color:var(--text-dim)">{{ airport.local_names|join(" · ") }}</p>{% endif %}
 
 {# grid-2's second column only ever holds the (rare) website link, so the
    two-column layout is only used when there's actually something to put

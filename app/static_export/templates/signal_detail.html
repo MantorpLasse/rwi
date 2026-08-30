@@ -20,7 +20,7 @@
     {% endif %}
   </div>
   {% if signal.probability_score is not none %}
-  <span class="score score-secondary" title="Analytisk score">{{ "%.1f"|format(signal.probability_score) }}</span>
+  <span class="score score-secondary" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</span>
   {% endif %}
 </div>
 
@@ -42,6 +42,31 @@
         </dl>
       </div>
     </div>
+
+    {% if evidence %}
+    <div class="card annotation">
+      <div class="card-header">
+        {{ t("evidence") }}
+        <span class="eyebrow">{{ t("evidence_eyebrow") }}</span>
+      </div>
+      <div class="card-body" style="display:flex; flex-direction:column; gap:16px">
+        {% for claim in evidence %}
+        <div{% if not loop.last %} style="padding-bottom:16px; border-bottom:1px solid var(--border)"{% endif %}>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+            <span class="pill status">{{ claim.category_label }}</span>
+            {% if claim.temporal_label %}<span class="timeline-meta">{{ claim.temporal_label }}{% if claim.temporal_detail %} · {{ claim.temporal_detail }}{% endif %}</span>{% endif %}
+          </div>
+          <p style="margin:8px 0 4px">{{ claim.statement }}</p>
+          {% if claim.relationship_party %}<p class="timeline-meta" style="margin:0 0 4px">{{ claim.relationship_party }}</p>{% endif %}
+          <details class="annotation source-detail">
+            <summary>{{ t("original_excerpt") }}</summary>
+            <div class="card-body"><p style="white-space:pre-line; margin:0">{{ claim.excerpt }}</p></div>
+          </details>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
 
     <div class="card">
       <div class="card-header">Källa</div>
