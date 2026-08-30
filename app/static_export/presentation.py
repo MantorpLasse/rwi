@@ -42,6 +42,12 @@ LOCALES = {
         "important_developments": "Utveckling",
         "important_developments_eyebrow": "Projekt i mest avancerat skede just nu – byggnation, upphandling eller finansiering",
         "important_developments_empty": "Inga signaler befinner sig i byggnation, upphandling eller finansiering just nu.",
+        # ("RWI - Juicy Design Mission #3" mission)
+        "project_intelligence": "Projektintelligens",
+        "project_intelligence_eyebrow": "Var i processen projektet befinner sig, baserat på källans egen statusuppgift",
+        "location_intelligence": "Plats",
+        "location_no_coordinates": "Inga verifierade koordinater registrerade för denna flygplats ännu.",
+        "why_watching": "Varför RWI bevakar detta",
     },
     "en": {
         "nav_overview": "Overview", "nav_signals": "Signals", "nav_airports": "Airports",
@@ -72,6 +78,11 @@ LOCALES = {
         "important_developments": "Developments",
         "important_developments_eyebrow": "Projects in the most advanced stage right now - construction, procurement or funding",
         "important_developments_empty": "No signals are currently in construction, procurement or funding.",
+        "project_intelligence": "Project intelligence",
+        "project_intelligence_eyebrow": "Where the project stands in the process, based on the source's own status",
+        "location_intelligence": "Location",
+        "location_no_coordinates": "No verified coordinates are recorded for this airport yet.",
+        "why_watching": "Why RWI is watching this",
     },
 }
 

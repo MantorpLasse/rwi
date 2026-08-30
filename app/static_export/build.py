@@ -1143,6 +1143,107 @@ def _important_developments_view(
     return tuple(sorted(committed, key=_signal_sort_key)[:limit])
 
 
+# ("RWI - Juicy Design Mission #3" mission) Public information model /
+# semantic recon findings, reproduced here as the single source of truth:
+#
+#   STATUS (Signal.status, persisted)      -> PRIMARY PROJECT PHASE
+#     Already public-safe as `status_label` (public_signal_state() already
+#     qualifies "identified" -> the research-watch copy) - the ONE
+#     dominant badge in the airport-header (Mission #1/#2), unchanged here.
+#
+#   CATEGORY (Signal.category, persisted)  -> PROJECT TYPE
+#     Already public-safe as `category_label` - a plain quick-fact,
+#     unchanged here.
+#
+#   CONFIDENCE (Signal.confidence, persisted) -> EVIDENCE STRENGTH
+#     Already public-safe as the confidence gauge - unchanged here.
+#
+#   LIFECYCLE (derived, SLT1, non-persisted) -> opportunity/temporal
+#     relevance. NOT a fourth phase - it is frequently near-tautological
+#     with status for a committed-pipeline Signal (signal_lifecycle.py's
+#     own rule 5: a committed status like "under construction" already
+#     implies ACTIVE_OPPORTUNITY unless its year is stale) - its real
+#     value is distinguishing STALE from WATCH for less-advanced/older
+#     evidence, not competing with the dominant phase badge for an
+#     already-active one. Demoted from a colored quick-fact pill (Mission
+#     #1/#2) to prose-only context inside "Varför RWI bevakar detta"
+#     (airport_detail.html) - still fully visible, never hidden, just no
+#     longer presented as if it were a second status dimension.
+#
+# No domain change was required for any of this - every one of these
+# fields already existed, persisted, on Signal; only the VIEW/TEMPLATE
+# layer changes in this mission. See docs/architecture (final report) for
+# the full semantic matrix this recon produced.
+
+
+# Six canonical, deterministic phase-progression stages, built entirely
+# from the already-real STATUS_PRESENTATION `role` vocabulary (never a new
+# domain value) - a presentation-only grouping of Signal.status's 9 real
+# roles into the mission's own requested 6-step sequence (Identifierad ->
+# Planering -> Finansierad -> Upphandling -> Under byggnation ->
+# Färdigställd). "design"/"review" are grouped into "Planering" for this
+# progression specifically (a deliberate simplification so the bar stays
+# readable in seconds - they still keep their own distinct labels/colors
+# everywhere else on the site, e.g. the Overview stage donut). "unknown"
+# has no honest place on a phase sequence and is never forced onto one -
+# see _project_phase_view()'s own None return for that case.
+_PROJECT_PHASE_STAGE_ORDER = ("identified", "planning", "funded", "procurement", "construction", "completed")
+_PROJECT_PHASE_STAGE_LABEL = {
+    "identified": "Identifierad", "planning": "Planering", "funded": "Finansierad",
+    "procurement": "Upphandling", "construction": "Under byggnation", "completed": "Färdigställd",
+}
+_STATUS_ROLE_TO_PHASE_STAGE = {
+    "identified": "identified", "planning": "planning", "design": "planning", "review": "planning",
+    "funded": "funded", "procurement": "procurement", "construction": "construction", "completed": "completed",
+}
+
+
+def _project_phase_view(status_role: "str | None") -> "tuple[SimpleNamespace, ...] | None":
+    """Deterministic 6-step phase-progression strip for the primary Signal's
+    real `status_role`. Returns None when the role has no honest place on
+    the sequence (status_role == "unknown", e.g. a NULL/unrecognized raw
+    status) - the template shows no progression at all in that case,
+    rather than guessing a stage. Each returned stage carries `state`:
+    "past" (already behind the current real stage), "current" (the real
+    stage), or "future" (not yet reached) - purely for styling; the
+    underlying order (_PROJECT_PHASE_STAGE_ORDER) is fixed and identical
+    for every Signal."""
+    stage_key = _STATUS_ROLE_TO_PHASE_STAGE.get(status_role or "")
+    if stage_key is None:
+        return None
+    current_index = _PROJECT_PHASE_STAGE_ORDER.index(stage_key)
+    return tuple(
+        SimpleNamespace(
+            key=key,
+            label=_PROJECT_PHASE_STAGE_LABEL[key],
+            state=("current" if i == current_index else "past" if i < current_index else "future"),
+        )
+        for i, key in enumerate(_PROJECT_PHASE_STAGE_ORDER)
+    )
+
+
+# ("RWI - Juicy Design Mission #3" mission) Airport Detail "location
+# intelligence" - reuses Mission #2's own real world-map asset/projection
+# verbatim (_WORLD_LAND_PATH, _project_lon_lat) rather than a second map
+# implementation. Only ever plots a marker from the Airport's OWN real,
+# governed latitude/longitude (scripts/import_faa_csv.py, US-only FAA
+# data - see Mission #2's own geo-recon) - never a country-level
+# approximation (unlike the Overview map's _COUNTRY_MAP_POSITION, which is
+# explicitly a representative-country marker, a different, coarser
+# concept). An airport with no persisted coordinates (every non-US
+# airport today, e.g. Sacheon) gets no marker and no map at all - an
+# honest text-only fallback, never a fake/approximate pin.
+def _airport_location_view(airport: Airport) -> "SimpleNamespace | None":
+    if airport.latitude is None or airport.longitude is None:
+        return None
+    x, y = _project_lon_lat(airport.longitude, airport.latitude)
+    return SimpleNamespace(
+        latitude=round(airport.latitude, 4),
+        longitude=round(airport.longitude, 4),
+        x=x, y=y,
+    )
+
+
 def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleNamespace:
     signal_views = sorted(
         (_signal_view(s, today=today) for s in airport.signals if _is_public_signal(s)),
@@ -1175,6 +1276,16 @@ def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleN
         # an already-computed list's own top element. None when the airport
         # has no non-funding public signal at all.
         primary_signal=(primary_signals[0] if primary_signals else None),
+        # ("RWI - Juicy Design Mission #3" mission) Deterministic 6-step
+        # phase-progression strip for the primary Signal's real
+        # status_role - None when there is no primary_signal, or its role
+        # has no honest place on the sequence. See _project_phase_view()'s
+        # own docstring.
+        project_phase=(_project_phase_view(primary_signals[0].status_role) if primary_signals else None),
+        # Real-coordinate-only location marker (see _airport_location_view()'s
+        # own docstring) - None whenever this Airport has no persisted
+        # latitude/longitude (every non-US airport today).
+        location=_airport_location_view(airport),
         name=airport.name,
         iata_code=airport.iata_code,
         icao_code=airport.icao_code,
@@ -1385,6 +1496,13 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
             output_dir / "airports" / f"{airport.id}.html",
             root="..",
             airport=airport,
+            # ("RWI - Juicy Design Mission #3" mission) The exact same
+            # real, licensed world-map asset the Overview's Global
+            # intelligens already uses (Mission #2) - reused verbatim for
+            # the airport-level location panel, never a second map asset.
+            map_viewbox_width=_MAP_VIEWBOX_WIDTH,
+            map_viewbox_height=_MAP_VIEWBOX_HEIGHT,
+            world_land_path=_WORLD_LAND_PATH,
         )
 
     render(

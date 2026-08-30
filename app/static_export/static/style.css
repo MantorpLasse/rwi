@@ -1538,3 +1538,48 @@ nav.site a[href$="index.html"]:first-child { color: var(--text); }
   .map-legend { gap: 8px 16px; }
   .important-dev-title { white-space: normal; }
 }
+
+/* ---------------------------------------------------------------------
+   "RWI - Juicy Design Mission #3" mission: Airport Detail "project
+   intelligence" phase-progression strip + "Plats" location panel. */
+
+/* Phase-progression strip - one connected row of 6 dots/labels, built
+   entirely from build.py's own deterministic _project_phase_view()
+   (real status_role only, never invented). Past/current segments read as
+   a "traversed" gold path; future segments stay dim - the visual answer
+   to "where in the process is this," distinct from (and never competing
+   with) the header's own single dominant phase badge. */
+.phase-strip-scroll { overflow-x: auto; }
+.phase-strip { display: flex; align-items: flex-start; min-width: 480px; padding: 6px 0 2px; }
+.phase-step { flex: 1; position: relative; display: flex; flex-direction: column; align-items: center; gap: 9px; text-align: center; }
+.phase-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 100%;
+  height: 2px;
+  background: rgba(139,150,172,.25);
+  z-index: 0;
+}
+.phase-step-past:not(:last-child)::after,
+.phase-step-current:not(:last-child)::after { background: rgba(242,183,5,.55); }
+.phase-dot { width: 13px; height: 13px; border-radius: 50%; background: var(--panel2); border: 2px solid rgba(139,150,172,.35); position: relative; z-index: 1; }
+.phase-step-past .phase-dot { background: var(--accent); border-color: var(--accent); opacity: .55; }
+.phase-step-current .phase-dot { width: 17px; height: 17px; background: var(--accent); border-color: #fff; box-shadow: 0 0 0 5px rgba(242,183,5,.22); }
+.phase-label { font-size: .76rem; color: var(--text-dim); white-space: nowrap; }
+.phase-step-current .phase-label { color: var(--text); font-weight: 600; }
+.phase-step-future .phase-label { color: var(--text-faint); }
+
+/* "Plats" - the exact same .global-map/.map-land styling Overview's
+   Global intelligens already established (Mission #2), sized more
+   compactly here since this is a secondary supporting panel, not the
+   page's own primary visual centerpiece. */
+.location-body { display: flex; flex-direction: column; gap: 10px; }
+.location-map { max-height: 220px; }
+.location-coords { color: var(--text-dim); font-size: .82rem; text-align: right; margin: 0; }
+
+@media (max-width: 480px) {
+  .phase-strip { min-width: 420px; }
+  .location-map { max-height: 170px; }
+}

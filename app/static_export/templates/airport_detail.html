@@ -20,24 +20,25 @@
   {% endif %}
 </div>
 
-{# ("RWI - Juicy Design Mission #2 - Visual Correction Pass") A lightweight
-   quick-facts strip now sits directly under the header, not boxed inside a
-   card - V2's own "quick-fact strip integrated into header area". Fields
-   unchanged from the initial pass: category/lifecycle/confidence/year as
-   equal-weight plain metadata, never competing with the header's one
-   dominant status badge. #}
+{# ("RWI - Juicy Design Mission #2 - Visual Correction Pass", narrowed by
+   "Mission #3") A lightweight quick-facts strip sits directly under the
+   header, not boxed inside a card. Now exactly THREE public dimensions
+   (Mission #3's own semantic recon - see build.py's own "public
+   information model" docstring): project TYPE, EVIDENCE strength, and
+   YEAR - all plain, equal-weight metadata, never competing with the
+   header's one dominant PHASE badge above.
+   "Läge" (the lifecycle pill) is deliberately no longer shown here - it
+   was a second, frequently near-tautological status-shaped badge sitting
+   next to the real phase/type/evidence facts. Its real content is fully
+   preserved, just repositioned as prose in "Varför RWI bevakar detta"
+   below (same real lifecycle_tooltip text, unchanged) - visible, never
+   hidden, just no longer presented as if it were a competing status. #}
 {% if airport.primary_signal %}
 <div class="quick-facts">
   <div class="quick-fact">
     <div class="quick-fact-label">{{ t("project_type") }}</div>
     <div class="quick-fact-value">{{ cat(airport.primary_signal.category_label, airport.primary_signal.category_class) }}</div>
   </div>
-  {% if airport.primary_signal.lifecycle_label %}
-  <div class="quick-fact">
-    <div class="quick-fact-label">Läge</div>
-    <div class="quick-fact-value"><span class="lifecycle {{ airport.primary_signal.lifecycle_class }}" title="{{ airport.primary_signal.lifecycle_tooltip }}">{{ airport.primary_signal.lifecycle_label }}</span></div>
-  </div>
-  {% endif %}
   <div class="quick-fact">
     <div class="quick-fact-label">Styrka i underlaget</div>
     <div class="quick-fact-value">{{ gauge(airport.primary_signal.confidence_level, airport.primary_signal.confidence_label, root) }}</div>
@@ -49,6 +50,31 @@
   </div>
   {% endif %}
 </div>
+{% endif %}
+
+{# ("RWI - Juicy Design Mission #3" mission) "Project intelligence" -
+   a compact, deterministic 6-step phase-progression strip built entirely
+   from the primary Signal's own real status_role (build.py's
+   _project_phase_view() - see its own docstring for the exact, documented
+   role-to-stage grouping). Absent entirely when there is no primary
+   Signal, or its status_role has no honest place on the sequence
+   ("unknown") - never a guessed stage. #}
+{% if airport.project_phase %}
+<section class="card panel-strong">
+  <div class="card-header">{{ t("project_intelligence") }}<span class="card-action" style="color:var(--text-faint); font-weight:400">{{ t("project_intelligence_eyebrow") }}</span></div>
+  <div class="card-body">
+    <div class="phase-strip-scroll">
+      <div class="phase-strip">
+        {% for stage in airport.project_phase %}
+        <div class="phase-step phase-step-{{ stage.state }}">
+          <span class="phase-dot"></span>
+          <span class="phase-label">{{ stage.label }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</section>
 {% endif %}
 
 {# Real 3-column body row (Projektsammanfattning / Banor / EMAS idag)
@@ -70,7 +96,7 @@
       <h2 class="project-summary-title"><a href="{{ root }}/signals/{{ airport.primary_signal.id }}.html">{{ airport.primary_signal.title }}</a></h2>
       {% if airport.primary_signal.public_qualification %}<p class="timeline-meta">{{ airport.primary_signal.public_qualification }}</p>{% endif %}
       {% if airport.primary_signal.lifecycle_tooltip %}
-      <p class="project-summary-why"><strong>Varför RWI bevakar detta:</strong> {{ airport.primary_signal.lifecycle_tooltip }}</p>
+      <p class="project-summary-why"><strong>{{ t("why_watching") }}:</strong> {{ airport.primary_signal.lifecycle_tooltip }}</p>
       {% endif %}
       {% if airport.signals|length > 1 %}<p class="timeline-meta">+{{ airport.signals|length - 1 }} till nedan under "{{ t("projects") }}".</p>{% endif %}
     </div>
@@ -101,6 +127,42 @@
     {% else %}{% if airport.current_status_unverified %}<div class="empty-state empty-state-compact"><strong>{{ t("current_status_unverified") }}</strong><br>{{ t("current_status_unverified_detail") }}</div>{% else %}<div class="empty-state empty-state-compact">Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens.</div>{% endif %}{% endif %}
   </div>
 </div>
+
+{# ("RWI - Juicy Design Mission #3" mission) "Plats" - reuses the exact
+   same real, licensed world-map asset the Overview's Global intelligens
+   already uses (Mission #2: world_land_path/map_viewbox_width/height),
+   with ONE small, precise marker plotted only from the Airport's own real
+   governed latitude/longitude (build.py's _airport_location_view() - see
+   its own docstring). No marker, no map at all, for an airport with no
+   persisted coordinates (every non-US airport today, e.g. Sacheon) - an
+   honest text-only fallback, never an approximate/country-level stand-in
+   for a specific airport's own position. #}
+{% if airport.location %}
+<section class="card panel-strong location-card">
+  <div class="card-header">{{ t("location_intelligence") }}</div>
+  <div class="card-body location-body">
+    <svg class="global-map location-map" viewBox="0 0 {{ map_viewbox_width }} {{ map_viewbox_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('location_intelligence') }}">
+      <defs>
+        <radialGradient id="location-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.6"/>
+          <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <path d="{{ world_land_path }}" class="map-land" fill-rule="evenodd"/>
+      <circle cx="{{ airport.location.x }}" cy="{{ airport.location.y }}" r="16" fill="url(#location-glow)"/>
+      <circle cx="{{ airport.location.x }}" cy="{{ airport.location.y }}" r="5" class="map-node map-node-dominant">
+        <title>{{ airport.name }}: {{ airport.location.latitude }}, {{ airport.location.longitude }}</title>
+      </circle>
+    </svg>
+    <p class="location-coords mono">{{ airport.location.latitude }}, {{ airport.location.longitude }}</p>
+  </div>
+</section>
+{% else %}
+<section class="card panel-strong">
+  <div class="card-header">{{ t("location_intelligence") }}</div>
+  <div class="card-body"><div class="empty-state empty-state-compact">{{ t("location_no_coordinates") }}</div></div>
+</section>
+{% endif %}
 
 {# grid-2's second column only ever holds the (rare) website link, so the
    two-column layout is only used when there's actually something to put

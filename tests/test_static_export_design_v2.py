@@ -199,9 +199,7 @@ def test_bos_shaped_airport_detail_renders_project_summary(tmp_path):
 def test_bos_shaped_primary_state_not_contradicted_by_another_equally_prominent_badge(tmp_path):
     """Exactly one `.hero-status` (the dominant descriptor) appears
     anywhere on the page (in the header, since "RWI - Juicy Design Mission
-    #2"); the lifecycle badge lives in the project-summary's own
-    `.quick-facts` strip with a plain `.lifecycle` class, never a second
-    `.hero-status`."""
+    #2")."""
     engine = _engine()
     with Session(engine) as session:
         airport = _seed_bos_shaped(session)
@@ -209,13 +207,22 @@ def test_bos_shaped_primary_state_not_contradicted_by_another_equally_prominent_
     html = (tmp_path / "site" / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
     assert html.count('class="hero-status') == 1
     # ("RWI - Juicy Design Mission #2 - Visual Correction Pass") The
-    # quick-facts strip (carrying the lifecycle badge) now sits directly
-    # under the header, outside the project-summary <section> - it must
-    # still contain no second .hero-status, and the header itself must be
-    # the sole owner of that class.
+    # quick-facts strip sits directly under the header, outside the
+    # project-summary <section> - it must contain no second .hero-status,
+    # the header remaining the sole owner of that class.
     quick_facts = re.search(r'<div class="quick-facts">.*?(?=<div class="airport-body-grid">)', html, re.S).group(0)
     assert 'class="hero-status' not in quick_facts
-    assert re.search(r'class="lifecycle [a-z]+"', quick_facts)
+    # ("RWI - Juicy Design Mission #3" mission) The lifecycle ("Läge")
+    # pill that used to sit in .quick-facts was intentionally removed
+    # (Mission #3's own semantic recon: it was a second, frequently
+    # near-tautological status-shaped badge competing with the real
+    # phase/type/evidence facts) - its real content is preserved as prose
+    # in "Varför RWI bevakar detta" instead (tests/
+    # test_static_export_airport_intelligence.py's own
+    # test_lage_pill_no_longer_present_in_quick_facts covers this
+    # directly). This assertion is updated accordingly, not merely
+    # relaxed: a `.lifecycle` class must not appear in .quick-facts.
+    assert 'class="lifecycle' not in quick_facts
 
 
 # ---------------------------------------------------------------------------
