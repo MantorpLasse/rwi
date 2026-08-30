@@ -7,6 +7,39 @@
 <p class="subtitle">{{ airport.iata_code or "–" }} / {{ airport.icao_code or "–" }} · {{ airport.city or "" }}{% if airport.city and airport.state_region %}, {% endif %}{{ airport.state_region or "" }} · {{ airport.country }}</p>
 {% if airport.local_names %}<p class="subtitle" style="margin-top:-8px; color:var(--text-dim)">{{ airport.local_names|join(" · ") }}</p>{% endif %}
 
+{# ("RWI - Juicy Design Mission #1" mission) One dominant project-intelligence
+   summary for the airport's own top-ranked, non-funding public Signal
+   (build.py's already-established _signal_sort_key ordering - see
+   Airport.primary_signal's own docstring). Establishes a presentation-only
+   hierarchy that does not exist anywhere else on the site yet: status_label
+   (already public-safe/qualified by presentation.py's public_signal_state())
+   is the ONE visually dominant descriptor; category is plain metadata;
+   lifecycle is a small, secondary qualifier badge, never equal-weight with
+   status. "Varför RWI bevakar detta" reuses signal.lifecycle_tooltip -
+   already-authored, already-reviewed, deterministic per-state copy
+   (app/static_export/presentation.py's LIFECYCLE_PRESENTATION) - never new
+   speculative commentary. #}
+{% if airport.primary_signal %}
+<section class="project-summary">
+  <p class="eyebrow">Vad händer just nu</p>
+  <div class="project-summary-head">
+    <span class="hero-status {{ airport.primary_signal.status_role }}">{{ airport.primary_signal.status_label }}</span>
+    {% if airport.primary_signal.lifecycle_label %}<span class="lifecycle project-summary-lifecycle {{ airport.primary_signal.lifecycle_class }}" title="{{ airport.primary_signal.lifecycle_tooltip }}">{{ airport.primary_signal.lifecycle_label }}</span>{% endif %}
+  </div>
+  <h2 class="project-summary-title"><a href="{{ root }}/signals/{{ airport.primary_signal.id }}.html">{{ airport.primary_signal.title }}</a></h2>
+  {% if airport.primary_signal.public_qualification %}<p class="timeline-meta">{{ airport.primary_signal.public_qualification }}</p>{% endif %}
+  <div class="project-summary-meta">
+    <span class="project-summary-meta-item"><span class="project-summary-meta-label">{{ t("project_type") }}</span>{{ cat(airport.primary_signal.category_label, airport.primary_signal.category_class) }}</span>
+    <span class="project-summary-meta-item"><span class="project-summary-meta-label">Styrka i underlaget</span>{{ gauge(airport.primary_signal.confidence_level, airport.primary_signal.confidence_label, root) }}</span>
+    {% if airport.primary_signal.planning_year %}<span class="project-summary-meta-item"><span class="project-summary-meta-label">{{ t("year") }}</span><span class="mono">{{ airport.primary_signal.planning_year }}</span></span>{% endif %}
+  </div>
+  {% if airport.primary_signal.lifecycle_tooltip %}
+  <p class="project-summary-why"><strong>Varför RWI bevakar detta:</strong> {{ airport.primary_signal.lifecycle_tooltip }}</p>
+  {% endif %}
+  {% if airport.signals|length > 1 %}<p class="timeline-meta">+{{ airport.signals|length - 1 }} till nedan under "{{ t("projects") }}".</p>{% endif %}
+</section>
+{% endif %}
+
 {# grid-2's second column only ever holds the (rare) website link, so the
    two-column layout is only used when there's actually something to put
    in it - otherwise an empty reserved column would leave a large blank

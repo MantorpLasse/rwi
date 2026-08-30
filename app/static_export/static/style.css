@@ -1055,3 +1055,95 @@ table { font-size:.9rem; } th,td { padding:13px 8px; } th:first-child,td:first-c
 #signals-table .title a { font-family:var(--font-display); font-weight:600; color:var(--text); }
 #signals-table td:first-child + td a .sign { background:transparent; color:var(--accent); padding:0; }
 @media (max-width:700px) { .hero-intelligence { margin-bottom:30px; } .hero-intelligence h1 { font-size:2.625rem; white-space:normal; } .grid-2 { grid-template-columns:1fr; gap:0; } .grid-2 > div:last-child .card { border-left:0; padding-left:0; } .stat-grid { grid-template-columns:repeat(2,1fr); gap:24px 12px; } }
+
+/* ---------------------------------------------------------------------
+   "RWI - Juicy Design Mission #1" mission: Overview V2 + BOS Airport
+   Detail V2. Premium aviation-intelligence surfaces built entirely from
+   the existing dark-navy/gold token system above - no new palette. */
+
+/* Image-less hero treatment: a faint runway-centerline motif (repeating
+   dashed line, the universal aviation visual) plus a soft gold glow behind
+   the headline, both pure CSS gradients - degrades to the plain hero
+   (already fully readable) if this rule is ever removed, and a background
+   photo can later be layered in behind these same gradients without any
+   markup change. */
+.hero-runway {
+  position: relative;
+  padding: 8px 0 4px;
+  background:
+    linear-gradient(90deg, transparent 0%, transparent 42%, rgba(242,183,5,.55) 50%, transparent 58%, transparent 100%) 0 78% / 100% 2px no-repeat,
+    repeating-linear-gradient(90deg, rgba(237,230,214,.16) 0 22px, transparent 22px 46px) 0 78% / 100% 2px no-repeat,
+    radial-gradient(ellipse 620px 260px at 18% 20%, rgba(242,183,5,.14), transparent 70%);
+}
+
+.hero-runway::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(242,183,5,.05), transparent 55%);
+}
+
+/* Marknader (Overview) - a real per-country bar list, deliberately not a
+   map (no reliable/complete airport coordinate coverage exists yet - see
+   build.py's _market_summary_view docstring). Bar width is share_pct,
+   relative to the largest market's own count, never a percentage of a
+   global total (that would misleadingly imply completeness). */
+.market-summary { display: flex; flex-direction: column; gap: 10px; }
+.market-row { display: grid; grid-template-columns: 140px 1fr 44px; align-items: center; gap: 14px; }
+.market-country { font-size: .92rem; color: var(--text); }
+.market-bar-track { height: 8px; border-radius: 4px; background: var(--panel2); overflow: hidden; }
+.market-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--new)); border-radius: 4px; min-width: 3px; }
+.market-count { text-align: right; color: var(--text-dim); font-size: .88rem; }
+@media (max-width: 480px) { .market-row { grid-template-columns: 92px 1fr 32px; gap: 10px; } }
+
+/* Airport Detail "project summary" hero - one dominant status descriptor,
+   category/confidence/year as plain, equally-sized secondary metadata, and
+   the lifecycle badge deliberately smaller/muted so it reads as a
+   qualifier, never a competing headline (see airport_detail.html's own
+   comment for the full reasoning). */
+.project-summary {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+  margin: 4px 0 34px;
+}
+.project-summary .eyebrow { margin: 0 0 10px; }
+.project-summary-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.project-summary-title { margin: 0 0 8px; font-size: 1.3rem; }
+.project-summary-title a { color: var(--text); }
+.project-summary-title a:hover { color: var(--accent); }
+.project-summary-lifecycle { font-size: 10px; opacity: .88; }
+.project-summary-meta { display: flex; flex-wrap: wrap; gap: 22px; margin: 14px 0 4px; }
+.project-summary-meta-item { display: flex; flex-direction: column; gap: 4px; }
+.project-summary-meta-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); }
+.project-summary-why { margin: 14px 0 0; padding-top: 14px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: .9rem; max-width: 640px; }
+.project-summary-why strong { color: var(--text); }
+
+/* Dominant status badge - one explicit, restrained color per pipeline
+   maturity tier, extending the same role vocabulary status_view() already
+   assigns (.pill.construction/.funded's own existing color choices, made
+   consistent across every role instead of leaving most unstyled). */
+.hero-status {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: -.01em;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.hero-status.completed, .hero-status.funded { background: var(--verified-bg); border-color: var(--verified); color: var(--verified-ink); }
+.hero-status.construction, .hero-status.procurement { background: var(--med-bg); border-color: var(--med); color: var(--med-ink); }
+.hero-status.design, .hero-status.review, .hero-status.planning { background: var(--low-bg); border-color: var(--low); color: var(--low-ink); }
+.hero-status.identified, .hero-status.unknown { background: var(--panel2); border-color: var(--border); color: var(--text-dim); }
+
+@media (max-width: 560px) {
+  .project-summary { padding: 18px; }
+  .project-summary-meta { gap: 16px; }
+}

@@ -2,16 +2,31 @@
 {% from "_components.html" import gauge, cat, airport_label %}
 {% block title %}Runway Safe Intelligence{% endblock %}
 {% block content %}
-<section class="hero-intelligence">
+<section class="hero-intelligence hero-runway">
   <div class="hero-copy"><p class="eyebrow">Aviation safety intelligence</p><h1>Runway Safe Intelligence</h1><p class="subtitle">{{ t("hero_statement") }}</p></div>
 </section>
 
 <div class="stat-grid">
   <div class="stat"><div class="label">Flygplatser</div><div class="value">{{ airport_count }}</div></div>
+  <div class="stat"><div class="label">Aktiva möjligheter</div><div class="value" style="color:var(--verified)">{{ active_opportunity_count }}</div></div>
   <div class="stat"><div class="label">Historiska installationsposter</div><div class="value">{{ installation_count }}</div></div>
-  <div class="stat"><div class="label">Projekt och bevakning</div><div class="value">{{ signal_count }}</div></div>
   <div class="stat"><div class="label">Starkt källstöd</div><div class="value" style="color:var(--high)">{{ high_confidence_count }}</div></div>
 </div>
+
+{% if market_summary %}
+<div class="card">
+  <div class="card-header">Marknader<span class="card-action" style="color:var(--text-faint); font-weight:400">Signaler per land</span></div>
+  <div class="card-body market-summary">
+    {% for m in market_summary %}
+    <div class="market-row">
+      <div class="market-country">{{ m.country }}</div>
+      <div class="market-bar-track"><div class="market-bar-fill" style="width:{{ m.share_pct }}%"></div></div>
+      <div class="market-count mono">{{ m.count }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <div class="card">
   <div class="card-header">Senast uppdaterat</div>
@@ -110,7 +125,7 @@
   <div class="card-header">Utvalda signaler <a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_signals") }} →</a></div>
   <table>
     <thead>
-      <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>Projekttyp</th><th>År</th></tr>
+      <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th></tr>
     </thead>
     <tbody>
       {% for signal in top_signals %}
@@ -119,6 +134,7 @@
         <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
         <td data-label="Status"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
         <td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td>
+        <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
         <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
       </tr>
       {% endfor %}

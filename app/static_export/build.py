@@ -880,6 +880,29 @@ def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNa
     ]
 
 
+# ("RWI - Juicy Design Mission #1" mission) Real, deterministic per-country
+# breakdown of public Signals - the Overview's "clean geographic/market
+# summary" (mission Phase 3's own explicit preference over a fabricated
+# map: this repository has no reliable, complete airport coordinate
+# coverage, so no map is built). Counts only, from signal_views'
+# already-computed `country` field (Airport.country, always present) - no
+# geocoding, no invented region groupings, no percentage-of-market claim.
+# Sorted by count descending, country name ascending as a stable tie-break;
+# the resulting order is itself the honest "where is activity concentrated"
+# signal the mission asks for, with the USA naturally landing first because
+# the real data says so (see build.py module-level recon: 64 of 67 public
+# Signals are U.S. airports).
+def _market_summary_view(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
+    counts = Counter(s.country for s in signal_views if s.country)
+    if not counts:
+        return []
+    max_count = max(counts.values())
+    return [
+        SimpleNamespace(country=country, count=count, share_pct=round(100 * count / max_count))
+        for country, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
 def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleNamespace:
     signal_views = sorted(
         (_signal_view(s, today=today) for s in airport.signals if _is_public_signal(s)),
@@ -902,6 +925,16 @@ def _airport_view(airport: Airport, *, today: date, session: Session) -> SimpleN
     timeline_dated, timeline_undated = _timeline_view(installation_views, incident_views, signal_views)
     return SimpleNamespace(
         id=airport.id,
+        # ("RWI - Juicy Design Mission #1" mission) The single headline
+        # signal for this airport's new "project summary" hero card - the
+        # first (highest-ranked) entry of `primary_signals` (already sorted
+        # by _signal_sort_key: lifecycle tier, then score descending, then
+        # id - the exact same ordering the "Projekt och bevakning" table
+        # below already uses), with funding/grant-only signals already
+        # excluded from that list. No new ranking logic - purely a pick of
+        # an already-computed list's own top element. None when the airport
+        # has no non-funding public signal at all.
+        primary_signal=(primary_signals[0] if primary_signals else None),
         name=airport.name,
         iata_code=airport.iata_code,
         icao_code=airport.icao_code,
@@ -1040,7 +1073,17 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
         installation_count=sum(len(a.installations) for a in airport_views),
         signal_count=len(signal_views),
         high_confidence_count=sum(1 for s in signal_views if s.confidence_level == "high"),
+        # ("RWI - Juicy Design Mission #1" mission) Replaces the former,
+        # more ambiguous raw signal_count stat on the hero metrics bar - a
+        # real, already-computed SLT1 read (signal.lifecycle_state, never
+        # re-derived here), answering the shareholder's actual first
+        # question ("what's live right now") more directly than a total
+        # that mixes active/watch/historical/stale together. signal_count
+        # itself is kept (used by the trend caption and available in
+        # data.json) - only the hero bar's own stat selection changed.
+        active_opportunity_count=sum(1 for s in signal_views if s.lifecycle_state == "active_opportunity"),
         top_signals=signal_views[:5],
+        market_summary=_market_summary_view(signal_views),
         trend=_trend_view([i for a in airport_views for i in a.installations], signal_views),
         recent_changes=_recent_changes_view(airport_views, signal_views),
         changelog_start_date=_CHANGELOG_START_DATE.isoformat(),
