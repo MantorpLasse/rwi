@@ -2,7 +2,7 @@
 (docs/architecture/human-approved-governed-signal-creation-slice9c-report.md,
 Slice 9C of docs/architecture/reviewer-action-human-signal-promotion-slice9-design.md).
 
-    SourceAssertion (identity_guard_decision=ATTACH_CONFIRMED,
+    SourceAssertion (EFFECTIVE identity == ATTACH_CONFIRMED,
         intelligence_review_decision=REVIEW_REQUIRED,
         promotion_policy_decision=HUMAN_REVIEW_REQUIRED)
         + latest ReviewerAction == APPROVE_SIGNAL (Slice 9B)
@@ -11,6 +11,25 @@ Slice 9C of docs/architecture/reviewer-action-human-signal-promotion-slice9-desi
         -> SourceAssertion.signal_id set
         -> STOP (no publication - a separate, future, explicitly-approved
            step; no automatic promotion - AUTO_ELIGIBLE is refused here)
+
+IDENTITY GATE ("RWI - Raw-vs-Effective Signal Creation Gate - Narrow Fix"
+mission - the known inconsistency this mission closed): the identity
+component of `_check_governance_gates()` reads
+`app.services.effective_identity_guard_decision.resolve_effective_identity_guard_decision()`
+(EB5) - never `SourceAssertion.identity_guard_decision` (the raw column)
+directly - mirroring `app.services.reviewer_action_persistence`'s own
+already-fixed APPROVE_SIGNAL/CONFIRM_DISTINCT_SIGNAL gate exactly (itself
+modeled on the MARK_DUPLICATE gate's original EB5 reuse). Before this fix,
+a genuinely governed row like SA235 (raw ATTACH_PROVISIONAL, effective
+ATTACH_CONFIRMED via CROSS_SOURCE_ALIAS_ATTESTATION) could reach
+APPROVE_SIGNAL but could never actually have a Signal created for it - this
+module's own independent raw re-check would still block it, the second half
+of the same inconsistency the reviewer-action mission only partially closed.
+`intelligence_review_decision`/`promotion_policy_decision` remain
+raw-column checks, unchanged - EB5 has no analog for those two decisions
+and this mission does not invent one. The raw `identity_guard_decision`
+column itself is never read, compared, or mutated by this gate any more -
+it remains a permanent, immutable, purely historical fact.
 
 THIS IS THE FIRST SLICE ALLOWED TO CREATE A SIGNAL through the governed
 discovery/intelligence pipeline. It is a new, seventh, explicit Signal-write
@@ -165,6 +184,8 @@ from app.services.existing_signal_reconciliation_review import (
     build_reconciliation_review_plan,
     compute_reconciliation_fingerprint,
 )
+from app.services.effective_identity_guard_decision import resolve_effective_identity_guard_decision
+from app.services.evidence_attachment_guard import AttachmentOutcome
 from app.services.reviewer_action_persistence import get_latest_reviewer_action
 
 __all__ = [
@@ -372,10 +393,26 @@ def _check_governance_gates(session: Session, source_assertion: SourceAssertion)
     allowed values; it never inspects reconciliation_fingerprint or runs
     reconciliation itself (that happens only after this function returns,
     using fresh state - see create_signal_from_approved_review())."""
-    if source_assertion.identity_guard_decision != REQUIRED_IDENTITY_DECISION:
+    # See module docstring "IDENTITY GATE" (Raw-vs-Effective Signal Creation
+    # Gate - Narrow Fix mission) - the EFFECTIVE decision
+    # (resolve_effective_identity_guard_decision(), EB5), never the raw
+    # identity_guard_decision column directly, mirroring
+    # app.services.reviewer_action_persistence's own already-fixed
+    # APPROVE_SIGNAL/CONFIRM_DISTINCT_SIGNAL gate and the MARK_DUPLICATE
+    # gate it was itself modeled on. A raw ATTACH_PROVISIONAL row whose
+    # identity has since been genuinely, governedly confirmed (an EB4
+    # re-evaluation, a legacy human attestation, or a
+    # CrossSourceAliasAttestation) must not be permanently unreachable here
+    # merely because the ORIGINAL, historical machine decision undershot
+    # what later governance established. The raw column itself is never
+    # read, compared, or mutated by this check.
+    effective = resolve_effective_identity_guard_decision(session, source_assertion_id=source_assertion.id)
+    if effective.effective_decision != AttachmentOutcome(REQUIRED_IDENTITY_DECISION):
         raise ValueError(
-            f"create_signal_from_approved_review requires identity_guard_decision == "
-            f"{REQUIRED_IDENTITY_DECISION!r}, got {source_assertion.identity_guard_decision!r}"
+            f"create_signal_from_approved_review requires the EFFECTIVE identity decision "
+            f"(resolve_effective_identity_guard_decision(), not merely the raw "
+            f"identity_guard_decision column) to be {REQUIRED_IDENTITY_DECISION!r}, got "
+            f"{effective.effective_decision.value!r} (basis={effective.basis.value!r})"
         )
     if source_assertion.intelligence_review_decision != REQUIRED_INTELLIGENCE_DECISION:
         raise ValueError(

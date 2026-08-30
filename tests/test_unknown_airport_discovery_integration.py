@@ -1231,9 +1231,17 @@ class TestPromotionGovernanceFirewall:
         WOULD sail through promotion policy for a KNOWN-airport row) and
         attempt to call create_signal_from_approved_review() directly
         against it, bypassing every normal review step. Must still fail
-        closed - this is not a UAC3 guarantee, it is a structural
-        guarantee of governed_signal_creation.py's own pre-existing,
-        unmodified gate, proven directly rather than merely inferred."""
+        closed - a structural guarantee of governed_signal_creation.py's
+        own gate, proven directly rather than merely inferred. Since the
+        "RWI - Raw-vs-Effective Signal Creation Gate - Narrow Fix" mission,
+        that gate consumes EB5's EFFECTIVE decision rather than the raw
+        column directly - this candidate-linked row (airport_id IS NULL)
+        still refuses because EB5's own CANDIDATE-LINKED FIREWALL
+        (app.services.effective_identity_guard_decision) never consults an
+        evaluation at all when airport_id is NULL, always falling back to
+        exactly the same historical INSUFFICIENT_IDENTITY decision this
+        test already established - the structural guarantee is unchanged,
+        only the gate's own wording is."""
         from app.services.governed_signal_creation import create_signal_from_approved_review
 
         with Session(_engine()) as session:
@@ -1246,7 +1254,7 @@ class TestPromotionGovernanceFirewall:
             session.commit()
             assertion = session.get(SourceAssertion, result.source_assertion_id)
 
-            with pytest.raises(ValueError, match="requires identity_guard_decision == 'ATTACH_CONFIRMED'"):
+            with pytest.raises(ValueError, match="EFFECTIVE identity decision"):
                 create_signal_from_approved_review(
                     session, assertion, title="Fake Signal", category="replacement", confidence="high",
                 )

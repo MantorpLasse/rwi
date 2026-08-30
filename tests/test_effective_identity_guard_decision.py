@@ -608,7 +608,22 @@ class TestInternational:
 
 
 class TestGovernedSignalCreationFirewall:
-    def test_historical_insufficient_latest_confirmed_still_blocks_signal_creation(self):
+    """At the time this test was first written, Signal creation's own gate
+    independently re-checked the RAW identity_guard_decision column, so a
+    row with historical INSUFFICIENT_IDENTITY but a later, genuinely
+    governed LATEST_REEVALUATION confirmation could reach intelligence
+    review but never actually have a Signal created for it - a real,
+    disclosed inconsistency. A LATER, separate mission ("RWI - Raw-vs-
+    Effective Signal Creation Gate - Narrow Fix") closed it by making
+    create_signal_from_approved_review() also consume EB5's effective
+    decision, mirroring the reviewer-action approval gate's own identical
+    fix - so that same shape now correctly SUCCEEDS here, once the other,
+    unrelated governance gates (intelligence review, promotion policy, a
+    recorded ReviewerAction) are also satisfied, exactly as they would be
+    for any other effectively-confirmed row."""
+
+    def test_historical_insufficient_latest_confirmed_now_allows_signal_creation(self):
+        from app.models import ReviewerAction
         from app.services.governed_signal_creation import create_signal_from_approved_review
 
         with Session(_engine()) as session:
@@ -622,15 +637,24 @@ class TestGovernedSignalCreationFirewall:
 
             _add_evaluation(session, source_assertion_id=assertion.id, snapshot_id=discovered.evidence_bag_snapshot_id, airport_id=airport.id, outcome=AttachmentOutcome.ATTACH_CONFIRMED)
             state = resolve_effective_identity_guard_decision(session, source_assertion_id=assertion.id)
-            assert state.is_identity_confirmed  # now eligible for intelligence review...
+            assert state.is_identity_confirmed  # eligible for intelligence review...
 
-            # ...but Signal creation's own, unmodified gate still checks
-            # the historical column directly and must still refuse.
-            with pytest.raises(ValueError, match="identity_guard_decision"):
-                create_signal_from_approved_review(
-                    session, assertion, title="t", category="physical_installation", confidence="high",
-                )
-            assert session.query(Signal).count() == 0
+            # ...and now, correctly, for Signal creation too, once the
+            # other, unrelated governance gates are also satisfied.
+            assertion.intelligence_review_decision = "REVIEW_REQUIRED"
+            assertion.promotion_policy_decision = "HUMAN_REVIEW_REQUIRED"
+            session.add(ReviewerAction(
+                source_assertion_id=assertion.id, action="APPROVE_SIGNAL",
+                reason="Effectively confirmed via LATEST_REEVALUATION.", reviewer="human:tester",
+            ))
+            session.commit()
+
+            result = create_signal_from_approved_review(
+                session, assertion, title="t", category="physical_installation", confidence="high",
+            )
+            assert result.created is True
+            assert session.query(Signal).count() == 1
+            assert assertion.identity_guard_decision == "INSUFFICIENT_IDENTITY"  # raw history untouched
 
 
 # ---------------------------------------------------------------------------
