@@ -945,6 +945,76 @@ def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNa
     ]
 
 
+# ("RWI - Mission #7C" mission) "Marknadsläge" - the market-centric
+# presentation Missions #7/#7A/#7B recon'd and designed, built entirely
+# from already-governed Signal data + the already-existing SLT1 lifecycle
+# derivation (derive_signal_lifecycle, unchanged) - no new domain concept,
+# no new persisted field, no FH-D4 read (deliberately deferred per Mission
+# #7C's own HQ decision A - this module never imports SignalDisposition).
+#
+# Raw published Signal counts/rows only - never a deduplicated "effort"
+# count, never a canonical Signal/title/lifecycle/category chosen for a
+# group, matching Mission #7B/#7C's explicit non-authorization of FH-D4
+# canonical representation.
+def _market_category_distribution_view(signal_views: "list[SimpleNamespace]") -> "list[SimpleNamespace]":
+    """Real, deterministic Project Type (category) breakdown over exactly
+    the `signal_views` the caller passes in - this function has no opinion
+    about WHICH signals belong in "Efter projekttyp"; `_market_intelligence_view`
+    below is the one place that decides (active_opportunity + developing_watch
+    only, per Mission #7C section 2E - never the full published set, which
+    would only restate the Overview's own existing stage donut). Reuses
+    `_category_view()` verbatim - the same single mapping every other
+    category label on the site already uses; no new project-type
+    classification is introduced. Returns `[]` for an empty input (template
+    shows an honest empty-state, never a fabricated category)."""
+    total = len(signal_views)
+    if not total:
+        return []
+    counts = Counter(view.category for view in signal_views)
+    ordered = sorted(counts.items(), key=lambda item: -item[1])
+    return [
+        SimpleNamespace(
+            category=category,
+            label=_category_view(category)[0],
+            css_class=_category_view(category)[1],
+            count=count,
+            pct=round(100 * count / total),
+        )
+        for category, count in ordered
+    ]
+
+
+def _market_intelligence_view(signal_views: "list[SimpleNamespace]") -> SimpleNamespace:
+    """Top-level view model for marknadslage.html. `signal_views` is the
+    same already-published, already-sorted (_signal_sort_key: lifecycle
+    tier, then score descending, then id) list every other page on the
+    site already uses - filtering it by `lifecycle_state` preserves that
+    same relative order within each bucket, so no re-sort is needed here.
+
+    `snapshot` reuses `_lifecycle_counts_view()` verbatim (same function
+    signals_list.html's own stats bar already calls) - real counts across
+    all five SLT1 states, never hardcoded.
+
+    `realized_historical_count` is a bare integer, deliberately never a
+    list - Mission #7C section 2/8 requires Historik to remain a
+    snapshot-only count in v1, with no standalone list view for it (real
+    population is 2 rows - see Mission #7B's own real-data inventory)."""
+    active = [v for v in signal_views if v.lifecycle_state == "active_opportunity"]
+    watch = [v for v in signal_views if v.lifecycle_state == "developing_watch"]
+    stale = [v for v in signal_views if v.lifecycle_state == "stale_unresolved"]
+    historical_count = sum(1 for v in signal_views if v.lifecycle_state == "realized_historical")
+    return SimpleNamespace(
+        snapshot=_lifecycle_counts_view(signal_views),
+        active_opportunities=active,
+        developing_watch=watch,
+        stale_unresolved=stale,
+        realized_historical_count=historical_count,
+        # Mission #7C section 2E: active_opportunity + developing_watch
+        # ONLY - never the full published set.
+        category_distribution=_market_category_distribution_view(active + watch),
+    )
+
+
 # Purely typographic/decorative - a real country name already present on
 # every signal_view (Airport.country) gets a flag emoji next to it, nothing
 # more. Deliberately not exhaustive: an unmapped country (any real value not
@@ -1720,6 +1790,17 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
         # doc S11/S18's own "current opportunity count is correct"
         # requirement) - never invented, never hardcoded.
         lifecycle_counts=_lifecycle_counts_view(signal_views),
+    )
+
+    # ("RWI - Mission #7C" mission) "Marknadsläge" - see
+    # _market_intelligence_view()'s own docstring. Built from the same
+    # already-published, already-sorted signal_views every other page
+    # already uses - no second Signal query, no FH-D4 read.
+    render(
+        "market.html",
+        output_dir / "marknadslage.html",
+        root=".",
+        market=_market_intelligence_view(signal_views),
     )
     # ("RWI - Sacheon Evidence Surfacing" mission) DATA.JSON: `evidence` is
     # deliberately passed as a SEPARATE template context variable here,

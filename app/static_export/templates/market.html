@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% from "_components.html" import cat, signal_row %}
+{% block title %}Marknadsläge · Runway Safe Intelligence{% endblock %}
+{% block content %}
+<h1>Marknadsläge</h1>
+<p class="subtitle">Vad som händer i EMAS-marknaden just nu, byggt uteslutande på RWI:s publicerade signaler och deras redan granskade underlag.</p>
+
+{# ("RWI - Mission #7C" mission) A. Market Snapshot - reuses
+   _lifecycle_counts_view()/the exact ".lifecycle-stats" markup
+   signals_list.html's own stats bar already established (SLT1: real,
+   computed counts, never hardcoded). Historik is intentionally a count
+   only here - no standalone list view for it in v1 (real population is 2
+   rows; see Mission #7B's own real-data inventory). #}
+<div class="lifecycle-stats">
+  {% for item in market.snapshot %}
+  <div class="lifecycle-stat" title="{{ item.tooltip }}">
+    <span class="lifecycle {{ item.css_class }}">{{ item.label }}</span>
+    <span class="lifecycle-stat-count">{{ item.count }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+{# B. Aktuella möjligheter - the primary, expanded-by-default section.
+   Reuses signal_row(signal, root) verbatim (_components.html) - the exact
+   same row semantics (airport, title→signal link, Läge/lifecycle badge,
+   Status/project phase, Projekttyp/category, Confidence gauge, År,
+   Källa, Score→ordlista#score, per Mission #6) already established on
+   /signals/index.html - never a competing card/row system. #}
+<section class="card panel-strong">
+  <div class="card-header">Aktuella möjligheter ({{ market.active_opportunities|length }})</div>
+  {% if market.active_opportunities %}
+  <div class="card-body" style="padding:0">
+    <table>
+      <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
+      <tbody>
+        {% for signal in market.active_opportunities %}{{ signal_row(signal, root) }}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body"><div class="empty-state empty-state-compact">Inga aktuella möjligheter är publicerade just nu.</div></div>
+  {% endif %}
+</section>
+
+{# C/D. Under bevakning / Behöver research - visually secondary, collapsed
+   by default via the site's own established <details class="card
+   secondary-disclosure"> disclosure pattern (already used for BOS/Sacheon's
+   own "Historisk EMAS-kontext" - airport_detail.html) - no JavaScript
+   required for this to work or to remain readable; a native, keyboard- and
+   no-JS-usable disclosure, not a client-side collapse. Framed honestly as
+   "needs renewed research", never as dead/inactive/rejected - the exact
+   existing LIFECYCLE_PRESENTATION copy (presentation.py), never new
+   wording invented here. #}
+<details class="card secondary-disclosure history-disclosure">
+  <summary class="card-header">Under bevakning ({{ market.developing_watch|length }})</summary>
+  {% if market.developing_watch %}
+  <div class="card-body" style="padding:0">
+    <table>
+      <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
+      <tbody>
+        {% for signal in market.developing_watch %}{{ signal_row(signal, root) }}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state empty-state-compact">Inga signaler under bevakning just nu.</div>
+  {% endif %}
+</details>
+
+<details class="card secondary-disclosure history-disclosure">
+  <summary class="card-header">Behöver research ({{ market.stale_unresolved|length }})</summary>
+  {% if market.stale_unresolved %}
+  <div class="card-body" style="padding:0">
+    <p class="timeline-meta" style="padding:14px 16px 0">Källbelagda signaler där RWI ännu saknar färsk uppföljning - inte bedömda som avslutade eller irrelevanta, bara obekräftade sedan sist.</p>
+    <table>
+      <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
+      <tbody>
+        {% for signal in market.stale_unresolved %}{{ signal_row(signal, root) }}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state empty-state-compact">Inga signaler behöver förnyad research just nu.</div>
+  {% endif %}
+</details>
+
+{# E. Efter projekttyp - explicitly scoped to Aktuella möjligheter +
+   Under bevakning only (Mission #7C section 2E) - never the full
+   published set, which would only restate the Overview's own stage
+   donut. Reuses cat()/_category_view()'s own existing labels (no new
+   project-type classification) and the exact ".market-row"/".market-bar-
+   track"/".market-bar-fill"/".market-count" bar styling Mission #2's own
+   Marknadsläge (country) panel already established on the Overview - no
+   new CSS, no second bar-chart implementation. #}
+<section class="card panel-strong">
+  <div class="card-header">Efter projekttyp<span class="card-action" style="color:var(--text-faint); font-weight:400">Aktuella möjligheter + Under bevakning</span></div>
+  {% if market.category_distribution %}
+  <div class="card-body">
+    <div class="market-summary">
+      {% for item in market.category_distribution %}
+      <div class="market-row">
+        <span class="market-country">{{ cat(item.label, item.css_class) }}</span>
+        <div class="market-bar-track"><div class="market-bar-fill" style="width:{{ item.pct }}%"></div></div>
+        <span class="market-count">{{ item.count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card-body"><div class="empty-state empty-state-compact">Inga aktuella eller bevakade projekt att kategorisera just nu.</div></div>
+  {% endif %}
+</section>
+
+<script src="{{ root }}/watch.js"></script>
+<script>RWIWatch.initStars();</script>
+{% endblock %}

@@ -8,6 +8,7 @@ from __future__ import annotations
 LOCALES = {
     "sv": {
         "nav_overview": "Översikt", "nav_signals": "Signaler", "nav_airports": "Flygplatser",
+        "nav_market": "Marknadsläge",
         "nav_glossary": "Ordlista", "project_type": "Projekttyp", "status": "Status",
         "confidence": "Confidence", "year": "År", "score": "Analytisk score",
         "source": "Källa", "completed": "Färdigställd",
@@ -84,6 +85,7 @@ LOCALES = {
     },
     "en": {
         "nav_overview": "Overview", "nav_signals": "Signals", "nav_airports": "Airports",
+        "nav_market": "Market",
         "nav_glossary": "Glossary", "project_type": "Project type", "status": "Status",
         "confidence": "Confidence", "year": "Year", "score": "Analytical score",
         "source": "Source", "completed": "Completed",
