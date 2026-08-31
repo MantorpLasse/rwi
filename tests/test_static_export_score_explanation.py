@@ -147,5 +147,10 @@ def test_bos_frozen_upper_airport_detail_unaffected(tmp_path):
     html = (tmp_path / "site" / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
     assert html.count('class="hero-status') == 1
     assert 'class="hero-status hero-status-lg construction"' in html
-    # Score never appeared on Airport Detail before this mission and still doesn't.
-    assert "gloss-link\" href=\"../ordlista.html#score\"" not in html
+    # ("RWI - Mission #7G" mission) Score did not appear anywhere on Airport
+    # Detail before that mission; it now appears, deliberately, in the
+    # (non-frozen) "Projekt och bevakning" table - but the truly frozen
+    # upper section (everything above that section) still never shows it.
+    upper_section = html.split("Projekt och bevakning")[0]
+    assert "gloss-link\" href=\"../ordlista.html#score\"" not in upper_section
+    assert "gloss-link\" href=\"../ordlista.html#score\"" in html

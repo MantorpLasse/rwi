@@ -173,12 +173,25 @@
     <div class="card panel-strong">
       <div class="card-header">{{ t("projects") }}</div>
       {% if airport.signals %}
-      <table><thead><tr><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th></tr></thead><tbody>
+      {# ("RWI - Mission #7G" mission) A compact Signal intelligence
+         inventory for THIS airport - Läge/Källa/Score added alongside the
+         already-present Status/Projekttyp/Confidence/År, so a visitor can
+         read enough about one Signal without leaving the Airport page.
+         Every cell reuses an already-public _signal_view() field via the
+         exact same macro/markup the global Signals list already uses
+         (lifecycle_badge, source_badge, the Mission #6 Score→glossary
+         link) - no new value, no aggregation, no group/canonical field.
+         Each row is still exactly one Signal, exactly as Mission #7E
+         established for the global list. #}
+      <table><thead><tr><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead><tbody>
       {% for signal in airport.signals %}<tr>
         <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a>{% if signal.public_qualification %}<div class="timeline-meta">{{ signal.public_qualification }}</div>{% endif %}</td>
+        <td data-label="Läge">{{ lifecycle_badge(signal) }}</td>
         <td data-label="Status"><span class="pill status {{ signal.status_role }}">{{ signal.status_label }}</span></td><td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td><td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td><td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
+        <td data-label="Källa" class="src">{{ source_badge(signal, root) }}</td>
+        <td data-label="Score">{% if signal.probability_score is not none %}<a class="score gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% else %}–{% endif %}</td>
       </tr>{% endfor %}</tbody></table>
-      {% if airport.funding_signals %}<details class="secondary-disclosure"><summary>Finansiering och bidrag ({{ airport.funding_signals|length }})</summary><div class="disclosure-body">{% for signal in airport.funding_signals %}<p><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a> <span class="timeline-meta">{{ signal.status_label }}</span></p>{% endfor %}</div></details>{% endif %}
+      {% if airport.funding_signals %}<details class="secondary-disclosure"><summary>Finansiering och bidrag ({{ airport.funding_signals|length }})</summary><div class="disclosure-body">{% for signal in airport.funding_signals %}<p><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a> {{ lifecycle_badge(signal) }} <span class="timeline-meta">{{ signal.status_label }}</span>{% if signal.probability_score is not none %} · <a class="score gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% endif %}</p>{% endfor %}</div></details>{% endif %}
       {% else %}<div class="empty-state">Inga offentliga projekt- eller bevakningsuppgifter registrerade.</div>{% endif %}
     </div>
 
