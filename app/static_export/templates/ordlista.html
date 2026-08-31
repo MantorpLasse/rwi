@@ -115,4 +115,16 @@
     <p style="margin:0">Hur säkra vi är på att informationen stämmer, baserat på hur bra källan är – inte hur säkert det är att projektet blir av.</p>
   </div>
 </div>
+
+{# ("RWI - Mission #6" mission) The canonical public Score explanation -
+   every place a raw numeric Score appears links here (gloss-link, same
+   pattern #confidence already uses via gauge()). Deliberately right after
+   #confidence: Score and Confidence are the same underlying evidence-
+   strength assessment, just two different presentations of it. #}
+<div class="card" id="score">
+  <div class="card-header">{{ t("score_glossary_title") }}</div>
+  <div class="card-body">
+    <p style="margin:0">{{ t("score_glossary_body") }}</p>
+  </div>
+</div>
 {% endblock %}

@@ -66,6 +66,21 @@ LOCALES = {
         "claims_one": "granskad sakuppgift", "claims_many": "granskade sakuppgifter",
         "evidence_finding": "Sakuppgift",
         "evidence_provenance_note": "Källbelagd, men ingen granskad sakuppgift har transkriberats ännu för källorna nedan – se respektive länk till originalkällan.",
+        # ("RWI - Mission #6" mission) Canonical public Score explanation -
+        # ordlista.html's own #score entry, linked from every place a raw
+        # numeric Score is shown (score_tooltip above stays the short
+        # inline hover/link text; this is the fuller glossary body).
+        "score_glossary_title": "Score",
+        "score_glossary_body": (
+            "Score är samma bedömning som Confidence, uttryckt som en siffra istället för Hög/Medel/Låg – "
+            "hur starkt och tillförlitligt det underlag är som ligger bakom en signal. Ett högre Score betyder "
+            "starkare, mer väldokumenterat underlag – inte att projektet är mer sannolikt att bli av, och inte "
+            "sannolikheten att Runway Safe eller någon annan leverantör vinner ett eventuellt kontrakt. Score "
+            "ersätter varken projektfas/status (var i processen projektet befinner sig) eller Läge (hur aktuell "
+            "möjligheten bedöms vara just nu) – en historisk, redan avslutad händelse kan ha ett högt Score om "
+            "underlaget är starkt, och en aktuell möjlighet kan ha ett bara måttligt Score om underlaget ännu är "
+            "tunt. Saknas Score för en signal visas ett streck (–) istället för en påhittad siffra."
+        ),
     },
     "en": {
         "nav_overview": "Overview", "nav_signals": "Signals", "nav_airports": "Airports",
@@ -117,6 +132,17 @@ LOCALES = {
         "claims_one": "reviewed claim", "claims_many": "reviewed claims",
         "evidence_finding": "Finding",
         "evidence_provenance_note": "Source-backed, but no reviewed claim has been transcribed yet for the sources below - see each one's own link to the original source.",
+        "score_glossary_title": "Score",
+        "score_glossary_body": (
+            "Score is the same assessment as Confidence, expressed as a number instead of High/Medium/Low - "
+            "how strong and reliable the evidence behind a signal is. A higher Score means stronger, "
+            "better-documented evidence - not that the project is more likely to happen, and not the probability "
+            "that Runway Safe or any other supplier wins an eventual contract. Score replaces neither project "
+            "phase/status (where the project stands in the process) nor Lifecycle (how current the opportunity is "
+            "judged to be right now) - a historical, already-concluded event can have a high Score if the evidence "
+            "is strong, and a current opportunity can have only a moderate Score while the evidence is still thin. "
+            "When no Score is recorded for a signal, a dash (-) is shown instead of a fabricated number."
+        ),
     },
 }
 

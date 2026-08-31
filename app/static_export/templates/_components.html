@@ -95,7 +95,7 @@
   <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
   <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
   <td data-label="Källa" class="src">{{ source_badge(signal, root) }}</td>
-  <td data-label="Score">{% if signal.probability_score is not none %}<span class="score">{{ "%.1f"|format(signal.probability_score) }}</span>{% else %}–{% endif %}</td>
+  <td data-label="Score">{% if signal.probability_score is not none %}<a class="score gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% else %}–{% endif %}</td>
 </tr>
 {%- endmacro %}
 
@@ -111,6 +111,6 @@
   {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
   <div class="meta mono">{{ signal.planning_year or "–" }}</div>
   <div class="src">{{ source_badge(signal, root) }}</div>
-  <div class="score mono">{% if signal.probability_score is not none %}{{ "%.1f"|format(signal.probability_score) }}{% else %}–{% endif %}</div>
+  <div class="score mono">{% if signal.probability_score is not none %}<a class="gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% else %}–{% endif %}</div>
 </div>
 {%- endmacro %}

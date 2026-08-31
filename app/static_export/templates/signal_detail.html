@@ -20,7 +20,7 @@
     {% endif %}
   </div>
   {% if signal.probability_score is not none %}
-  <span class="score score-secondary" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</span>
+  <a class="score score-secondary gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>
   {% endif %}
 </div>
 
