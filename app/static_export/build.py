@@ -871,62 +871,6 @@ def _recent_changes_view(
     return [SimpleNamespace(**vars(e), date_label=e.evidence_date.isoformat()) for e in entries[:limit]]
 
 
-def _group_signal_views(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
-    """Group signal_views by (airport_id, category) into single rows or
-    expandable groups for signals_list.html - purely a presentation grouping,
-    the underlying Signal rows/data are untouched.
-
-    A group of 1 renders exactly like a normal row always has (kind="single").
-    A group of >1 (e.g. three replacement_after_incident signals at the same
-    airport, one per Incident - see app/models/incident.py) becomes one
-    headline row plus its members, so the list doesn't repeat the same
-    airport+category story once per incident/grant/etc. Per
-    grouping_mockup.html: the headline shows the top member's own title
-    (styled like a normal signal link) plus a muted "+N till" count - not
-    generic "N signaler" text.
-
-    Groups appear at the position of their first member in signal_views'
-    incoming order, which callers sort by probability_score descending - so
-    a group surfaces at its best member's rank, and members[0] (used as the
-    headline) is that best member, since a subsequence of a sorted list is
-    itself sorted.
-    """
-    order: list[tuple[int, str]] = []
-    members_by_key: dict[tuple[int, str], list[SimpleNamespace]] = {}
-    for view in signal_views:
-        key = (view.airport_id, view.category)
-        if key not in members_by_key:
-            order.append(key)
-        members_by_key.setdefault(key, []).append(view)
-
-    rows: list[SimpleNamespace] = []
-    for key in order:
-        members = members_by_key[key]
-        if len(members) == 1:
-            rows.append(SimpleNamespace(kind="single", signal=members[0]))
-            continue
-
-        top = members[0]
-        rows.append(
-            SimpleNamespace(
-                kind="group",
-                group_id=f"{key[0]}-{key[1]}",
-                airport_id=top.airport_id,
-                airport_name=top.airport_name,
-                airport_code=top.airport_code,
-                country=top.country,
-                category_label=top.category_label,
-                category_class=top.category_class,
-                confidence_level=top.confidence_level,
-                confidence_label=top.confidence_label,
-                top_signal=top,
-                more_count=len(members) - 1,
-                members=members,
-            )
-        )
-    return rows
-
-
 def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
     """One row per SignalLifecycleState, in the same relevance order as
     _LIFECYCLE_SORT_TIER, each carrying its own real count over the exact
@@ -1779,8 +1723,16 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
         "signals_list.html",
         output_dir / "signals" / "index.html",
         root="..",
+        # ("RWI - Mission #7E" mission) One row per published Signal, always
+        # - the former (airport_id, category) presentation grouping
+        # (_group_signal_views(), removed) had no governed real-world-effort
+        # semantics: it never consulted FH-D4 SignalDisposition, and could
+        # visually collapse Signals a human reviewer explicitly confirmed
+        # DISTINCT (see Mission #7D's own recon - 7 of the 13 real groups it
+        # produced exactly matched a real DISTINCT disposition). Each row
+        # now keeps its own title/lifecycle/status/category/confidence/
+        # year/source/Score - never inherited from another Signal.
         signals=signal_views,
-        signal_rows=_group_signal_views(signal_views),
         statuses=[
             SimpleNamespace(value=status, label=status_view(status)[0])
             for status in sorted({s.status for s in signal_views if s.status})

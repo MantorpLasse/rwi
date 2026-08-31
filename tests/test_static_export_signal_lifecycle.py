@@ -107,12 +107,16 @@ def test_signal_sort_is_deterministic_for_tied_score_and_tier(tmp_path):
     assert order1 == order2 == sorted(ids)
 
 
-def test_mixed_lifecycle_group_carries_every_member_state(tmp_path):
-    """Multiple replacement_after_incident signals at the same airport (one
-    old, one recent) group into one row (app.static_export.build._group_
-    signal_views groups by airport+category) - the grouprow's own
-    data-lifecycle must carry BOTH states, or the older/newer member would
-    be unreachable from its own filter view."""
+def test_each_signal_at_the_same_airport_and_category_keeps_its_own_lifecycle_state(tmp_path):
+    """("RWI - Mission #7E" mission) Multiple replacement_after_incident
+    signals at the same airport (one old, one recent) no longer collapse
+    into one row (the former airport+category presentation grouping was
+    removed - see Mission #7D's own recon and Mission #7E's report). Each
+    Signal must render on its own row, carrying its own real
+    data-lifecycle value, so each remains independently reachable from its
+    own filter view - the exact invariant the old grouprow's own
+    multi-token data-lifecycle used to protect, now satisfied trivially by
+    each Signal owning its own row."""
     engine = _engine()
     with Session(engine) as session:
         airport = Airport(name="PWK Test", iata_code="PWK", country="USA")
@@ -131,9 +135,13 @@ def test_mixed_lifecycle_group_carries_every_member_state(tmp_path):
         build_site(output, session=session, today=TODAY)
 
     html = (output / "signals" / "index.html").read_text(encoding="utf-8")
-    start = html.index('class="grouprow"')
-    row_html = html[start:html.index(">", start) + 1]
-    assert 'data-lifecycle="developing_watch stale_unresolved"' in row_html
+    assert 'class="grouprow"' not in html
+    old_row_start = html.rindex("<tr", 0, html.index(f'data-signal-ids="{old.id}"'))
+    old_row_end = html.index("</tr>", old_row_start)
+    assert f'data-lifecycle="stale_unresolved"' in html[old_row_start:old_row_end]
+    recent_row_start = html.rindex("<tr", 0, html.index(f'data-signal-ids="{recent.id}"'))
+    recent_row_end = html.index("</tr>", recent_row_start)
+    assert f'data-lifecycle="developing_watch"' in html[recent_row_start:recent_row_end]
 
 
 def test_lifecycle_counts_sum_to_published_signal_count(tmp_path):

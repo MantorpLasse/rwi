@@ -277,7 +277,12 @@ def test_build_site_runway_publication_does_not_affect_emas_publication_rules(tm
     assert "Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens." in detail_html
 
 
-def test_build_site_groups_multiple_signals_at_the_same_airport_and_category(tmp_path):
+def test_build_site_shows_multiple_signals_at_the_same_airport_and_category_independently(tmp_path):
+    """("RWI - Mission #7E" mission) The former (airport_id, category)
+    presentation grouping (_group_signal_views(), removed) had no governed
+    real-world-effort semantics - see Mission #7D's own recon. Multiple
+    Signals at the same airport/category must now render as fully
+    independent rows, never collapsed into one synthetic headline."""
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
@@ -300,25 +305,28 @@ def test_build_site_groups_multiple_signals_at_the_same_airport_and_category(tmp
         build_site(output, session=session)
 
     list_html = (output / "signals" / "index.html").read_text(encoding="utf-8")
-    # Headline shows the top (highest-score) member's real title, styled
-    # like a normal signal link, plus a muted count tag - not generic text.
-    assert '<span class="grouptitle">Chicago Executive replacement after incident (2025)</span>' in list_html
-    assert "+2 till" in list_html
-    assert "Efter incident" in list_html
-    # All three underlying signals are still present (grouping is presentation-only) -
-    # as strips inside one inset detail panel, not more table rows.
-    assert list_html.count('class="strip"') == 3
-    assert '(2016)' in list_html
-    assert '(2021)' in list_html
-    assert 'class="detail-panel"' in list_html
-    assert list_html.count('class="grouprow"') == 1
+    # No grouping affordance of any kind remains.
+    assert 'class="grouprow"' not in list_html
+    assert 'class="grouptitle"' not in list_html
+    assert "detail-panel" not in list_html
+    assert 'class="strip"' not in list_html
+    assert "+2 till" not in list_html
+    # All three Signals are real, independently linked rows, each with its
+    # own title and its own Score - never inherited from another Signal.
+    for year, score in [(2016, "6.0"), (2021, "7.0"), (2025, "9.0")]:
+        title = f"Chicago Executive replacement after incident ({year})"
+        assert f'>{title}</a>' in list_html
+        title_pos = list_html.index(f'>{title}</a>')
+        row_start = list_html.rindex("<tr", 0, title_pos)
+        row_end = list_html.index("</tr>", title_pos)
+        row = list_html[row_start:row_end]
+        assert f'>{score}</a>' in row
 
-    # data.json is untouched by the grouping - still one entry per Signal row.
     data = json.loads((output / "data.json").read_text(encoding="utf-8"))
     assert len(data["signals"]) == 3
 
 
-def test_build_site_does_not_group_a_lone_signal(tmp_path):
+def test_build_site_never_groups_signals(tmp_path):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:

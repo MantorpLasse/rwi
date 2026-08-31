@@ -99,18 +99,3 @@
 </tr>
 {%- endmacro %}
 
-{# One signal, rendered as a compact "strip" inside a group's expanded
-   detail panel (grouping_mockup.html) - not a table row. Flygplats/Kategori
-   are omitted since they're implied by the parent group. #}
-{% macro signal_strip(signal, root) -%}
-<div class="strip">
-  {{ star_toggle(signal.id) }}
-  <div class="title"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></div>
-  {{ lifecycle_badge(signal) }}
-  <span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span>
-  {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
-  <div class="meta mono">{{ signal.planning_year or "–" }}</div>
-  <div class="src">{{ source_badge(signal, root) }}</div>
-  <div class="score mono">{% if signal.probability_score is not none %}<a class="gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% else %}–{% endif %}</div>
-</div>
-{%- endmacro %}

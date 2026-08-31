@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_components.html" import gauge, cat, signal_row, signal_strip, source_badge, airport_label, lifecycle_badge %}
+{% from "_components.html" import gauge, cat, signal_row, source_badge, airport_label, lifecycle_badge %}
 {% block title %}Signaler · Runway Safe Intelligence{% endblock %}
 {% block content %}
 <h1>Signaler</h1>
@@ -42,49 +42,14 @@
       <tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
     </thead>
     <tbody>
-      {% for item in signal_rows %}
-        {% if item.kind == "single" %}
-        {{ signal_row(item.signal, root) }}
-        {% else %}
-        {# A group can legitimately span more than one lifecycle state (e.g.
-           three replacement_after_incident signals at one airport, of
-           different ages) - data-lifecycle carries every distinct state
-           present among its members (space-separated tokens), so the group
-           stays reachable from EVERY filter view any of its members belongs
-           to. Never collapsed to just the headline member's own state -
-           that would silently hide a real member from the view it belongs
-           in (mission hard boundary: no Signal silently omitted). #}
-        <tr class="grouprow" data-toggle="{{ item.group_id }}"
-            data-search="{{ (item.members|map(attribute='title')|join(' ') ~ ' ' ~ item.airport_name ~ ' ' ~ item.airport_code)|lower }}"
-            data-status="{{ item.top_signal.status or '' }}" data-country="{{ item.country }}"
-            data-lifecycle="{{ item.members|map(attribute='lifecycle_state')|unique|join(' ') }}"
-            data-signal-ids="{{ item.members|map(attribute='id')|join(',') }}"
-        >
-          <td data-label="Bevaka"><button type="button" class="star-toggle" data-signal-id="{{ item.top_signal.id }}" aria-pressed="false" aria-label="Bevaka signal">☆</button></td>
-          <td data-label="Flygplats"><a href="{{ root }}/airports/{{ item.airport_id }}.html">{{ airport_label(item.airport_code, item.airport_name) }}</a></td>
-          <td class="title" data-label="Signal">
-            <span class="caret">▶</span><span class="grouptitle">{{ item.top_signal.title }}</span><span class="more-tag">+{{ item.more_count }} till</span>
-          </td>
-          <td data-label="Läge">{{ lifecycle_badge(item.top_signal) }}</td>
-          <td data-label="Status"><span class="pill {{ 'done' if item.top_signal.is_completed else 'status ' ~ item.top_signal.status_role }}">{{ item.top_signal.status_label }}</span></td>
-          <td data-label="Projekttyp">{{ cat(item.category_label, item.category_class) }}</td>
-          <td data-label="Confidence">{{ gauge(item.confidence_level, item.confidence_label, root) }}</td>
-          <td data-label="År" class="mono">{{ item.top_signal.planning_year or "–" }}</td>
-          <td data-label="Källa" class="src">{{ source_badge(item.top_signal, root) }}</td>
-          <td data-label="Score">{% if item.top_signal.probability_score is not none %}<a class="score gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(item.top_signal.probability_score) }}</a>{% else %}–{% endif %}</td>
-        </tr>
-        <tr class="detail-row" data-detail-for="{{ item.group_id }}">
-          <td colspan="10">
-            <div class="detail-wrap" data-wrap="{{ item.group_id }}">
-              <div class="detail-panel">
-                {% for signal in item.members %}
-                {{ signal_strip(signal, root) }}
-                {% endfor %}
-              </div>
-            </div>
-          </td>
-        </tr>
-        {% endif %}
+      {# ("RWI - Mission #7E" mission) One row per published Signal, always -
+         see build.py's own render()-call comment for why the former
+         (airport_id, category) presentation grouping was removed. Every
+         Signal keeps its own title/lifecycle/status/category/confidence/
+         year/source/Score and its own real link to its own detail page -
+         never inherited from, or hidden behind, another Signal. #}
+      {% for signal in signals %}
+      {{ signal_row(signal, root) }}
       {% else %}
       <tr><td colspan="10" class="empty-state">Inga signaler registrerade.</td></tr>
       {% endfor %}
@@ -116,30 +81,18 @@
   var tbody = table.querySelector("tbody");
   var noMatch = document.getElementById("no-match");
 
-  table.querySelectorAll(".grouprow").forEach(function (row) {
-    row.addEventListener("click", function () {
-      var groupId = row.getAttribute("data-toggle");
-      var wrap = table.querySelector('.detail-wrap[data-wrap="' + groupId + '"]');
-      var opening = !row.classList.contains("open");
-      row.classList.toggle("open", opening);
-      wrap.classList.toggle("open", opening);
-    });
-  });
-
-  /* One "block" = a single row, or a grouprow + its detail-row (they must
-     move/hide together). Built once from the server-rendered (score-sorted)
-     order, before any reordering - render() always re-derives the desired
-     order from this fixed list, so repeatedly sorting stays stable instead
-     of drifting further each time. */
+  /* ("RWI - Mission #7E" mission) One "block" = one Signal row - the
+     former grouprow+detail-row pairing (and its click-to-expand listener)
+     was removed along with the presentation grouping itself; every row
+     already comes from the server as its own independent Signal (see
+     build.py's own render()-call comment). Built once from the
+     server-rendered (score-sorted) order, before any reordering -
+     render() always re-derives the desired order from this fixed list, so
+     repeatedly sorting stays stable instead of drifting further each
+     time. */
   var blocks = [];
   Array.prototype.forEach.call(tbody.children, function (tr) {
-    if (tr.classList.contains("detail-row")) return;
-    var block = { rows: [tr] };
-    if (tr.classList.contains("grouprow")) {
-      var next = tr.nextElementSibling;
-      if (next && next.classList.contains("detail-row")) block.rows.push(next);
-    }
-    blocks.push(block);
+    blocks.push({ rows: [tr] });
   });
 
   function blockIds(block) {
@@ -152,9 +105,9 @@
   }
 
   function blockLifecycleStates(block) {
-    // A group's data-lifecycle can carry more than one space-separated
-    // token (mixed-tier group - see signals_list.html's own grouprow
-    // comment); a single row always carries exactly one.
+    // Each row now carries exactly one lifecycle-state token (one Signal =
+    // one row, Mission #7E) - split() still returns the correct
+    // single-element array.
     var raw = block.rows[0].getAttribute("data-lifecycle") || "";
     return raw.split(/\s+/).filter(Boolean);
   }
