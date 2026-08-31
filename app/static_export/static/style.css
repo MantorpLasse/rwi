@@ -286,6 +286,20 @@ td.title {
   min-width: 220px;
 }
 
+/* ("RWI - Mission #7J" mission) Varför nu? - a single full-width, muted
+   subtitle line directly under the Signal row it explains, never a badge
+   or chip (Mission #7I's own "no clutter" finding). Reuses .timeline-meta's
+   own color/size, tightened to read as attached to the row above; the
+   shared td border-bottom (kept, not overridden) is what visually closes
+   the pair before the next Signal's own row starts. */
+tr.attention-row td.attention-reason {
+  white-space: normal;
+  padding-top: 0;
+  padding-bottom: 10px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
 /* Flygplats-skylt — signaturkomponenten. Överallt en flygplatskod visas. */
 .sign {
   display: inline-block;

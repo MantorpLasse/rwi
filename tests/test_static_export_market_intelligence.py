@@ -276,8 +276,18 @@ def test_no_fh_d4_disposition_data_is_read_or_exposed(tmp_path):
 def test_no_value_or_supplier_data_exposed_even_when_present_on_signal(tmp_path):
     """The active fixture Signal deliberately carries a real
     estimated_total_value_usd and confirmed_vendor - proving the page
-    doesn't leak them (rather than merely proving an unpopulated field is
-    absent)."""
+    doesn't leak the financial value fields or the analyst-judgment
+    likely_supplier field (rather than merely proving an unpopulated field
+    is absent).
+
+    ("RWI - Mission #7J" mission) confirmed_vendor itself is no longer in
+    that list: Mission #7I's own approved trigger #10 ("{confirmed_vendor}
+    bekräftad som leverantör") deliberately, explicitly surfaces this exact
+    sourced fact as a "Varför nu?" attention reason - see
+    tests/test_static_export_attention_reasons.py for that mechanism's own
+    dedicated coverage. This is a real, intentional supersession of this
+    test's original invariant, not a weakening: the raw field name/estimate
+    fields below remain correctly hidden."""
     engine = _engine()
     with Session(engine) as session:
         _seed_market_shaped(session)
@@ -285,8 +295,8 @@ def test_no_value_or_supplier_data_exposed_even_when_present_on_signal(tmp_path)
     html = _market_html(tmp_path)
     assert "12345678" not in html
     assert "12,345,678" not in html
-    assert "Acme EMAS Co" not in html
-    assert "confirmed_vendor" not in html
+    assert "Acme EMAS Co bekräftad som leverantör" in html  # Mission #7J's own approved trigger #10
+    assert "confirmed_vendor" not in html  # raw field name never leaks, only the sourced fact
     assert "likely_supplier" not in html
     assert "estimated_total_value_usd" not in html
     assert "estimated_emas_value_usd" not in html

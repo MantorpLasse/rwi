@@ -199,6 +199,92 @@ def _source_type_view(value: str | None) -> tuple[str | None, str | None, str | 
     return _SOURCE_TYPE.get(value, ("Övrig källa", None, None))
 
 
+# Mission #7J ("Varför nu?"): the approved, fixed status -> public-safe
+# wording map from Mission #7I's own explainability contract (Part H). Each
+# entry is deliberately a committed pipeline/process stage, not a bare
+# status label restatement - see that mission's own trigger table for the
+# "must not imply" boundary attached to each one.
+_ATTENTION_STATUS_WORDING = {
+    "procurement": "Upphandling pågår",
+    "under construction": "Byggnation pågår",
+    "design": "Projektering pågår",
+    "master_plan": "Master Plan-fas",
+    "environmental_review": "Miljöprövning pågår",
+    "cip": "CIP-planering pågår",
+    "alp": "ALP-planering pågår",
+    "funded": "Finansiering beviljad",
+}
+
+# Same vocabulary as signal_lifecycle.py's own _GRANT_SOURCE_TYPES, and the
+# same "current or future fiscal year" test (today.year - planning_year <= 0)
+# as derive_signal_lifecycle()'s own federal-grant branch - deliberately
+# reimplemented inline here rather than imported, matching that module's own
+# _best_year() precedent for exactly this situation ("not a new duplication
+# pattern, the third instance of an already-accepted one"). Mission #7I §3,
+# trigger 9: never a second definition of "current grant".
+_ATTENTION_GRANT_SOURCE_TYPES = frozenset({"usaspending_grant", "aip_grant", "iija_grant"})
+
+
+def _attention_reason_view(
+    signal: Signal, *, today: date, lifecycle_state: "SignalLifecycleState"
+) -> str | None:
+    """Mission #7J: one deterministic, presentation-only "Varför nu?"
+    sentence explaining why a Signal is worth an analyst's attention right
+    now, or None when no approved trigger fires - None must be rendered as
+    a clean absence, never replaced with invented filler prose (Mission
+    #7I's own explicit requirement).
+
+    Reads only signal.confirmed_vendor, signal.status, signal.source's
+    source_type, signal.planning_year, and signal.category - exactly the
+    Mission #7I approved-trigger fields. Never reads probability_score,
+    confidence, or likely_supplier (Mission #7I's own "explicitly excluded"
+    list - see that mission's design report Part B/§3-4).
+
+    STALE_UNRESOLVED is an unconditional exclusion, checked first, before
+    any trigger: Mission #7I's own recon (carried into this mission's own
+    "stale_unresolved != research priority" invariant) found that a stale
+    Signal's own reason string is always "no completion evidence captured",
+    never "worth researching" - so no trigger below is allowed to fire for
+    it, even one that would otherwise honestly match (e.g. an 18-year-old
+    incident-derived Signal past its research window still has
+    category=="replacement_after_incident", but showing "why now" text for
+    evidence the lifecycle model itself already called stale would
+    contradict the very Läge badge sitting next to it, and is exactly the
+    fabricated-priority risk the Roanoke deep-case check exists to catch).
+
+    Precedence (Mission #7I §5 / this mission's own "Collision handling"):
+    confirmed_vendor first (the rarest, most specific, most directly-sourced
+    fact), then Signal.status (a committed pipeline stage), then federal-
+    grant funding evidence, then incident-derived category last (the
+    weakest signal here - an incident happened, nothing since is
+    confirmed). Mission #7I §5 verified that no real Signal in the current
+    dataset triggers more than one of these four groups at once; this order
+    exists for future robustness, not to resolve an observed conflict, and
+    uses no numeric weights - a plain, obvious if/elif chain."""
+    if lifecycle_state == SignalLifecycleState.STALE_UNRESOLVED:
+        return None
+
+    if signal.confirmed_vendor:
+        return f"{signal.confirmed_vendor} bekräftad som leverantör"
+
+    status = (signal.status or "").strip().lower()
+    if status in _ATTENTION_STATUS_WORDING:
+        return _ATTENTION_STATUS_WORDING[status]
+
+    source_type = ((signal.source.source_type if signal.source else None) or "").strip().lower()
+    if (
+        source_type in _ATTENTION_GRANT_SOURCE_TYPES
+        and signal.planning_year is not None
+        and today.year - signal.planning_year <= 0
+    ):
+        return "Aktuellt federalt finansieringsunderlag finns"
+
+    if (signal.category or "") == "replacement_after_incident":
+        return "En incident har registrerats, ersättning inte bekräftad"
+
+    return None
+
+
 def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
     source = signal.source
     category_label, category_class = _category_view(signal.category)
@@ -213,6 +299,10 @@ def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
     # app.static_export.signal_lifecycle's own module docstring.
     lifecycle = derive_signal_lifecycle(signal, today=today)
     lifecycle_label, lifecycle_class, lifecycle_tooltip = lifecycle_view(lifecycle.state.value)
+    # Mission #7J: deterministic, presentation-only "Varför nu?" - see
+    # _attention_reason_view()'s own docstring for the exact approved
+    # trigger fields/precedence. None is a valid, expected result.
+    attention_reason = _attention_reason_view(signal, today=today, lifecycle_state=lifecycle.state)
     return SimpleNamespace(
         id=signal.id,
         title=signal.title,
@@ -234,6 +324,7 @@ def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
         lifecycle_class=lifecycle_class,
         lifecycle_tooltip=lifecycle_tooltip,
         lifecycle_reason=lifecycle.reason,
+        attention_reason=attention_reason,
         updated_at=signal.updated_at,
         target_year=signal.target_year,
         planning_year=signal.planning_year,

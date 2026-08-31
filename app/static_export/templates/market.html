@@ -33,7 +33,7 @@
     <table>
       <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
       <tbody>
-        {% for signal in market.active_opportunities %}{{ signal_row(signal, root) }}{% endfor %}
+        {% for signal in market.active_opportunities %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">Varför nu? {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
       </tbody>
     </table>
   </div>
@@ -58,7 +58,7 @@
     <table>
       <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
       <tbody>
-        {% for signal in market.developing_watch %}{{ signal_row(signal, root) }}{% endfor %}
+        {% for signal in market.developing_watch %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">Varför nu? {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
       </tbody>
     </table>
   </div>
@@ -75,7 +75,7 @@
     <table>
       <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
       <tbody>
-        {% for signal in market.stale_unresolved %}{{ signal_row(signal, root) }}{% endfor %}
+        {% for signal in market.stale_unresolved %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">Varför nu? {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
       </tbody>
     </table>
   </div>
