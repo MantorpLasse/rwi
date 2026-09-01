@@ -258,10 +258,11 @@ def test_build_site_shows_empty_runway_state_when_airport_has_no_canonical_runwa
 
 
 def test_build_site_runway_publication_does_not_affect_emas_publication_rules(tmp_path):
-    """Publishing "Banor" must not change EMAS idag in any way - an airport
-    with governed runways but no reviewed identity / promoted NASR presence
-    must still show the unresolved-EMAS empty state, exactly as before this
-    change."""
+    """Publishing "Banor" must not change "Verifierad förekomst" (renamed
+    from "EMAS idag" by "RWI - Mission #8H") in any way - an airport with
+    governed runways but no reviewed identity / promoted NASR presence, and
+    no documented Installation either, must still show the honest,
+    no-installations empty state, exactly as before this change."""
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
@@ -274,7 +275,7 @@ def test_build_site_runway_publication_does_not_affect_emas_publication_rules(tm
     detail_html = (output / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
     assert "Banor" in detail_html
     assert "9/27" in detail_html
-    assert "Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens." in detail_html
+    assert "Ingen EMAS-installation eller separat verifiering registrerad." in detail_html
 
 
 def test_build_site_shows_multiple_signals_at_the_same_airport_and_category_independently(tmp_path):

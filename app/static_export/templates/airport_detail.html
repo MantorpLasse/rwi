@@ -113,6 +113,44 @@
   </div>
 
   <div class="card panel-strong">
+    {% if airport.installed_base_summary and not airport.current_status_unverified %}
+    {# ("RWI - Mission #8I.1" mission) The page must lead with WHAT RWI
+       KNOWS, not with what is missing - visual review of #8H found the
+       top card still led with the negative verification message even for
+       an airport (LCY) with 2 fully-documented, cross-corroborated
+       installations. This is a POSITIVE summary card
+       (_installed_base_summary_view - pure display aggregation over
+       already-public Installation fields, never Installation.status),
+       with verification information demoted to secondary but NOT erased -
+       the exact same current_emas item markup (badges + full provenance
+       text) still renders below the divider, unchanged, so LIT's/BOS's
+       real NASR/reviewed-identity evidence is preserved verbatim, just no
+       longer the FIRST thing a reader sees. #}
+    <div class="card-header">Dokumenterad EMAS</div>
+    <div class="card-body">
+      <p style="margin:0 0 6px">
+        <strong>{{ airport.installed_base_summary.count }}</strong> {{ "installation" if airport.installed_base_summary.count == 1 else "installationer" }}{% if airport.installed_base_summary.type_label %} · {{ airport.installed_base_summary.type_label }}{% endif %}{% if airport.installed_base_summary.ends_label %} · Bana {{ airport.installed_base_summary.ends_label }}{% endif %}
+      </p>
+      {% if airport.installed_base_summary.year_label or airport.installed_base_summary.vendor_label %}
+      <p class="timeline-meta" style="margin:0">{% if airport.installed_base_summary.year_label %}Installerat {{ airport.installed_base_summary.year_label }}{% endif %}{% if airport.installed_base_summary.year_label and airport.installed_base_summary.vendor_label %} · {% endif %}{{ airport.installed_base_summary.vendor_label or "" }}</p>
+      {% endif %}
+      <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border)">
+        {% if airport.current_emas %}
+        <div style="display:flex; flex-direction:column; gap:10px">
+          {% for item in airport.current_emas %}
+          <div>
+            <span class="pill status">{{ item.primary_label }}</span>
+            <span class="timeline-meta" style="margin-left:8px">{{ item.evidence_basis_label }}</span>
+            <p class="timeline-meta" style="margin:4px 0 0">{{ item.provenance_text }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="timeline-meta" style="margin:0; color:var(--text-faint)">Ingen separat senare verifiering registrerad.</p>
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
     <div class="card-header">{{ t("current_emas") }}</div>
     {% if airport.current_emas %}
     <div class="card-body" style="display:flex; flex-direction:column; gap:12px">
@@ -124,8 +162,88 @@
       </div>
       {% endfor %}
     </div>
-    {% else %}{% if airport.current_status_unverified %}<div class="empty-state empty-state-compact"><strong>{{ t("current_status_unverified") }}</strong><br>{{ t("current_status_unverified_detail") }}</div>{% else %}<div class="empty-state empty-state-compact">Ingen aktuell EMAS-förekomst är publicerad från granskad eller FAA-cykelbaserad evidens.</div>{% endif %}{% endif %}
+    {% else %}{% if airport.current_status_unverified %}<div class="empty-state empty-state-compact"><strong>{{ t("current_status_unverified") }}</strong><br>{{ t("current_status_unverified_detail") }}</div>{% else %}<div class="empty-state empty-state-compact">
+      {# ("RWI - Mission #8H" mission) Mission #8G's own finding: neither
+         _current_emas_views() pathway (reviewed physical identity, or a
+         one-time FAA/NASR import) is itself proof of removal, inactivity,
+         or doubt about a documented installation - it only means RWI has
+         no SEPARATE, stronger/reconciled evidence about physical presence
+         beyond what "{{ t('historical_emas_context') }}" below already
+         documents. Never implies the airport lacks EMAS (when
+         airport.installations is non-empty) or that a documented
+         installation is doubtful/removed/inactive - see that mission's
+         own explicit wording requirements. Reached only when
+         installed_base_summary is None (no Installation rows at all) or
+         the airport-6-specific current_status_unverified case applies -
+         every other airport with documented installations now takes the
+         positive branch above instead (Mission #8I.1). #}
+      {% if airport.installations %}RWI har ingen separat verifiering av installationens senare förekomst. Den dokumenterade installationen visas nedan under &quot;{{ t("historical_emas_context") }}&quot;.{% else %}Ingen EMAS-installation eller separat verifiering registrerad.{% endif %}
+    </div>{% endif %}{% endif %}
+    {% endif %}
   </div>
+</div>
+
+{# ("RWI - Mission #8H" mission) "EMAS-installation" - the documented
+   installed-base presentation, PROMOTED to full-width prominence right
+   below the top grid (moved, not duplicated, from its former collapsed
+   "Historisk EMAS-kontext" position further down the page - Mission #8G's
+   own explicit finding that a reader should see what RWI has documented
+   BEFORE anything else, and that duplicating these facts in a second,
+   simplified summary card would be worse than one clear presentation).
+   Every field/macro below is unchanged from before this mission - only
+   the wrapping element (plain <div>, no longer a collapsed <details>) and
+   position moved. The one deliberate content change: the
+   Installation.status pill is removed from this public card (Mission
+   #8G's own finding: all 151 real Installation rows carry status="active"
+   uniformly - it is never freshness-verified state and was never meant to
+   read as one - see build.py/Installation model, unchanged; the DB field
+   itself is untouched). #}
+<div class="card panel-strong">
+  <div class="card-header">{{ t("historical_emas_context") }} ({{ airport.installations|length }})</div>
+  {% if airport.installations %}
+  <div class="card-body" style="display:flex; flex-direction:column; gap:22px">
+    {% for installation in airport.installations %}
+    <div id="installation-{{ installation.id }}"{% if not loop.last %} style="padding-bottom:22px; border-bottom:1px solid var(--border)"{% endif %}>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px">
+        <strong>{{ installation.type or "Okänd typ" }}</strong>
+        {% if installation.runway_end %}<span class="pill status">Bana {{ installation.runway_end }}</span>
+        {% elif installation.no_confirmed_runway %}<span class="pill unconfirmed" title="Källan pekar ut flera olika banor för denna installation - ingen enskild bana kan bekräftas, se detaljer nedan.">Ingen bekräftad bankoppling</span>{% endif %}
+        {% if installation.install_year %}<span class="mono" style="color:var(--text-dim)">Installerad {{ installation.install_year }}</span>
+        {% else %}<span style="color:var(--text-dim)" title="{{ t('current_physical_state_no_year') }}">{{ t("current_physical_state") }}</span>{% endif %}
+        {{ vendor_pill(installation.confirmed_vendor, root) }}
+      </div>
+
+      {% if installation.source_title %}
+      <div style="margin-bottom:14px">
+        <div style="color:var(--text-faint); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em">Källa</div>
+        <div>{{ installation.source_title }}</div>
+        <div style="color:var(--text-dim); font-size:0.85rem">
+          {{ installation.source_publisher or "" }}{% if installation.source_publisher and installation.source_type %} · {% endif %}{{ source_badge(installation, root) }}{% if installation.source_published_date %} · {{ installation.source_published_date }}{% endif %}
+        </div>
+        {% if installation.source_url %}
+        <a href="{{ installation.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
+        {% else %}
+        <span style="color:var(--text-faint)">Ingen offentlig länk (t.ex. internt dokument).</span>
+        {% endif %}
+      </div>
+      {% else %}
+      <div style="margin-bottom:14px; color:var(--text-dim)">Ingen källa kopplad ännu.</div>
+      {% endif %}
+
+      {% if installation.notes %}
+      <details class="annotation source-detail">
+        <summary>Detaljer från källan</summary>
+        <div class="card-body">
+          <p style="white-space:pre-line; margin:0">{{ installation.notes }}</p>
+        </div>
+      </details>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">Inga installationer registrerade.</div>
+  {% endif %}
 </div>
 
 {# ("RWI - Juicy Design Mission #3" mission) "Plats" - reuses the exact
@@ -280,60 +398,11 @@
       {% endif %}
     </div>
 
-    {# "Historisk EMAS-kontext" - unchanged real Installation data/anchors,
-       now honestly labeled: a row with a real install_year is a dated
-       historical event; a row without one (e.g. BOS installation #33 - a
-       raw FAA current-presence snapshot whose own Source has no date
-       either) is explicitly presented as today's physical state, never as
-       an undated historical event. #}
-    <details class="card secondary-disclosure history-disclosure">
-      <summary class="card-header">{{ t("historical_emas_context") }} ({{ airport.installations|length }})</summary>
-      {% if airport.installations %}
-      <div class="card-body" style="display:flex; flex-direction:column; gap:22px">
-        {% for installation in airport.installations %}
-        <div id="installation-{{ installation.id }}"{% if not loop.last %} style="padding-bottom:22px; border-bottom:1px solid var(--border)"{% endif %}>
-          <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px">
-            <strong>{{ installation.type or "Okänd typ" }}</strong>
-            {% if installation.runway_end %}<span class="pill status">Bana {{ installation.runway_end }}</span>
-            {% elif installation.no_confirmed_runway %}<span class="pill unconfirmed" title="Källan pekar ut flera olika banor för denna installation - ingen enskild bana kan bekräftas, se detaljer nedan.">Ingen bekräftad bankoppling</span>{% endif %}
-            {% if installation.status %}<span class="pill status">{{ installation.status }}</span>{% endif %}
-            {% if installation.install_year %}<span class="mono" style="color:var(--text-dim)">Installerad {{ installation.install_year }}</span>
-            {% else %}<span style="color:var(--text-dim)" title="{{ t('current_physical_state_no_year') }}">{{ t("current_physical_state") }}</span>{% endif %}
-            {{ vendor_pill(installation.confirmed_vendor, root) }}
-          </div>
-
-          {% if installation.source_title %}
-          <div style="margin-bottom:14px">
-            <div style="color:var(--text-faint); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em">Källa</div>
-            <div>{{ installation.source_title }}</div>
-            <div style="color:var(--text-dim); font-size:0.85rem">
-              {{ installation.source_publisher or "" }}{% if installation.source_publisher and installation.source_type %} · {% endif %}{{ source_badge(installation, root) }}{% if installation.source_published_date %} · {{ installation.source_published_date }}{% endif %}
-            </div>
-            {% if installation.source_url %}
-            <a href="{{ installation.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
-            {% else %}
-            <span style="color:var(--text-faint)">Ingen offentlig länk (t.ex. internt dokument).</span>
-            {% endif %}
-          </div>
-          {% else %}
-          <div style="margin-bottom:14px; color:var(--text-dim)">Ingen källa kopplad ännu.</div>
-          {% endif %}
-
-          {% if installation.notes %}
-          <details class="annotation source-detail">
-            <summary>Detaljer från källan</summary>
-            <div class="card-body">
-              <p style="white-space:pre-line; margin:0">{{ installation.notes }}</p>
-            </div>
-          </details>
-          {% endif %}
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div class="empty-state">Inga installationer registrerade.</div>
-      {% endif %}
-    </details>
+    {# ("RWI - Mission #8H" mission) The former "Historisk EMAS-kontext"
+       card that used to live here was MOVED (not duplicated) to a
+       prominent, un-collapsed position right below the top grid - see
+       that mission's own comment there for why. Nothing about
+       "Intelligenshistorik" above or "Underlag" below changed. #}
 
     {# ("RWI - Juicy Design Mission #4" mission, polished by "Visual Polish
        Checkpoint") "Underlag" - one section per distinct real Source cited

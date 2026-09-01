@@ -581,6 +581,54 @@ def _current_emas_item(
     return dedup_key, item
 
 
+# ("RWI - Mission #8I.1" mission) A concise, POSITIVE top-of-page summary
+# of what RWI has documented - built purely from `_installation_view()`'s
+# own already-public fields (type/runway_end/install_year/confirmed_vendor),
+# never Installation.status (Mission #8G's own finding: status carries no
+# freshness/current-presence meaning and must never be read as if it did).
+# A pure display aggregation over already-existing, already-public data -
+# no new persistence, no new domain concept, matching the same precedent
+# _evidence_summary_view()/_market_category_distribution_view() already
+# established for this codebase. Returns None when there are no
+# Installation rows at all, so the caller can fall back to the existing
+# "Verifierad förekomst" framing unchanged (Part E: never fabricate
+# presence for an airport with nothing documented).
+#
+# Deliberately conservative on ambiguity: a field is only summarized when
+# every Installation agrees on it (type_label/vendor_label are None, and
+# year_label becomes a range, the moment two rows disagree) - never
+# silently picks one value out of several real, different ones.
+def _installed_base_summary_view(installations: "list[SimpleNamespace]") -> "SimpleNamespace | None":
+    if not installations:
+        return None
+    count = len(installations)
+    types = sorted({i.type for i in installations if i.type})
+    type_label = types[0] if len(types) == 1 else None
+    ends: "list[str]" = []
+    for installation in installations:
+        if installation.runway_end and installation.runway_end not in ends:
+            ends.append(installation.runway_end)
+    if len(ends) == 0:
+        ends_label = None
+    elif len(ends) == 1:
+        ends_label = ends[0]
+    else:
+        ends_label = " och ".join([", ".join(ends[:-1]), ends[-1]]) if len(ends) > 2 else " och ".join(ends)
+    years = sorted({i.install_year for i in installations if i.install_year})
+    if not years:
+        year_label = None
+    elif len(years) == 1:
+        year_label = str(years[0])
+    else:
+        year_label = f"{years[0]}–{years[-1]}"
+    vendors = sorted({i.confirmed_vendor for i in installations if i.confirmed_vendor})
+    vendor_label = vendors[0] if len(vendors) == 1 else None
+    return SimpleNamespace(
+        count=count, type_label=type_label, ends_label=ends_label,
+        year_label=year_label, vendor_label=vendor_label,
+    )
+
+
 def _current_emas_views(airport: Airport) -> list[SimpleNamespace]:
     """Merges the two governed current-EMAS pathways (reviewed
     PhysicalInstallationIdentity and raw NASR current-presence
@@ -655,8 +703,9 @@ def _is_public_signal(signal: Signal) -> bool:
 #     mission - see BOS_APPARENT_DUPLICATION_CAUSE in the mission's final
 #     report. RESOLUTION: Installation rows no longer feed this
 #     chronological timeline at all - they remain fully presented,
-#     source-and-all, in their own dedicated "Historisk EMAS-kontext"
-#     disclosure below (_installation_view, unchanged), which already
+#     source-and-all, in their own dedicated "EMAS-installation" section
+#     (_installation_view, unchanged; renamed from "Historisk EMAS-kontext"
+#     and promoted to prominence by "RWI - Mission #8H"), which already
 #     honestly labels an undated row as current physical state rather than
 #     a historical event (airport_detail.html's own dated/undated label).
 #
@@ -736,7 +785,8 @@ def _intelligence_history_view(
     "Intelligenshistorik" section - Signals and Incidents only (see this
     module's own "public information model" note above for why Installation
     rows were removed from this merge in Mission #4; they keep their own
-    dedicated, unchanged "Historisk EMAS-kontext" disclosure instead).
+    dedicated "EMAS-installation" section instead - unchanged data, renamed
+    and promoted to prominence by "RWI - Mission #8H").
     Deliberately implies no causal relationship between adjacent events -
     each event stands on its own real date and its own real source."""
     dated: list[SimpleNamespace] = []
@@ -1413,8 +1463,10 @@ def _airport_location_view(airport: Airport) -> "SimpleNamespace | None":
     )
 
 
-# ("RWI - Juicy Design Mission #4" mission) "Bevis" - one row per distinct
-# real Source cited by this airport's public Signals or Installations
+# ("RWI - Juicy Design Mission #4" mission; generalized "RWI - Mission #8F -
+# Airport Evidence Presentation" mission) "Bevis" - one row per distinct
+# real Source cited by this airport's public Signals, Installations, or -
+# new in #8F - directly by the airport's own governed SourceAssertions
 # (deduplicated by the Source's own title+URL+published_date, since neither
 # view model carries the raw Source.id and two distinct real Source rows
 # sharing all three is not a real risk in this dataset), each optionally
@@ -1429,7 +1481,62 @@ def _airport_location_view(airport: Airport) -> "SimpleNamespace | None":
 # still renders here as a plain, source-backed citation - Section 9's own
 # instruction that evidence must "feel like supporting intelligence" even
 # for an airport (e.g. BOS) with no transcribed claim yet.
+#
+# #8F ROOT-CAUSE FIX: Installation.source_id is a single FK - an airport
+# with several governed SourceAssertions (e.g. London City: 3 primary
+# sources, 2 Installation rows both pointing at just one of them) could
+# only ever surface ONE citation here, even though more real, preserved
+# evidence exists. This function now ALSO walks `airport.source_assertions`
+# directly (Airport.source_assertions - a real, already-existing
+# relationship, already used by _current_emas_views()'s own NASR branch;
+# no schema change) and, for each one, runs the SAME claims lookup a
+# Signal-linked assertion already gets - so a future record_manual_claim_evidence()
+# call against any of these rows appears here automatically, with no
+# further presentation change (#8F's own explicit acceptance criterion).
+#
+# Scoped to assertion_type in {"project_construction", "historical"} -
+# narrative, evidence-shaped claims - deliberately EXCLUDING "runway_end"
+# (NASR/FAA-cycle presence pings, already the exclusive input to "EMAS
+# idag" - see _current_emas_views(), untouched by this mission) and
+# "airport_inventory" (raw registry/FAA-CSV rows, e.g. an AirportAlias's
+# own evidence row - identity plumbing, not narrative evidence a reader
+# would recognize as a supporting source). Processed AFTER the Signal loop
+# but BEFORE the Installation loop: a Signal-linked assertion is already
+# correctly claim-aware and must not be reprocessed or duplicated; the
+# Installation loop remains a fallback for the real, pre-existing case
+# (e.g. the Brazil/Gadelius one-off-script imports) where an Installation
+# cites a bare Source with no SourceAssertion at all.
+def _airport_source_assertion_evidence_view(
+    airport: Airport, *, session: Session,
+) -> "list[tuple[tuple, SimpleNamespace]]":
+    entries: "list[tuple[tuple, SimpleNamespace]]" = []
+    for assertion in airport.source_assertions:
+        if assertion.assertion_type not in ("project_construction", "historical"):
+            continue
+        source = assertion.source
+        if source is None or not source.title:
+            continue
+        source_type_label, source_type_anchor, source_type_tooltip = _source_type_view(source.source_type)
+        key = (source.title, source.url, source.published_date)
+        found = get_manual_claims_for_source_assertion(session, assertion.id)
+        claims = tuple(_claim_view(c) for c in found) if found else ()
+        item = SimpleNamespace(
+            source_title=source.title,
+            source_publisher=source.publisher,
+            source_type=source.source_type,
+            source_type_label=source_type_label,
+            source_type_anchor=source_type_anchor,
+            source_type_tooltip=source_type_tooltip,
+            source_url=source.url,
+            source_published_date=source.published_date,
+            claims=claims,
+        )
+        entries.append((key, item))
+    return entries
+
+
 def _airport_evidence_view(
+    airport: Airport,
     orm_signals_by_id: dict[int, Signal],
     signal_views: list[SimpleNamespace],
     installation_views: list[SimpleNamespace],
@@ -1457,6 +1564,12 @@ def _airport_evidence_view(
             source_published_date=view.source_published_date,
             claims=claims,
         )
+        order.append(key)
+
+    for key, item in _airport_source_assertion_evidence_view(airport, session=session):
+        if key in items:
+            continue
+        items[key] = item
         order.append(key)
 
     for view in installation_views:
@@ -1515,6 +1628,7 @@ def _airport_view(
         key=_signal_sort_key,
     )
     installation_views = [_installation_view(i) for i in airport.installations]
+    installed_base_summary = _installed_base_summary_view(installation_views)
     current_emas = _current_emas_views(airport)
     incident_views = [
         SimpleNamespace(
@@ -1539,7 +1653,7 @@ def _airport_view(
     intelligence_history_dated, intelligence_history_undated = _intelligence_history_view(
         incident_views, signal_views
     )
-    evidence = _airport_evidence_view(orm_signals_by_id, signal_views, installation_views, session=session)
+    evidence = _airport_evidence_view(airport, orm_signals_by_id, signal_views, installation_views, session=session)
     view = SimpleNamespace(
         id=airport.id,
         # ("RWI - Juicy Design Mission #1" mission) The single headline
@@ -1597,6 +1711,7 @@ def _airport_view(
         signals=primary_signals,
         funding_signals=funding_signals,
         installations=installation_views,
+        installed_base_summary=installed_base_summary,
         # Replaces the former separate reviewed_identities/nasr_presence
         # fields (docs/product/public-emas-protected-direction-presentation.md)
         # with one deduplicated, protected-direction-led list - both old
@@ -1609,7 +1724,8 @@ def _airport_view(
         # ("RWI - Juicy Design Mission #4" mission) See
         # _intelligence_history_view's own docstring - Signal/Incident
         # chronology only, Installation history moved out entirely (now
-        # exclusively in the "Historisk EMAS-kontext" disclosure below).
+        # exclusively in the "EMAS-installation" section below - renamed
+        # from "Historisk EMAS-kontext" by "RWI - Mission #8H").
         intelligence_history_dated=intelligence_history_dated,
         intelligence_history_undated=intelligence_history_undated,
     )

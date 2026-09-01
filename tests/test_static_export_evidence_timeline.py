@@ -1,9 +1,11 @@
 """Tests for "RWI - Juicy Design Mission #4" (Evidence + Timeline
 Intelligence): the "Intelligenshistorik" chronological Signal/Incident
-event view, the honest dated/undated split, the "Historisk EMAS-kontext"
-disclosure (Installation rows, no longer merged into the timeline), and the
-new "Bevis" (evidence) section built from build.py's own governed read
-service.
+event view, the honest dated/undated split, the "EMAS-installation"
+presentation (Installation rows, no longer merged into the timeline; renamed
+from "Historisk EMAS-kontext" and promoted to a prominent, un-collapsed
+position by "RWI - Mission #8H" - the underlying data/fields these tests
+exercise are unchanged), and the new "Bevis" (evidence) section built from
+build.py's own governed read service.
 
 Every test uses a synthetic, isolated in-memory SQLite database - never the
 real data/runway_safe.db and never the real Signal69/BOS Signal #3.
@@ -96,7 +98,7 @@ def test_installations_do_not_appear_in_intelligence_history(tmp_path):
         airport, dated_installation, undated_installation, *_ = _seed_bos_rich(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = _airport_html(tmp_path, airport.id)
-    history = html.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history = html.split("Intelligenshistorik")[1].split("Underlag")[0]
     assert f'id="installation-{dated_installation.id}"' not in history
     assert f'id="installation-{undated_installation.id}"' not in history
     # Both installations are still fully presented, just in their own
@@ -129,7 +131,7 @@ def test_current_construction_signal_gets_active_opportunity_badge_in_history(tm
         airport = _seed_bos_shaped(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = _airport_html(tmp_path, airport.id)
-    history = html.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history = html.split("Intelligenshistorik")[1].split("Underlag")[0]
     assert 'class="lifecycle active"' in history
     assert "Aktuell möjlighet" in history
 
@@ -143,7 +145,7 @@ def test_old_incident_derived_signal_never_gets_active_opportunity_badge(tmp_pat
         airport, *_ = _seed_bos_rich(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = _airport_html(tmp_path, airport.id)
-    history = html.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history = html.split("Intelligenshistorik")[1].split("Underlag")[0]
     incident_block = history.split("Test replacement after incident")[1][:600]
     assert 'class="lifecycle active"' not in incident_block
     assert ("Behöver research" in incident_block) or ("Historik" in incident_block)
@@ -161,8 +163,8 @@ def test_intelligence_history_ordering_is_deterministic_across_rebuilds(tmp_path
         build_site(tmp_path / "site" / "b", session=session, today=date(2026, 8, 30))
     html_a = (tmp_path / "site" / "a" / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
     html_b = (tmp_path / "site" / "b" / "airports" / f"{airport.id}.html").read_text(encoding="utf-8")
-    history_a = html_a.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
-    history_b = html_b.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history_a = html_a.split("Intelligenshistorik")[1].split("Underlag")[0]
+    history_b = html_b.split("Intelligenshistorik")[1].split("Underlag")[0]
     assert history_a == history_b
 
 
@@ -172,7 +174,7 @@ def test_intelligence_history_dated_events_sorted_chronologically(tmp_path):
         airport, *_ = _seed_bos_rich(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = _airport_html(tmp_path, airport.id)
-    history = html.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history = html.split("Intelligenshistorik")[1].split("Underlag")[0]
     years_in_order = [int(y) for y in
                        __import__("re").findall(r'timeline-year mono">(\d{4})<', history)]
     assert years_in_order == sorted(years_in_order)
@@ -192,7 +194,7 @@ def test_signal_with_source_date_but_no_event_year_lands_undated_with_reason(tmp
         airport, signal = _seed_sacheon_shaped(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = _airport_html(tmp_path, airport.id)
-    history = html.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history = html.split("Intelligenshistorik")[1].split("Underlag")[0]
     # The source's own real year (2025) must never appear as this event's
     # own timeline-year - it has none.
     assert '<div class="timeline-year mono">2025</div>' not in history
@@ -212,7 +214,7 @@ def test_undated_event_with_no_source_date_either_gets_no_date_reason(tmp_path):
         session.add(undated_signal); session.commit()
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = _airport_html(tmp_path, airport.id)
-    history = html.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history = html.split("Intelligenshistorik")[1].split("Underlag")[0]
     assert "Varken händelsens tidpunkt eller källans datum är kända." in history
 
 
@@ -226,7 +228,7 @@ def test_sacheon_intelligence_history_has_exactly_one_undated_event_no_dated(tmp
         airport, signal = _seed_sacheon_shaped(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = _airport_html(tmp_path, airport.id)
-    history = html.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history = html.split("Intelligenshistorik")[1].split("Underlag")[0]
     assert history.count("timeline-rail") == 1  # exactly one event, dated or undated
     assert history.count(f'signals/{signal.id}.html') == 1
     assert '<div class="timeline">' not in history  # no dated spine at all, only the undated one
@@ -256,7 +258,7 @@ def test_funding_event_shows_total_grant_value_with_non_emas_contract_caveat(tmp
         airport, *_ = _seed_bos_rich(session)
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
     html = _airport_html(tmp_path, airport.id)
-    history = html.split("Intelligenshistorik")[1].split("Historisk EMAS-kontext")[0]
+    history = html.split("Intelligenshistorik")[1].split("Underlag")[0]
     assert "$9,000,000" in history
     assert "anger inte automatiskt ett EMAS-kontraktsvärde" in history
 
@@ -328,7 +330,7 @@ def test_intelligence_history_and_evidence_view_functions_are_read_only():
 # ---------------------------------------------------------------------------
 # Mission #2/#3 structural regression: the frozen upper Airport Detail
 # composition (hero status, quick-facts, phase strip, "Vad händer just nu",
-# Runways, EMAS idag, Plats) is untouched by this mission.
+# Runways, Verifierad förekomst, Plats) is untouched by this mission.
 # ---------------------------------------------------------------------------
 
 def test_frozen_upper_airport_detail_composition_unchanged_for_bos(tmp_path):
@@ -341,7 +343,11 @@ def test_frozen_upper_airport_detail_composition_unchanged_for_bos(tmp_path):
     assert 'class="hero-status hero-status-lg construction"' in html
     assert "Vad händer just nu" in html
     assert ">Banor<" in html
-    assert ">EMAS idag<" in html
+    # ("RWI - Mission #8H" renamed "EMAS idag" to "Verifierad förekomst";
+    # "RWI - Mission #8I.1" then makes the top card lead with a positive
+    # "Dokumenterad EMAS" summary once real Installation rows exist, as
+    # they do for this fixture - the underlying data/logic is unchanged.
+    assert ">Dokumenterad EMAS<" in html
     assert "project_intelligence" not in html  # locale key never leaks raw
     assert "Projektintelligens" in html
 

@@ -13,8 +13,18 @@ LOCALES = {
         "confidence": "Confidence", "year": "År", "score": "Analytisk score",
         "source": "Källa", "completed": "Färdigställd",
         "runways": "Banor",
-        "current_emas": "EMAS idag",
-        "projects": "Projekt och bevakning", "historical_emas_context": "Historisk EMAS-kontext",
+        # ("RWI - Mission #8H" mission) Renamed from "EMAS idag"/"Historisk
+        # EMAS-kontext": Mission #8G proved neither _current_emas_views()
+        # pathway (reviewed physical identity, or a one-time FAA/NASR
+        # import) actually certifies live/current presence in the ordinary
+        # sense of "idag" ("today") - and that "historisk" risked reading
+        # as "no longer present" for a documented, still-current
+        # installation like London City's. The KEY names are unchanged
+        # (minimizing blast radius - both remain single-use, see build.py's
+        # own call sites) even though their VALUES no longer describe what
+        # their old names implied.
+        "current_emas": "Verifierad förekomst",
+        "projects": "Projekt och bevakning", "historical_emas_context": "EMAS-installation",
         "research_watch": "Bevakas – forskningskandidat", "under_review": "Projektuppgift under granskning",
         "hero_statement": "Global intelligens om EMAS-installationer, projekt och bansäkerhet.",
         "view_all_signals": "Se alla signaler",
@@ -90,8 +100,8 @@ LOCALES = {
         "confidence": "Confidence", "year": "Year", "score": "Analytical score",
         "source": "Source", "completed": "Completed",
         "runways": "Runways",
-        "current_emas": "EMAS today",
-        "projects": "Projects and watch items", "historical_emas_context": "Historical EMAS context",
+        "current_emas": "Verified presence",
+        "projects": "Projects and watch items", "historical_emas_context": "EMAS installation",
         "research_watch": "Watch item – research candidate", "under_review": "Project record under review",
         "hero_statement": "Global intelligence on EMAS installations, projects and runway safety.",
         "view_all_signals": "View all signals",

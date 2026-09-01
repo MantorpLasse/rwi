@@ -216,4 +216,4 @@ def test_intelligenshistorik_and_upper_sections_unaffected(tmp_path):
     assert "Vad händer just nu" in html
     assert "Intelligenshistorik" in html
     assert ">Banor<" in html
-    assert ">EMAS idag<" in html
+    assert ">Verifierad förekomst<" in html  # renamed from "EMAS idag" by "RWI - Mission #8H"
