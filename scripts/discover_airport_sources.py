@@ -42,6 +42,7 @@ from app.discovery.dedup import DedupedResult, deduplicate_results
 from app.discovery.identity import AirportIdentity
 from app.discovery.query import SearchQuery, build_search_plan
 from app.discovery.search import SearchOutcome, SearchOutcomeStatus, SearchProvider
+from app.discovery.triage import PriorityBand, TriagedResult, triage_results
 
 # Mission #9F: Brave is RWI's first real, legitimately-configured search
 # provider (see the Mission #9E HQ report's provider recon and the Mission
@@ -70,6 +71,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--json", action="store_true", help="Emit JSON instead of human-readable text."
+    )
+    parser.add_argument(
+        "--triage",
+        action="store_true",
+        help="Group deduplicated results into explainable HIGH/MEDIUM/LOW review "
+        "priority bands (Mission #10B). Ranks and explains only - never implies "
+        "any result is verified evidence. No effect without --provider.",
     )
     return parser
 
@@ -150,12 +158,78 @@ def _print_human(
         print(f"\n  {r.title}\n  {r.url}\n  {r.snippet}\n  found by: {found_by}")
 
 
+_DOMAIN_LABEL = {
+    "REGULATOR": "[Regulator]",
+    "VENDOR_CONTRACTOR": "[Vendor/contractor]",
+}
+
+
+def _print_human_triage(
+    identity: AirportIdentity,
+    plan: list[SearchQuery],
+    outcomes: list[SearchOutcome],
+    triaged: list[TriagedResult],
+    provider_name: str,
+) -> None:
+    """Reviewer-facing HIGH/MEDIUM/LOW output (Mission #10B Part L/N).
+    RANK + EXPLAIN only - band names never imply verification; see
+    app.discovery.triage.PriorityBand's own docstring. No internal
+    numeric score is ever printed here."""
+    print(f"Airport identity: {identity.name}")
+    print(f"\nProvider: {provider_name}  |  Queries executed: {len(outcomes)}")
+
+    bands: dict[PriorityBand, list[TriagedResult]] = {PriorityBand.HIGH: [], PriorityBand.MEDIUM: [], PriorityBand.LOW: []}
+    for t in triaged:
+        bands[t.band].append(t)
+
+    for band in (PriorityBand.HIGH, PriorityBand.MEDIUM):
+        items = bands[band]
+        print(f"\n{band.value} PRIORITY ({len(items)})")
+        for t in items:
+            r = t.deduped.result
+            label = _DOMAIN_LABEL.get(t.domain_category.value, "")
+            prefix = f"{label} " if label else ""
+            found_by = ", ".join(q.rendered for q in t.deduped.found_by)
+            print(f"\n  {prefix}{r.title}")
+            print(f"  why: {'; '.join(t.reasons)}")
+            print(f"  {r.url}")
+            print(f"  found by: {found_by}")
+
+    low = bands[PriorityBand.LOW]
+    print(f"\nLOW PRIORITY ({len(low)}) - compact, not discarded")
+    for t in low:
+        r = t.deduped.result
+        print(f"  - {r.title} | {r.url}")
+
+
+def _print_json_triage_section(triaged: list[TriagedResult]) -> dict:
+    """Machine-readable triage section (Mission #10B Part N). No internal
+    numeric score field exists anywhere in this structure."""
+    bands: dict[str, list[dict]] = {"HIGH": [], "MEDIUM": [], "LOW": []}
+    for t in triaged:
+        r = t.deduped.result
+        bands[t.band.value].append(
+            {
+                "priority_band": t.band.value,
+                "domain_category": t.domain_category.value,
+                "reasons": list(t.reasons),
+                "title": r.title,
+                "url": r.url,
+                "snippet": r.snippet,
+                "provider": r.provider,
+                "found_by": [q.rendered for q in t.deduped.found_by],
+            }
+        )
+    return bands
+
+
 def _print_json(
     identity: AirportIdentity,
     plan: list[SearchQuery],
     outcomes: list[SearchOutcome],
     deduped: list[DedupedResult],
     provider_name: str | None,
+    triaged: list[TriagedResult] | None = None,
 ) -> None:
     payload = {
         "identity": {
@@ -195,6 +269,8 @@ def _print_json(
             for item in deduped
         ],
     }
+    if triaged is not None:
+        payload["triage"] = _print_json_triage_section(triaged)
     print(json.dumps(payload, indent=2))
 
 
@@ -223,8 +299,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan, outcomes, deduped = run(identity, provider=provider)
     provider_name = provider.name if provider is not None else None
 
+    triaged: list[TriagedResult] | None = None
+    if args.triage and provider_name is not None:
+        triaged = triage_results(deduped, identity=identity)
+
     if args.json:
-        _print_json(identity, plan, outcomes, deduped, provider_name)
+        _print_json(identity, plan, outcomes, deduped, provider_name, triaged)
+    elif triaged is not None:
+        _print_human_triage(identity, plan, outcomes, triaged, provider_name)
     else:
         _print_human(identity, plan, outcomes, deduped, provider_name)
     return 0

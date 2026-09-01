@@ -136,3 +136,27 @@ def test_main_json_output_is_valid_json(capsys: pytest.CaptureFixture):
 def test_main_missing_required_name_errors(capsys: pytest.CaptureFixture):
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+def test_json_output_has_no_triage_key_when_triage_not_requested(capsys: pytest.CaptureFixture):
+    """Mission #10B Part O #21: normal non-triage CLI behavior is unchanged."""
+    import json
+
+    exit_code = cli.main(["--name", "Test Airport", "--json"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    payload = json.loads(out)
+    assert "triage" not in payload
+
+
+def test_triage_flag_without_provider_behaves_identically_to_no_triage_flag(capsys: pytest.CaptureFixture):
+    """--triage has no effect without --provider (Mission #10B): output
+    must be byte-identical to the pre-existing no-provider behavior."""
+    baseline_code = cli.main(["--name", "London City Airport", "--iata", "LCY", "--icao", "EGLC"])
+    baseline_out = capsys.readouterr().out
+
+    triage_code = cli.main(["--name", "London City Airport", "--iata", "LCY", "--icao", "EGLC", "--triage"])
+    triage_out = capsys.readouterr().out
+
+    assert baseline_code == triage_code == 0
+    assert baseline_out == triage_out
