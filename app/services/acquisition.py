@@ -9,7 +9,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.acquisition.faa import FAAAcquisitionProvider
+from app.acquisition.faa import AcquisitionProvider
 from app.models import AcquisitionRun, AcquisitionRunStatus, AcquisitionSource, Snapshot
 
 
@@ -17,7 +17,17 @@ logger = logging.getLogger(__name__)
 
 
 class AcquisitionService:
-    def __init__(self, session: Session, provider: FAAAcquisitionProvider) -> None:
+    """Provider-neutral by construction and now accurately typed as such
+    (Mission #11B Part E) - `provider` accepts any object satisfying
+    app.acquisition.faa.AcquisitionProvider's structural Protocol
+    (FAAAcquisitionProvider, MACGranicusAcquisitionProvider,
+    GenericWebAcquisitionProvider all already do). Error messages below
+    still say "FAA" in a few places - a pre-existing, real but cosmetic
+    inaccuracy (this service has always been called by MAC's own capture
+    script too); left as-is here since fixing wording is out of this
+    mission's scope and changing it is not required for correctness."""
+
+    def __init__(self, session: Session, provider: AcquisitionProvider) -> None:
         self.session = session
         self.provider = provider
 

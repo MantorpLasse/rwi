@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
+from typing import Protocol, runtime_checkable
 
 import httpx
 
@@ -30,6 +31,23 @@ class AcquisitionPayload:
     content_type: str | None
     duration_seconds: float
     provider_version: str
+
+
+@runtime_checkable
+class AcquisitionProvider(Protocol):
+    """Provider-neutral acquisition boundary (Mission #11B Part E). Every
+    real provider - FAAAcquisitionProvider (this module),
+    MACGranicusAcquisitionProvider, GenericWebAcquisitionProvider - has
+    always duck-typed this exact shape; this Protocol makes that
+    structural, not just conventional, and lets
+    app.services.acquisition.AcquisitionService's constructor be typed
+    accurately without changing ANY runtime behavior (Protocol
+    satisfaction is structural - no existing provider needs to change)."""
+
+    source_url: str
+    version: str
+
+    def retrieve(self) -> AcquisitionPayload: ...
 
 
 class FAAAcquisitionProvider:
