@@ -82,7 +82,7 @@ from typing import Sequence
 
 from sqlalchemy.orm import Session
 
-from app.extraction.generic_pdf import extract_pdf
+from app.extraction.dispatch import extract_document
 from app.models import Airport
 from app.selection.fragment_selection import AirportIdentityContext, select_fragments
 from app.selection.review import ReviewDecision, apply_keep_decisions
@@ -239,7 +239,7 @@ def run_persist(config: PersistConfig) -> dict:
                 name=config.identity_name, iata_code=config.identity_iata, icao_code=config.identity_icao,
             )
 
-        document = extract_pdf(loaded.payload, document_identity=loaded.document_identity, media_type=loaded.media_type)
+        document = extract_document(loaded.payload, document_identity=loaded.document_identity, media_type=loaded.media_type)
         selection = select_fragments(document, airport_identity=identity_context)
         reviews = apply_keep_decisions(
             selection, keep_indices=config.keep_indices, document_title=source_metadata.title, url=source_metadata.url,

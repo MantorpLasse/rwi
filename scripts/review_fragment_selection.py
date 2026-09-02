@@ -38,7 +38,7 @@ from typing import Sequence
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.extraction.generic_pdf import extract_pdf
+from app.extraction.dispatch import extract_document
 from app.selection.fragment_selection import AirportIdentityContext, select_fragments
 from app.selection.identity_guard_demo import evaluate_candidate_fragment_identity
 from app.selection.review import ReviewDecision, apply_keep_decisions
@@ -89,7 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Could not load Snapshot: {exc}", file=sys.stderr)
             return 2
 
-        document = extract_pdf(loaded.payload, document_identity=loaded.document_identity, media_type=loaded.media_type)
+        document = extract_document(loaded.payload, document_identity=loaded.document_identity, media_type=loaded.media_type)
         selection = select_fragments(document, airport_identity=identity)
 
         print(_DISCLAIMER)
