@@ -179,43 +179,111 @@
    V2.2) rather than inventing a third grid class. #}
 <div class="bottom-grid">
 
-  <div class="card panel-strong map-card">
-    <div class="card-header">{{ t("global_intelligence") }}<span class="card-action" style="color:var(--text-faint); font-weight:400">{{ t("global_intelligence_eyebrow") }}</span></div>
-    {% if market_summary %}
+  {# ("RWI - Mission #23C" mission) Global Footprint: ONE card, TWO
+     explicit, CSS-only (no-JS-required) modes - Installerad bas (governed
+     Installation data, never Signal-driven) and Aktuell intelligens (the
+     pre-existing, byte-for-byte unchanged Signal/market_summary map from
+     Mission #2/Juicy Design #2). The two radio inputs are real, focusable,
+     labelled <input>s (not hidden via display:none, so they stay in the
+     tab order and screen-reader-visible) - see style.css's own
+     .footprint-radio/.footprint-panel rules for the pure :checked ~
+     sibling-selector toggle. Both panels' full HTML always exists in the
+     generated page; only CSS visibility changes - so Installed Base
+     information is never inaccessible without JavaScript (see this
+     mission's own Part K/X). #}
+  <div class="card panel-strong map-card footprint-card">
+    <div class="card-header">{{ t("footprint_heading") }}</div>
     <div class="card-body">
-      <svg class="global-map" viewBox="0 0 {{ map_viewbox_width }} {{ map_viewbox_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('global_intelligence') }}">
-        <defs>
-          <radialGradient id="map-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.55"/>
-            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
-          </radialGradient>
-        </defs>
-        {# Real world land silhouette (see PROVENANCE.md) - the actual
-           visual "wow", never a decorative stand-in. #}
-        <path d="{{ world_land_path }}" class="map-land" fill-rule="evenodd"/>
-        {% for node in global_intelligence %}
-        {% if node.is_dominant %}<circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius * 2.6 }}" fill="url(#map-glow)"/>{% endif %}
-        {% endfor %}
-        {% for node in global_intelligence %}
-        <circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius }}" class="map-node{{ ' map-node-dominant' if node.is_dominant else '' }}">
-          <title>{{ node.country }}: {{ node.count }} signaler ({{ node.pct_of_total }}% av aktiviteten)</title>
-        </circle>
-        {% endfor %}
-      </svg>
-      <div class="map-legend">
-        {% for m in market_summary %}
-        <div class="map-legend-item{{ ' map-legend-item-dominant' if m.is_dominant else '' }}">
-          <span class="map-legend-flag">{{ m.flag or "" }}</span>
-          <span class="map-legend-country">{{ m.country }}</span>
-          <span class="map-legend-pct mono">{{ m.pct_of_total }}%</span>
-          <span class="map-legend-count">{{ m.count }} signaler</span>
+      <input type="radio" name="footprint-mode" id="footprint-mode-installed" class="footprint-radio" checked>
+      <input type="radio" name="footprint-mode" id="footprint-mode-current" class="footprint-radio">
+      <div class="footprint-toggle" role="group" aria-label="{{ t('footprint_heading') }}">
+        <label for="footprint-mode-installed" class="footprint-toggle-label footprint-toggle-label-installed">{{ t("footprint_mode_installed") }}</label>
+        <label for="footprint-mode-current" class="footprint-toggle-label footprint-toggle-label-current">{{ t("footprint_mode_current") }}</label>
+      </div>
+
+      {# --- MODE 1: Installerad bas - governed Installation data only --- #}
+      <div class="footprint-panel footprint-panel-installed">
+        <p class="footprint-explain">{{ t("footprint_installed_explain") }}</p>
+        {% if installed_base_global %}
+        <svg class="global-map" viewBox="0 0 {{ map_viewbox_width }} {{ map_viewbox_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('footprint_mode_installed') }}">
+          <path d="{{ world_land_path }}" class="map-land" fill-rule="evenodd"/>
+          {% for node in installed_base_global %}
+          {% if node.x is not none %}
+          <circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius }}" class="map-node map-node-installed">
+            <title>{{ node.country }}: {{ node.airport_count }} {{ "flygplats" if node.airport_count == 1 else "flygplatser" }}</title>
+          </circle>
+          {% endif %}
+          {% endfor %}
+        </svg>
+        <p class="footprint-disclosure">{{ t("footprint_disclosure") }}</p>
+        <div class="footprint-country-list">
+          {% for node in installed_base_global %}
+          <div class="footprint-country">
+            <div class="footprint-country-header">
+              <span class="map-legend-flag">{{ node.flag or "" }}</span>
+              <span class="map-legend-country">{{ node.country }}</span>
+              <span class="footprint-country-count">{{ node.airport_count }} {{ "flygplats" if node.airport_count == 1 else "flygplatser" }} med dokumenterad EMAS</span>
+              {% if node.x is none %}<span class="footprint-no-marker">({{ t("footprint_no_marker") }})</span>{% endif %}
+            </div>
+            <ul class="footprint-airport-list">
+              {% for a in node.airports %}
+              <li>
+                <a href="{{ root }}/airports/{{ a.id }}.html">{{ airport_label(a.code, a.name) }} {{ a.name }}</a>
+                {% if a.type_label %}<span class="footprint-tag">{{ a.type_label }}</span>{% endif %}
+                <span class="footprint-tag">{% if a.year_label %}Installerad {{ a.year_label }}{% else %}{{ t("footprint_year_unknown") }}{% endif %}</span>
+                {% if a.ends_label %}<span class="footprint-tag">Bana {{ a.ends_label }}</span>{% endif %}
+                <span class="footprint-tag{{ ' footprint-tag-confirmed' if a.vendor_label else '' }}">{% if a.vendor_label %}Bekräftad leverantör: {{ a.vendor_label }}{% else %}{{ t("footprint_vendor_unconfirmed") }}{% endif %}</span>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endfor %}
         </div>
-        {% endfor %}
+        {% else %}
+        <div class="empty-state">{{ t("footprint_empty") }}</div>
+        {% endif %}
+      </div>
+
+      {# --- MODE 2: Aktuell intelligens - the pre-existing Signal/market
+         map, moved here verbatim, unmodified data/logic (Mission #2/Juicy
+         Design #2/#2.3/#2.4). #}
+      <div class="footprint-panel footprint-panel-current">
+        <p class="footprint-explain">{{ t("footprint_current_explain") }}</p>
+        {% if market_summary %}
+        <svg class="global-map" viewBox="0 0 {{ map_viewbox_width }} {{ map_viewbox_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('global_intelligence') }}">
+          <defs>
+            <radialGradient id="map-glow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.55"/>
+              <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          {# Real world land silhouette (see PROVENANCE.md) - the actual
+             visual "wow", never a decorative stand-in. #}
+          <path d="{{ world_land_path }}" class="map-land" fill-rule="evenodd"/>
+          {% for node in global_intelligence %}
+          {% if node.is_dominant %}<circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius * 2.6 }}" fill="url(#map-glow)"/>{% endif %}
+          {% endfor %}
+          {% for node in global_intelligence %}
+          <circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius }}" class="map-node{{ ' map-node-dominant' if node.is_dominant else '' }}">
+            <title>{{ node.country }}: {{ node.count }} signaler ({{ node.pct_of_total }}% av aktiviteten)</title>
+          </circle>
+          {% endfor %}
+        </svg>
+        <div class="map-legend">
+          {% for m in market_summary %}
+          <div class="map-legend-item{{ ' map-legend-item-dominant' if m.is_dominant else '' }}">
+            <span class="map-legend-flag">{{ m.flag or "" }}</span>
+            <span class="map-legend-country">{{ m.country }}</span>
+            <span class="map-legend-pct mono">{{ m.pct_of_total }}%</span>
+            <span class="map-legend-count">{{ m.count }} signaler</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">Ingen aktivitetsdata ännu.</div>
+        {% endif %}
       </div>
     </div>
-    {% else %}
-    <div class="empty-state">Ingen aktivitetsdata ännu.</div>
-    {% endif %}
   </div>
 
   <div class="card panel-strong">

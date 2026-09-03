@@ -242,16 +242,27 @@ def test_static_export_produces_no_signal_no_attention_no_marknadslage_row(tmp_p
 
 
 def test_static_export_uk_map_legend_behavior_unchanged(tmp_path):
-    """United Kingdom must not newly appear in the map/legend as a
-    consequence of this Signal-less historical-baseline ingestion -
-    Mission #8B/#8C's own verified finding, locked in as a regression
-    test against the concrete LCY case."""
+    """United Kingdom must not newly appear in the SIGNAL-DRIVEN map/legend
+    (the "Aktuell intelligens" mode) as a consequence of this Signal-less
+    historical-baseline ingestion - Mission #8B/#8C's own verified finding,
+    locked in as a regression test against the concrete LCY case.
+
+    ("RWI - Mission #23C" mission) Scoped to the Current Intelligence panel
+    specifically, rather than the whole page, because Mission #23B/#23C
+    added a SECOND, independent, deliberately Installation-driven "Installerad
+    bas" panel to the same index.html - whose entire purpose is to surface
+    exactly this kind of Signal-less-but-Installation-documented country
+    (this test's own LCY fixture is the textbook case). United Kingdom now
+    legitimately appearing in THAT panel is the intended, HQ-approved #23B
+    design, not a regression of this test's own, narrower, still-true
+    claim about the Signal-driven map/legend."""
     db_path = _fresh_db(tmp_path)
     run_ingestion(db_path, allow_database_write=True)
     with _session(db_path) as session:
         build_site(tmp_path / "site", session=session, today=date(2026, 8, 31))
     index_html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
-    assert "United Kingdom" not in index_html
+    current_panel = index_html.split('class="footprint-panel footprint-panel-current"')[1]
+    assert "United Kingdom" not in current_panel
 
 
 def test_static_export_no_internal_prose_leaks_from_lcy_records(tmp_path):

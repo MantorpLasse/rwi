@@ -46,6 +46,20 @@ LOCALES = {
         # ("RWI - Juicy Design Mission #2 - V2.3" mission)
         "global_intelligence": "Global intelligens",
         "global_intelligence_eyebrow": "Var RWI ser verklig aktivitet just nu – landbaserad, inte en exakt karta",
+        # ("RWI - Mission #23C" mission) Installed Base global footprint -
+        # a second, independent map mode built from governed Installation
+        # data, never Signal data. See _installed_base_global_view()'s own
+        # docstring in build.py for the full invariant preserved here.
+        "footprint_heading": "Global närvaro",
+        "footprint_mode_installed": "Installerad bas",
+        "footprint_mode_current": "Aktuell intelligens",
+        "footprint_installed_explain": "Var Runway Safe/EMAS finns dokumenterat installerat, enligt tillgängliga källor.",
+        "footprint_current_explain": "Publicerade signals — vad som är aktuellt nu, inte en fullständig installationsöversikt.",
+        "footprint_disclosure": "Dokumenterad installation enligt tillgängliga källor. Ingen separat färskhetsverifiering görs globalt.",
+        "footprint_empty": "Inga dokumenterade installationer i denna vy.",
+        "footprint_vendor_unconfirmed": "Leverantör ej bekräftad",
+        "footprint_year_unknown": "Installationsår okänt",
+        "footprint_no_marker": "ingen kartposition ännu",
         # ("RWI - Juicy Design Mission #2 - V2.4" mission) Shortened from
         # "Viktiga utvecklingar" - the longer heading wrapped onto two
         # lines at desktop width next to the new map card. Same
@@ -120,6 +134,16 @@ LOCALES = {
         "signals_snapshot": "Signals snapshot",
         "global_intelligence": "Global intelligence",
         "global_intelligence_eyebrow": "Where RWI sees real activity right now - country-based, not a precise map",
+        "footprint_heading": "Global footprint",
+        "footprint_mode_installed": "Installed base",
+        "footprint_mode_current": "Current intelligence",
+        "footprint_installed_explain": "Where Runway Safe/EMAS is documented as installed, according to available sources.",
+        "footprint_current_explain": "Published signals - what's current now, not a complete installed-base overview.",
+        "footprint_disclosure": "Documented installation per available sources. No separate freshness verification is performed globally.",
+        "footprint_empty": "No documented installations in this view.",
+        "footprint_vendor_unconfirmed": "Vendor not confirmed",
+        "footprint_year_unknown": "Installation year unknown",
+        "footprint_no_marker": "no map position yet",
         "important_developments": "Developments",
         "important_developments_eyebrow": "Projects in the most advanced stage right now - construction, procurement or funding",
         "important_developments_empty": "No signals are currently in construction, procurement or funding.",

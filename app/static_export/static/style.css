@@ -1509,6 +1509,74 @@ nav.site a[href$="index.html"]:first-child { color: var(--text); }
 .map-legend-pct { color: var(--accent); font-weight: 600; }
 .map-legend-count { color: var(--text-faint); font-size: .78rem; }
 
+/* ("RWI - Mission #23C" mission) Global Footprint mode toggle - pure CSS,
+   no JavaScript required. Two real, focusable, labelled <input
+   type="radio"> elements (visually minimized, never display:none, so
+   keyboard/screen-reader access is unaffected) drive which
+   .footprint-panel is shown via the :checked ~ sibling combinator - see
+   index.html's own comment for the exact markup this depends on. */
+.footprint-radio {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip: rect(0 0 0 0); overflow: hidden;
+}
+.footprint-toggle { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.footprint-toggle-label {
+  padding: 7px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(139,150,172,.28);
+  color: var(--text-dim);
+  font-size: .84rem;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+}
+#footprint-mode-installed:checked ~ .footprint-toggle .footprint-toggle-label-installed,
+#footprint-mode-current:checked ~ .footprint-toggle .footprint-toggle-label-current {
+  background: var(--accent);
+  color: #0b0f1a;
+  border-color: var(--accent);
+}
+#footprint-mode-installed:focus-visible ~ .footprint-toggle .footprint-toggle-label-installed,
+#footprint-mode-current:focus-visible ~ .footprint-toggle .footprint-toggle-label-current {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.footprint-panel { display: none; }
+#footprint-mode-installed:checked ~ .footprint-panel-installed { display: block; }
+#footprint-mode-current:checked ~ .footprint-panel-current { display: block; }
+
+.footprint-explain { margin: 0 0 14px; font-size: .86rem; color: var(--text-dim); }
+.footprint-disclosure { margin: 14px 0 0; font-size: .78rem; color: var(--text-faint); font-style: italic; }
+.map-node-installed { fill: rgba(94,180,142,.55); stroke: rgba(94,180,142,.9); stroke-width: 1.2; }
+
+.footprint-country-list { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(139,150,172,.18); }
+.footprint-country-header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.footprint-country-count { color: var(--text-dim); font-size: .82rem; }
+.footprint-no-marker { color: var(--text-faint); font-size: .76rem; font-style: italic; }
+.footprint-airport-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.footprint-airport-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(139,150,172,.1);
+  font-size: .84rem;
+}
+.footprint-airport-list li:last-child { border-bottom: none; }
+.footprint-airport-list li a { color: var(--text); text-decoration: none; font-weight: 500; }
+.footprint-airport-list li a:hover { text-decoration: underline; }
+.footprint-tag {
+  font-size: .74rem;
+  color: var(--text-faint);
+  background: rgba(139,150,172,.1);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.footprint-tag-confirmed { color: var(--accent); background: rgba(242,183,5,.12); }
+
 /* Utveckling (renamed from "Viktiga utvecklingar" in V2.4 - the longer
    heading wrapped onto two lines at desktop width) - compact clickable
    rows, deliberately denser than Signalöversikt's own table (this is a
@@ -1534,6 +1602,8 @@ nav.site a[href$="index.html"]:first-child { color: var(--text); }
   .global-map { min-height: 160px; }
   .map-legend { gap: 8px 16px; }
   .important-dev-title { white-space: normal; }
+  .footprint-toggle-label { padding: 8px 14px; }
+  .footprint-airport-list li { font-size: .8rem; }
 }
 
 /* ---------------------------------------------------------------------
