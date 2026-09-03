@@ -1,4 +1,5 @@
 from app.models.airport import Airport, Runway
+from app.models.airport_coordinate import AirportCoordinate
 from app.models.runway_end import RunwayEnd
 from app.models.acquisition import AcquisitionRun, AcquisitionRunStatus, AcquisitionSource, Snapshot
 from app.models.incident import Incident
@@ -32,6 +33,7 @@ from app.models.signal_publication_action import SignalPublicationAction
 __all__ = [
     "Airport",
     "AirportAlias",
+    "AirportCoordinate",
     "AirportIdentifier",
     "AcquisitionRun",
     "AcquisitionRunStatus",
