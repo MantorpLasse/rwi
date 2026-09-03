@@ -50,6 +50,23 @@ SELECTION_VERSION = "0.1"
 # phrasings not present in Triage's own list ("engineered material
 # arresting" - singular, no "system" - and "runway safety area", a
 # genuinely different term from "runway end safety area", not a typo).
+#
+# "arrestor bed"/"arresting bed" (Mission #25J3): a real, empirically-
+# confirmed vocabulary gap - Roland Garros airport-operator Snapshot 10
+# describes its 2017 installation as "Installation of an arrestor bed at
+# point 30..." and machine Selection missed it entirely (nominated an
+# unrelated 2013 construction passage instead - see Mission #25J2's own
+# manual-range workaround for that exact case). Both are compound,
+# domain-specific phrases with negligible false-positive surface, unlike
+# a bare "arrestor" (deliberately NOT added - too broad/noisy per Mission
+# #25J3's own explicit instruction; a two-word compound phrase is far
+# less likely to collide with an unrelated sense of the word than the
+# bare noun would be). "aircraft arresting" was evaluated and NOT added:
+# no real evidence text found anywhere this session (Roland Garros,
+# Haneda, or elsewhere) actually uses that exact phrase - adding a term
+# with no observed real-world grounding would be speculative vocabulary,
+# against this repository's own established discipline of adding
+# structure only once a real, demonstrated need exists.
 STRONG_CONCEPT_TERMS: tuple[str, ...] = (
     "EMAS",
     "engineered materials arresting system",
@@ -59,6 +76,8 @@ STRONG_CONCEPT_TERMS: tuple[str, ...] = (
     "runway safety area",
     "arresting system",
     "runway safety",
+    "arrestor bed",
+    "arresting bed",
 )
 
 # Reconciled from Triage's WEAK_CONCEPT_TERMS (procurement, construction,
