@@ -104,6 +104,16 @@ from app.services.evidence_attachment_guard import (
 )
 from app.services.selection_source_metadata import build_discovery_source_metadata_for_snapshot
 from app.services.snapshot_extraction import load_snapshot_for_extraction
+from app.services.known_airport_evidence_persistence import (
+    AssertionTypeNotAllowedError,
+    KnownAirportEvidenceConflictError,
+    KnownAirportPersistenceResult,
+    PlannedKnownAirportEvidence,
+    UnknownAirportIdError,
+    UnknownRunwayIdError,
+    apply_known_airport_evidence_persistence,
+    plan_known_airport_evidence_persistence,
+)
 from app.services.stage_only_evidence_persistence import (
     PlannedStageOnlyEvidence,
     StageOnlyPersistenceResult,
@@ -176,6 +186,22 @@ def compute_stage_only_plan_fingerprint(planned: Sequence[PlannedStageOnlyEviden
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def compute_known_airport_plan_fingerprint(planned: Sequence[PlannedKnownAirportEvidence]) -> str:
+    """Mission #26D's own known-Airport counterpart to
+    compute_stage_only_plan_fingerprint() above - deliberately a THIRD,
+    SEPARATE fingerprint scheme (same rationale as that function's own
+    docstring): unlike a stage-only plan, a known-Airport plan's rows
+    carry airport_id/assertion_type, which MUST be part of what is
+    fingerprinted - two previews that differ only in which known Airport
+    was targeted must never accidentally fingerprint identically."""
+    rows = sorted(
+        (p.document_identity, p.source_locator, p.raw_fragment_hash, p.raw_text, p.airport_id, p.assertion_type)
+        for p in planned
+    )
+    payload = json.dumps({"known_airport_rows": rows}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def compute_selected_fragment_plan_fingerprint(
     planned: Sequence[PlannedGovernedEvidence], candidate_airport_ids: Sequence[int]
 ) -> str:
@@ -231,6 +257,18 @@ class PersistConfig:
     manual_page: "int | None" = None
     manual_start_char: "int | None" = None
     manual_end_char: "int | None" = None
+    # Mission #26D. Selects the THIRD, entirely separate persistence mode:
+    # app.services.known_airport_evidence_persistence, for evidence about
+    # an Airport a human has ALREADY explicitly named by its real,
+    # existing Airport.id. Mutually exclusive with stage_only (two
+    # separate identity postures - unresolved vs already-known) and with
+    # candidate_airport_ids/no_known_candidates (this mode never evaluates
+    # candidate identity at all, exactly like stage_only). When set,
+    # manual-range args are authorized exactly as they are under
+    # stage_only (see manual_mode validation below).
+    known_airport_id: "int | None" = None
+    known_airport_assertion_type: str = "airport_inventory"
+    known_airport_runway_id: "int | None" = None
 
 
 def run_persist(config: PersistConfig) -> dict:
@@ -248,6 +286,17 @@ def run_persist(config: PersistConfig) -> dict:
             "--stage-only cannot be combined with --candidate-airport-id/--no-known-candidates - "
             "stage-only persistence never evaluates candidate identity at all."
         )
+    if config.known_airport_id is not None and config.stage_only:
+        raise PersistRunnerError(
+            "--known-airport-id cannot be combined with --stage-only - these are two separate, "
+            "mutually exclusive persistence modes (Mission #26D): unresolved-identity evidence vs "
+            "evidence about an already-named, already-existing Airport."
+        )
+    if config.known_airport_id is not None and (config.candidate_airport_ids or config.no_known_candidates):
+        raise PersistRunnerError(
+            "--known-airport-id cannot be combined with --candidate-airport-id/--no-known-candidates - "
+            "known-Airport persistence never evaluates candidate identity at all."
+        )
 
     # Mission #25J2: manual-range args are all-required-together, never a
     # partial combination - a lone --manual-start-char with no page/end is
@@ -259,11 +308,11 @@ def run_persist(config: PersistConfig) -> dict:
             "--manual-page/--manual-start-char/--manual-end-char must be supplied together "
             "(all three or none)."
         )
-    if manual_mode and not config.stage_only:
+    if manual_mode and not (config.stage_only or config.known_airport_id is not None):
         raise PersistRunnerError(
-            "Manual exact-range selection is authorized ONLY through --stage-only in this "
-            "mission (Mission #25J2 Part M) - it must never become a shortcut into full "
-            "governed persistence."
+            "Manual exact-range selection is authorized ONLY through --stage-only or "
+            "--known-airport-id (Mission #25J2 Part M, extended by Mission #26D Part I) - it "
+            "must never become a shortcut into full governed persistence."
         )
     if manual_mode and config.keep_indices and config.keep_indices != frozenset({1}):
         raise PersistRunnerError(
@@ -293,6 +342,16 @@ def run_persist(config: PersistConfig) -> dict:
         "blockers": [],
         "stage_only": config.stage_only,
         "manual_range": None,
+        # Mission #26D Part N: "Preview must clearly label the mode" - one
+        # unambiguous field, set exactly once, near the top of run_persist,
+        # never left to be inferred from which other fields happen to be
+        # populated.
+        "mode": (
+            "known_airport" if config.known_airport_id is not None
+            else "stage_only" if config.stage_only
+            else "full_governed"
+        ),
+        "known_airport_id": config.known_airport_id,
     }
 
     engine = build_engine(database)
@@ -429,6 +488,119 @@ def run_persist(config: PersistConfig) -> dict:
                     "source_assertion_id": r.source_assertion_id, "source_assertion_created": r.source_assertion_created,
                 }
                 for r in apply_results_stage_only
+            ]
+            return report
+
+        # --- KNOWN-AIRPORT PATH (Mission #26D): entirely separate from
+        # both the stage-only path above and the full-governed path below
+        # - never shares governance/guard/UAC/EvidenceBag code, never
+        # touches schema_ready or PlannedGovernedEvidence. The Airport is
+        # explicit and pre-validated (fail closed on an unknown id); no
+        # candidate evaluation of any kind occurs. Returns before any
+        # full-governed code is reached. ---
+        if config.known_airport_id is not None:
+            airport = session.get(Airport, config.known_airport_id)
+            if airport is None:
+                raise PersistRunnerError(
+                    f"UNKNOWN_AIRPORT_ID: no Airport exists for id={config.known_airport_id!r} - "
+                    "known-Airport persistence never creates an Airport, and never guesses one."
+                )
+            # Mission #26D Part E: shown BEFORE any persistence, on every
+            # invocation (including pure preview) - a human reviewing this
+            # report can always see exactly which real, already-existing
+            # Airport this evidence would be attached to.
+            report["known_airport"] = {
+                "airport_id": airport.id,
+                "name": airport.name,
+                "iata_code": airport.iata_code,
+                "icao_code": airport.icao_code,
+                "country": airport.country,
+            }
+
+            planned_known_airport: list[PlannedKnownAirportEvidence] = []
+            for index, review in kept:
+                fragment = review.candidate_fragment
+                assert fragment is not None
+                try:
+                    plan = plan_known_airport_evidence_persistence(
+                        session, source_metadata, airport_id=config.known_airport_id,
+                        assertion_type=config.known_airport_assertion_type,
+                        source_locator=fragment.source_locator, raw_text=fragment.raw_text,
+                        runway_id=config.known_airport_runway_id,
+                    )
+                except (UnknownAirportIdError, UnknownRunwayIdError, AssertionTypeNotAllowedError) as exc:
+                    raise PersistRunnerError(str(exc)) from exc
+                planned_known_airport.append(plan)
+                report["planned_evidence"].append({
+                    "fragment_index": index,
+                    "source_locator": plan.source_locator,
+                    "raw_fragment_hash": plan.raw_fragment_hash,
+                    "raw_text": plan.raw_text,
+                    "airport_id": plan.airport_id,
+                    "assertion_type": plan.assertion_type,
+                    "source_would_be_created": plan.source_would_be_created,
+                    "source_id_if_existing": plan.source_id_if_existing,
+                    "source_assertion_would_be_created": plan.source_assertion_would_be_created,
+                    "source_assertion_id_if_existing": plan.source_assertion_id_if_existing,
+                    "conflict": plan.conflict,
+                    "evidence_quality": "unverified_candidate",
+                    "review_state": "unreviewed",
+                    "identity_governance": "NOT EVALUATED - identity_guard_decision/"
+                    "unknown_airport_candidate_id remain NULL. No EvidenceBag, no UAC, no "
+                    "IdentityGuard call occurs in known-Airport mode. airport_id is the caller's "
+                    "explicit, pre-validated value - never inferred, never fuzzy-matched.",
+                })
+
+            conflicts = [p.conflict for p in planned_known_airport if p.conflict]
+            fingerprint = compute_known_airport_plan_fingerprint(planned_known_airport)
+            report["plan_fingerprint"] = fingerprint
+
+            if not config.apply:
+                session.rollback()
+                return report
+
+            if conflicts:
+                session.rollback()
+                report["blockers"].extend(f"AMBIGUOUS_PROVENANCE_CONFLICT: {c}" for c in conflicts)
+                return report
+
+            if config.expected_fingerprint is None or config.expected_fingerprint != fingerprint:
+                session.rollback()
+                report["blockers"].append(
+                    f"FINGERPRINT_MISMATCH: expected {config.expected_fingerprint!r}, computed {fingerprint!r}."
+                )
+                return report
+
+            if not config.skip_backup:
+                backup_path = backup_database(database, config.backup_directory)
+                report["backup_path"] = str(backup_path)
+
+            apply_results_known_airport: list[KnownAirportPersistenceResult] = []
+            for index, review in kept:
+                fragment = review.candidate_fragment
+                assert fragment is not None
+                try:
+                    apply_results_known_airport.append(
+                        apply_known_airport_evidence_persistence(
+                            session, source_metadata, airport_id=config.known_airport_id,
+                            assertion_type=config.known_airport_assertion_type,
+                            source_locator=fragment.source_locator, raw_text=fragment.raw_text,
+                            runway_id=config.known_airport_runway_id,
+                        )
+                    )
+                except KnownAirportEvidenceConflictError as exc:
+                    session.rollback()
+                    report["blockers"].append(f"AMBIGUOUS_PROVENANCE_CONFLICT: {exc}")
+                    return report
+            session.commit()
+            report["applied"] = True
+            report["apply_result"] = [
+                {
+                    "source_id": r.source_id, "source_created": r.source_created,
+                    "source_assertion_id": r.source_assertion_id, "source_assertion_created": r.source_assertion_created,
+                    "airport_id": r.airport_id, "assertion_type": r.assertion_type,
+                }
+                for r in apply_results_known_airport
             ]
             return report
 
@@ -575,6 +747,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--manual-start-char", type=int, default=None)
     parser.add_argument("--manual-end-char", type=int, default=None)
+    parser.add_argument(
+        "--known-airport-id", type=int, default=None,
+        help="Mission #26D: persist evidence about an explicit, already-existing Airport.id - "
+        "never a name/IATA/ICAO lookup, never fuzzy matching. Mutually exclusive with "
+        "--stage-only and with --candidate-airport-id/--no-known-candidates.",
+    )
+    parser.add_argument(
+        "--known-airport-assertion-type", type=str, default="airport_inventory",
+        help="Only meaningful together with --known-airport-id. Checked against this "
+        "module's own small allowlist (app.services.known_airport_evidence_persistence."
+        "ALLOWED_ASSERTION_TYPES) - default and, as of Mission #26D, only allowlisted "
+        "value: 'airport_inventory'.",
+    )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--allow-database-write", action="store_true")
     parser.add_argument("--expected-fingerprint", type=str, default=None)
@@ -599,6 +784,7 @@ def main(argv: "list[str] | None" = None) -> int:
         expected_fingerprint=args.expected_fingerprint, skip_backup=args.skip_backup,
         backup_directory=args.backup_directory, stage_only=args.stage_only,
         manual_page=args.manual_page, manual_start_char=args.manual_start_char, manual_end_char=args.manual_end_char,
+        known_airport_id=args.known_airport_id, known_airport_assertion_type=args.known_airport_assertion_type,
     )
     print(_DISCLAIMER)
     print()
