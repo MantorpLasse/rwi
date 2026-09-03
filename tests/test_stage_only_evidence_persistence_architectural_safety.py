@@ -80,13 +80,14 @@ def test_no_forbidden_identifiers_referenced(path: Path):
 
 
 def test_persist_selected_fragments_stage_only_branch_never_calls_governance():
-    """The CLI script itself: the stage-only branch (bounded by the
-    literal markers below) must not contain any of the forbidden
-    identifiers - a coarser, text-scoped check since this file also
-    legitimately contains the full-governed path that DOES call them."""
+    """The CLI script itself: the stage-only branch AND the Mission #25J2
+    manual-range construction that feeds it (bounded by the literal
+    markers below) must not contain any of the forbidden identifiers - a
+    coarser, text-scoped check since this file also legitimately contains
+    the full-governed path that DOES call them."""
     path = REPO_ROOT / "scripts" / "persist_selected_fragments.py"
     text = path.read_text(encoding="utf-8")
-    start = text.index("if config.stage_only:")
+    start = text.index("if manual_mode:")
     end = text.index("if kept and not config.candidate_airport_ids and not config.no_known_candidates:")
     stage_only_branch = text[start:end]
     for identifier in FORBIDDEN_IDENTIFIERS:

@@ -130,6 +130,15 @@ class SelectionReasonKind(str, Enum):
     STRONG_CONCEPT_TERM = "strong_concept_term"
     WEAK_ACTIVITY_TERM = "weak_activity_term"
     AIRPORT_IDENTITY_MATCH = "airport_identity_match"
+    # Mission #25J2: a human, not select_fragments()'s own term-matching
+    # engine, chose this exact range - never produced by select_fragments()
+    # itself; only by app.selection.manual_range_selection.select_manual_range().
+    # A different axis than the three term-matching kinds above (WHY a
+    # fragment exists at all, not which vocabulary word matched) - adding
+    # this is not a Selection VOCABULARY change (no new
+    # STRONG_CONCEPT_TERMS/WEAK_ACTIVITY_TERMS string), and this member is
+    # never read by select_fragments()'s own matching logic.
+    HUMAN_MANUAL_RANGE = "human_manual_range"
 
 
 @dataclass(frozen=True)

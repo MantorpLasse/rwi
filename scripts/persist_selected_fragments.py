@@ -84,7 +84,13 @@ from sqlalchemy.orm import Session
 
 from app.extraction.dispatch import extract_document
 from app.models import Airport
-from app.selection.fragment_selection import AirportIdentityContext, select_fragments
+from app.selection.fragment_selection import (
+    SELECTION_VERSION,
+    AirportIdentityContext,
+    DocumentSelection,
+    select_fragments,
+)
+from app.selection.manual_range_selection import ManualRangeSelectionError, select_manual_range
 from app.selection.review import ReviewDecision, apply_keep_decisions
 from app.services.discovery_candidate_fragment import CandidateFragment, candidate_fragment_to_evidence_bag
 from app.services.discovery_evidence_persistence import (
@@ -215,6 +221,16 @@ class PersistConfig:
     # candidate_airport_ids/no_known_candidates, which belong only to the
     # full-governed path this flag deliberately bypasses.
     stage_only: bool = False
+    # Mission #25J2: human exact-range selection. All three must be
+    # supplied together (validated in run_persist()) or not at all -
+    # never a partial combination. When present, REPLACES machine
+    # Selection entirely for this run with the single human-nominated
+    # FragmentSelection (app.selection.manual_range_selection); everything
+    # downstream (--keep, preview, stage-only apply) then operates on
+    # that one fragment exactly as it would any machine-selected one.
+    manual_page: "int | None" = None
+    manual_start_char: "int | None" = None
+    manual_end_char: "int | None" = None
 
 
 def run_persist(config: PersistConfig) -> dict:
@@ -231,6 +247,28 @@ def run_persist(config: PersistConfig) -> dict:
         raise PersistRunnerError(
             "--stage-only cannot be combined with --candidate-airport-id/--no-known-candidates - "
             "stage-only persistence never evaluates candidate identity at all."
+        )
+
+    # Mission #25J2: manual-range args are all-required-together, never a
+    # partial combination - a lone --manual-start-char with no page/end is
+    # ambiguous and refused outright, before any extraction is attempted.
+    manual_args = (config.manual_page, config.manual_start_char, config.manual_end_char)
+    manual_mode = any(a is not None for a in manual_args)
+    if manual_mode and not all(a is not None for a in manual_args):
+        raise PersistRunnerError(
+            "--manual-page/--manual-start-char/--manual-end-char must be supplied together "
+            "(all three or none)."
+        )
+    if manual_mode and not config.stage_only:
+        raise PersistRunnerError(
+            "Manual exact-range selection is authorized ONLY through --stage-only in this "
+            "mission (Mission #25J2 Part M) - it must never become a shortcut into full "
+            "governed persistence."
+        )
+    if manual_mode and config.keep_indices and config.keep_indices != frozenset({1}):
+        raise PersistRunnerError(
+            "Manual-range mode produces exactly one fragment at position 1 - pass --keep 1 "
+            "(or omit --keep for preview-only), never a machine fragment index."
         )
 
     database = Path(config.database)
@@ -254,6 +292,7 @@ def run_persist(config: PersistConfig) -> dict:
         "apply_result": [],
         "blockers": [],
         "stage_only": config.stage_only,
+        "manual_range": None,
     }
 
     engine = build_engine(database)
@@ -277,7 +316,27 @@ def run_persist(config: PersistConfig) -> dict:
             )
 
         document = extract_document(loaded.payload, document_identity=loaded.document_identity, media_type=loaded.media_type)
-        selection = select_fragments(document, airport_identity=identity_context)
+        if manual_mode:
+            try:
+                manual_fragment = select_manual_range(
+                    document, page_number=config.manual_page,
+                    start_char=config.manual_start_char, end_char=config.manual_end_char,
+                )
+            except ManualRangeSelectionError as exc:
+                raise PersistRunnerError(f"MANUAL_RANGE_INVALID: {exc}") from exc
+            selection = DocumentSelection(
+                document_identity=document.document_identity,
+                selection_version=SELECTION_VERSION,
+                fragments=(manual_fragment,),
+            )
+            report["manual_range"] = {
+                "page": config.manual_page, "start_char": config.manual_start_char, "end_char": config.manual_end_char,
+                "source_locator": f"page:{config.manual_page};chars:{config.manual_start_char}-{config.manual_end_char}",
+                "note": "Text derived directly from Snapshot extraction - see report.fragments_preview "
+                "for the exact, full, untruncated result.",
+            }
+        else:
+            selection = select_fragments(document, airport_identity=identity_context)
         reviews = apply_keep_decisions(
             selection, keep_indices=config.keep_indices, document_title=source_metadata.title, url=source_metadata.url,
         )
@@ -508,6 +567,14 @@ def _parser() -> argparse.ArgumentParser:
         "fragment - never the guard/UAC/EvidenceBag pipeline. Mutually exclusive with "
         "--candidate-airport-id/--no-known-candidates.",
     )
+    parser.add_argument(
+        "--manual-page", type=int, default=None,
+        help="Mission #25J2: human exact-range selection - the 1-based page number to slice from "
+        "the Snapshot's own extraction. Must be supplied together with --manual-start-char/"
+        "--manual-end-char (all three or none), and only with --stage-only.",
+    )
+    parser.add_argument("--manual-start-char", type=int, default=None)
+    parser.add_argument("--manual-end-char", type=int, default=None)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--allow-database-write", action="store_true")
     parser.add_argument("--expected-fingerprint", type=str, default=None)
@@ -531,6 +598,7 @@ def main(argv: "list[str] | None" = None) -> int:
         apply=args.apply, allow_database_write=args.allow_database_write,
         expected_fingerprint=args.expected_fingerprint, skip_backup=args.skip_backup,
         backup_directory=args.backup_directory, stage_only=args.stage_only,
+        manual_page=args.manual_page, manual_start_char=args.manual_start_char, manual_end_char=args.manual_end_char,
     )
     print(_DISCLAIMER)
     print()
