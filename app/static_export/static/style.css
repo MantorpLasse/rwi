@@ -1551,8 +1551,41 @@ nav.site a[href$="index.html"]:first-child { color: var(--text); }
 .footprint-disclosure { margin: 14px 0 0; font-size: .78rem; color: var(--text-faint); font-style: italic; }
 .map-node-installed { fill: rgba(94,180,142,.55); stroke: rgba(94,180,142,.9); stroke-width: 1.2; }
 
-.footprint-country-list { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(139,150,172,.18); }
-.footprint-country-header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.footprint-country-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(139,150,172,.18); }
+
+/* ("RWI - Mission #24B" mission) Country drill-down - native
+   <details>/<summary>, no JavaScript. .footprint-country-header is now
+   the <summary> itself (previously a plain <div>), so its own UA default
+   `display: list-item` must be overridden back to the pre-#24B flex
+   layout; the native disclosure triangle is replaced with a custom
+   ::before chevron (toggled by the browser's own `open` attribute, no JS)
+   so the affordance stays visually consistent across browsers. */
+.footprint-country { padding: 8px 0; }
+summary.footprint-country-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 4px;
+  margin: -6px -4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+summary.footprint-country-header::-webkit-details-marker { display: none; }
+summary.footprint-country-header::before {
+  content: "▸";
+  color: var(--text-faint);
+  font-size: .72rem;
+  width: 1em;
+}
+details[open] > summary.footprint-country-header::before { content: "▾"; }
+summary.footprint-country-header:hover { background: rgba(139,150,172,.08); }
+summary.footprint-country-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .footprint-country-count { color: var(--text-dim); font-size: .82rem; }
 .footprint-no-marker { color: var(--text-faint); font-size: .76rem; font-style: italic; }
 .footprint-airport-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -1604,6 +1637,7 @@ nav.site a[href$="index.html"]:first-child { color: var(--text); }
   .important-dev-title { white-space: normal; }
   .footprint-toggle-label { padding: 8px 14px; }
   .footprint-airport-list li { font-size: .8rem; }
+  summary.footprint-country-header { padding: 10px 4px; }
 }
 
 /* ---------------------------------------------------------------------

@@ -218,13 +218,21 @@
         <p class="footprint-disclosure">{{ t("footprint_disclosure") }}</p>
         <div class="footprint-country-list">
           {% for node in installed_base_global %}
-          <div class="footprint-country">
-            <div class="footprint-country-header">
+          {# ("RWI - Mission #24B" mission) Native <details>/<summary> -
+             no JavaScript, closed by default (no `open` attribute), all
+             underlying airport data still present in the generated HTML
+             regardless of expand/collapse state - see style.css's own
+             .footprint-country/-header rules. Header content (flag/
+             country/count/no-marker note) and the airport <ul> are both
+             byte-for-byte unchanged from the pre-#24B markup - only the
+             wrapping tags changed (div -> details, div -> summary). #}
+          <details class="footprint-country">
+            <summary class="footprint-country-header">
               <span class="map-legend-flag">{{ node.flag or "" }}</span>
               <span class="map-legend-country">{{ node.country }}</span>
               <span class="footprint-country-count">{{ node.airport_count }} {{ "flygplats" if node.airport_count == 1 else "flygplatser" }} med dokumenterad EMAS</span>
               {% if node.x is none %}<span class="footprint-no-marker">({{ t("footprint_no_marker") }})</span>{% endif %}
-            </div>
+            </summary>
             <ul class="footprint-airport-list">
               {% for a in node.airports %}
               <li>
@@ -236,7 +244,7 @@
               </li>
               {% endfor %}
             </ul>
-          </div>
+          </details>
           {% endfor %}
         </div>
         {% else %}

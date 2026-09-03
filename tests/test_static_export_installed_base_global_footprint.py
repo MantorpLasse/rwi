@@ -403,3 +403,147 @@ def test_lcy_shaped_acceptance(tmp_path):
     assert "Dokumenterad installation enligt tillgängliga källor" in section
     # zero Signal for this airport -> absent from Current Intelligence
     assert "Ingen aktivitetsdata ännu." in html
+
+
+# ---------------------------------------------------------------------------
+# Country drill-down (Mission #24B): native <details>/<summary>, collapsed
+# by default, no JavaScript. All assertions below run against a build with
+# TWO countries so the "collapsed by default" invariant is exercised on
+# more than a single lucky element.
+# ---------------------------------------------------------------------------
+
+
+def _build_two_country_site(tmp_path):
+    engine = _engine()
+    with Session(engine) as session:
+        _seed_bos_shaped(session)  # gives Current Intelligence real content too
+        _seed_installation_airport(
+            session, name="Test London City Airport", country="United Kingdom", iata="LCY", icao="EGLC",
+            installations=[
+                {"type": "EMASMAX", "install_year": 2023, "runway_end": "09", "confirmed_vendor": "Runway Safe"},
+                {"type": "EMASMAX", "install_year": 2023, "runway_end": "27", "confirmed_vendor": "Runway Safe"},
+            ],
+        )
+        _seed_installation_airport(
+            session, name="Test RAF Northolt", country="United Kingdom", iata=None, icao="EGWU",
+            installations=[{"type": "greenEMAS", "install_year": 2019, "confirmed_vendor": "Runway Safe"}],
+        )
+        _seed_installation_airport(
+            session, name="Test Congonhas", country="Brazil",
+            installations=[{"type": "greenEMAS", "install_year": 2022}],
+        )
+        build_site(tmp_path / "site", session=session, today=date(2026, 9, 3))
+    return (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+
+
+def test_each_country_renders_as_details_element(tmp_path):
+    html = _build_two_country_site(tmp_path)
+    section = _footprint_installed_section(html)
+    tags = re.findall(r'<details[^>]*class="footprint-country"[^>]*>', section)
+    assert len(tags) == 2  # United Kingdom, Brazil
+
+
+def test_countries_collapsed_by_default_no_open_attribute(tmp_path):
+    html = _build_two_country_site(tmp_path)
+    section = _footprint_installed_section(html)
+    tags = re.findall(r'<details[^>]*class="footprint-country"[^>]*>', section)
+    assert len(tags) == 2
+    for tag in tags:
+        assert "open" not in tag
+
+
+def test_each_country_has_summary_header(tmp_path):
+    html = _build_two_country_site(tmp_path)
+    section = _footprint_installed_section(html)
+    assert section.count('<summary class="footprint-country-header">') == 2
+
+
+def test_summary_still_contains_country_name_and_airport_count(tmp_path):
+    html = _build_two_country_site(tmp_path)
+    section = _footprint_installed_section(html)
+    m = re.search(
+        r'<summary class="footprint-country-header">(.*?)</summary>',
+        section, re.S,
+    )
+    assert m is not None
+    # first summary in document order is the larger country (UK, 2 airports) -
+    # same "-len(entries), country name" ordering _installed_base_global_view
+    # already used pre-#24B; unchanged by this mission.
+    first_summary = m.group(1)
+    assert "United Kingdom" in first_summary
+    assert "2 flygplatser med dokumenterad EMAS" in first_summary
+
+
+def test_summary_shows_no_marker_note_when_position_missing(tmp_path):
+    engine = _engine()
+    with Session(engine) as session:
+        _seed_installation_airport(
+            session, name="Test Airport", country="Testlandia",
+            installations=[{"type": "greenEMAS"}],
+        )
+        build_site(tmp_path / "site", session=session, today=date(2026, 9, 3))
+    html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    section = _footprint_installed_section(html)
+    m = re.search(r'<summary class="footprint-country-header">(.*?)</summary>', section, re.S)
+    assert "ingen kartposition ännu" in m.group(1)
+
+
+def test_airport_list_present_in_raw_html_even_though_collapsed(tmp_path):
+    """No `open` attribute means the browser hides the <ul> visually, but
+    the static HTML file itself must still contain the full airport list -
+    the whole point of using <details> instead of e.g. a JS-populated
+    fetch: nothing is missing from the page source."""
+    html = _build_two_country_site(tmp_path)
+    section = _footprint_installed_section(html)
+    assert "Test RAF Northolt" in section
+    assert "Test Congonhas" in section
+    assert 'class="footprint-airport-list"' in section
+    assert section.count("<li>") == 3  # LCY + RAF Northolt + Congonhas
+
+
+def test_lcy_appears_exactly_once_as_airport_row_under_uk(tmp_path):
+    """LCY's own name legitimately appears twice in its one <li> (once in
+    the airport_label() badge's title attribute, once as the visible link
+    text) - the real per-airport-row invariant is exactly one <li>, not a
+    bare substring count."""
+    html = _build_two_country_site(tmp_path)
+    section = _footprint_installed_section(html)
+    assert section.count("Test London City Airport") == 2  # title attr + link text, both inside ONE <li>
+    li_blocks = re.findall(r"<li>.*?</li>", section, re.S)
+    lcy_rows = [li for li in li_blocks if "Test London City Airport" in li]
+    assert len(lcy_rows) == 1
+
+
+def test_current_intelligence_unaffected_by_details_change(tmp_path):
+    html = _build_two_country_site(tmp_path)
+    # Mode 2 markup must remain the pre-#24B plain div/legend structure -
+    # no <details>/<summary> introduced there. Anchored on the start of the
+    # NEXT top-level card (Utveckling), the same "next sibling" anchoring
+    # style _footprint_installed_section already uses.
+    m = re.search(
+        r'<div class="footprint-panel footprint-panel-current">(.*?)'
+        r'(?=<div class="card panel-strong">)',
+        html, re.S,
+    )
+    assert m is not None
+    current_section = m.group(0)
+    assert "<details" not in current_section
+    assert "<summary" not in current_section
+    assert 'class="map-legend"' in current_section
+
+
+def test_no_javascript_dependency_introduced_by_drilldown(tmp_path):
+    html = _build_two_country_site(tmp_path)
+    assert "<script" not in html
+
+
+def test_no_notes_leakage_with_drilldown_structure(tmp_path):
+    engine = _engine()
+    with Session(engine) as session:
+        _seed_installation_airport(
+            session, name="Test Airport", country="Brazil",
+            installations=[{"type": "greenEMAS", "notes": "INTERNAL-ANALYST-SHORTHAND-24b"}],
+        )
+        build_site(tmp_path / "site", session=session, today=date(2026, 9, 3))
+    html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    assert "INTERNAL-ANALYST-SHORTHAND-24b" not in html
