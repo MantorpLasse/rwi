@@ -1341,38 +1341,55 @@ def _global_intelligence_view(market_summary: "list[SimpleNamespace]") -> "tuple
     return tuple(nodes)
 
 
-# ("RWI - Mission #23C" mission) Installed Base global footprint - a
-# SECOND, INDEPENDENT country-level view built entirely from governed
-# Installation data, never from Signal/market_summary (see this mission's
-# own design docs, Mission #23A/#23B). Deliberately composed from the
-# already-existing, already-conservative `_installed_base_summary_view()`
-# output already attached to each `airport_view` (never a second,
-# independent interpretation of Installation semantics, and never the raw
-# `installation_views`/`Installation` ORM objects, which carry `notes` -
-# this function's own return type structurally cannot expose `notes`,
-# since it never reads `view.installations` at all, only
-# `view.installed_base_summary`). A public documented-installed-base
-# marker is NEVER a claim of current/fresh verification (Mission #23A
-# Part F's own finding: the one real "current EMAS" pathway that exists -
-# _current_emas_views() - is effectively US-only, and deliberately NOT
-# surfaced here, to avoid a geography-biased impression of confidence on
-# an otherwise uniform global surface - see docs referenced in the
-# Missions #22A/#23A/#23B report trail).
+# ("RWI - Mission #23C" mission, map semantics upgraded to AIRPORT-LEVEL by
+# "RWI - Mission #26J") Installed Base global footprint - a SECOND,
+# INDEPENDENT view built entirely from governed Installation data, never
+# from Signal/market_summary (see this mission's own design docs, Mission
+# #23A/#23B). Deliberately composed from the already-existing, already-
+# conservative `_installed_base_summary_view()` output already attached to
+# each `airport_view` (never a second, independent interpretation of
+# Installation semantics, and never the raw `installation_views`/
+# `Installation` ORM objects, which carry `notes` - this function's own
+# return type structurally cannot expose `notes`, since it never reads
+# `view.installations` at all, only `view.installed_base_summary`). A
+# public documented-installed-base marker is NEVER a claim of current/
+# fresh verification (Mission #23A Part F's own finding: the one real
+# "current EMAS" pathway that exists - _current_emas_views() - is
+# effectively US-only, and deliberately NOT surfaced here, to avoid a
+# geography-biased impression of confidence on an otherwise uniform
+# global surface - see docs referenced in the Missions #22A/#23A/#23B
+# report trail).
 #
-# PRIMARY METRIC (Mission #23B Part D/#23C Part D): number of AIRPORTS with
-# >=1 documented Installation, per country - never a raw Installation-row
-# count (one airport with N installation rows, e.g. LCY's two runway-end
-# rows, always contributes exactly 1 to its country's airport_count -
-# see docs/architecture's own physical-system-identity finding: one
-# Installation row does not reliably equal one physical EMAS system, and
-# PhysicalInstallationIdentity coverage is far too small to support a
-# safe canonical system count).
+# PRIMARY METRIC (Mission #23B Part D/#23C Part D, unchanged by #26J):
+# number of AIRPORTS with >=1 documented Installation, per country - never
+# a raw Installation-row count (one airport with N installation rows, e.g.
+# LCY's two runway-end rows, always contributes exactly 1 to its country's
+# airport_count - see docs/architecture's own physical-system-identity
+# finding: one Installation row does not reliably equal one physical EMAS
+# system, and PhysicalInstallationIdentity coverage is far too small to
+# support a safe canonical system count). The country grouping below
+# exists ONLY for the textual drilldown (Mission #24A-#24C's own political/
+# categorical `Airport.country` grouping, deliberately independent of
+# physical geography - Roland Garros and Dzaoudzi stay listed under
+# France here even though their real map markers sit in the Indian
+# Ocean, Mission #26J Part P).
 #
-# A country with no curated `_COUNTRY_MAP_POSITION` entry still returns a
-# node here (x/y/radius left None) - the template renders its textual
-# airport list regardless of whether a map marker exists, exactly
-# mirroring _global_intelligence_view()'s own "map placement is
-# decorative, never a gate on real data" precedent for market_summary.
+# MAP MARKER SEMANTICS (Mission #26J): each Airport entry carries its own
+# `x`/`y` - reused VERBATIM from `_airport_location_view()`'s own already-
+# computed `view.location` (Airport.longitude/.latitude through
+# `_project_lon_lat()`, Juicy Design Mission #3's own real-coordinate-only
+# marker, never recomputed a second way here) - and `has_marker` (whether
+# that Airport currently has usable coordinates at all). This is a
+# DELIBERATE change from the pre-#26J behavior, which plotted one
+# representative-centroid marker per COUNTRY via `_COUNTRY_MAP_POSITION`;
+# that lookup is intentionally NEVER used for Installed Base map placement
+# any more (Mission #26J Part J - Installed Base must never lie
+# geographically by falling back to a country centroid). An Airport with
+# no usable coordinates (has_marker=False; none exist in current
+# production data, but the shape must degrade honestly if that regresses)
+# still appears in its country's textual airport list - only its physical
+# map marker is omitted, exactly mirroring `_global_intelligence_view()`'s
+# own "map placement is decorative, never a gate on real data" precedent.
 def _installed_base_global_view(airport_views: "list[SimpleNamespace]") -> "tuple[SimpleNamespace, ...]":
     by_country: "dict[str, list[SimpleNamespace]]" = {}
     for view in airport_views:
@@ -1380,37 +1397,45 @@ def _installed_base_global_view(airport_views: "list[SimpleNamespace]") -> "tupl
         if summary is None or not view.country:
             continue
         code = view.iata_code or view.icao_code or "–"
+        location = view.location  # None unless this Airport has real, usable coordinates
         by_country.setdefault(view.country, []).append(
             SimpleNamespace(
                 id=view.id, code=code, name=view.name,
                 type_label=summary.type_label, year_label=summary.year_label,
                 ends_label=summary.ends_label, vendor_label=summary.vendor_label,
+                x=(location.x if location is not None else None),
+                y=(location.y if location is not None else None),
+                has_marker=(location is not None),
             )
         )
 
     if not by_country:
         return ()
 
-    max_count = max(len(entries) for entries in by_country.values()) or 1
     ordered_countries = sorted(by_country.items(), key=lambda item: (-len(item[1]), item[0]))
 
     nodes = []
     for country, entries in ordered_countries:
         entries_sorted = tuple(sorted(entries, key=lambda e: e.name))
         airport_count = len(entries_sorted)
-        position = _COUNTRY_MAP_POSITION.get(country)
-        x = y = radius = None
-        if position is not None:
-            x, y = _project_lon_lat(*position)
-            scale = math.sqrt(airport_count / max_count)
-            radius = round(_MAP_NODE_MIN_RADIUS + scale * (_MAP_NODE_MAX_RADIUS - _MAP_NODE_MIN_RADIUS), 1)
         nodes.append(
             SimpleNamespace(
                 country=country, flag=_COUNTRY_FLAG.get(country), airport_count=airport_count,
-                airports=entries_sorted, x=x, y=y, radius=radius,
+                airports=entries_sorted,
             )
         )
     return tuple(nodes)
+
+
+# Mission #26J Part L: ONE consistent, restrained Installed Base airport
+# marker style - no size/color encoding of supplier, product, installation
+# count, age, confidence, score, or lifecycle stage. A marker means only
+# "documented installed base exists at this Airport" - deliberately a
+# fixed radius, unlike `_global_intelligence_view()`'s own proportional-
+# area country-bubble sizing (a genuinely different concept: relative
+# market activity share, which Installed Base markers make no claim to
+# represent).
+_INSTALLED_BASE_AIRPORT_MARKER_RADIUS = 3.4
 
 
 # ("RWI - Juicy Design Mission #2 - V2.3" mission) "Viktiga utvecklingar" -
@@ -1964,6 +1989,7 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
         # _installed_base_global_view()'s own docstring for the full
         # invariant this preserves.
         installed_base_global=_installed_base_global_view(airport_views),
+        installed_base_airport_marker_radius=_INSTALLED_BASE_AIRPORT_MARKER_RADIUS,
         map_viewbox_width=_MAP_VIEWBOX_WIDTH,
         map_viewbox_height=_MAP_VIEWBOX_HEIGHT,
         world_land_path=_WORLD_LAND_PATH,

@@ -25,13 +25,17 @@ from tests.test_static_export_design_v2 import _engine, _seed_bos_shaped
 
 
 def _seed_installation_airport(
-    session, *, name, country, iata=None, icao=None, installations: "list[dict]"
+    session, *, name, country, iata=None, icao=None, installations: "list[dict]",
+    latitude=None, longitude=None,
 ) -> Airport:
     """Minimal Installation-bearing airport, no Signal, no Runway - the
     exact shape a documented-historical-only airport (like the real LCY)
     has today. Each dict in `installations` may set: runway_end, type,
-    install_year, confirmed_vendor, notes."""
-    airport = Airport(name=name, country=country, iata_code=iata, icao_code=icao)
+    install_year, confirmed_vendor, notes. `latitude`/`longitude` default
+    to None (the exact shape every non-US Airport had before Mission
+    #26G-#26I's governed coordinate acceptance) - pass real values to
+    exercise Mission #26J's airport-level marker rendering."""
+    airport = Airport(name=name, country=country, iata_code=iata, icao_code=icao, latitude=latitude, longitude=longitude)
     session.add(airport)
     session.commit()
     for kwargs in installations:
@@ -300,11 +304,18 @@ def test_missing_country_map_position_still_shows_textual_listing_no_marker(tmp_
     assert html.count('class="map-node map-node-installed"') == 0
 
 
-def test_switzerland_now_has_a_map_position(tmp_path):
+def test_airport_with_coordinates_has_a_map_marker(tmp_path):
+    """Mission #26J: a marker now appears because the AIRPORT itself has
+    real coordinates - not merely because its country happens to be in
+    the legacy _COUNTRY_MAP_POSITION lookup (retired for Installed Base;
+    see test_no_country_centroid_fallback_for_installed_base below for
+    the negative case proving that lookup is genuinely never consulted
+    here)."""
     engine = _engine()
     with Session(engine) as session:
         _seed_installation_airport(
             session, name="Test Zurich", country="Switzerland",
+            latitude=47.4647, longitude=8.5492,
             installations=[{"type": "greenEMAS", "confirmed_vendor": "Runway Safe"}],
         )
         build_site(tmp_path / "site", session=session, today=date(2026, 9, 2))
@@ -312,6 +323,125 @@ def test_switzerland_now_has_a_map_position(tmp_path):
     section = _footprint_installed_section(html)
     assert "ingen kartposition ännu" not in section
     assert 'class="map-node map-node-installed"' in html
+
+
+def test_no_country_centroid_fallback_for_installed_base(tmp_path):
+    """Mission #26J Part J: an Airport with NO coordinates of its own gets
+    NO marker, even though "Switzerland" has a curated
+    _COUNTRY_MAP_POSITION entry the pre-#26J code would have used. Proves
+    the country-centroid fallback is genuinely retired for Installed
+    Base, not merely untested."""
+    engine = _engine()
+    with Session(engine) as session:
+        _seed_installation_airport(
+            session, name="Test Zurich No Coords", country="Switzerland",
+            installations=[{"type": "greenEMAS", "confirmed_vendor": "Runway Safe"}],
+        )
+        build_site(tmp_path / "site", session=session, today=date(2026, 9, 2))
+    html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    section = _footprint_installed_section(html)
+    assert html.count('class="map-node map-node-installed"') == 0
+    assert "ingen kartposition ännu" in section
+
+
+def test_marker_xy_matches_project_lon_lat_directly(tmp_path):
+    """Mission #26J Part I: marker x/y is byte-identical to calling
+    _project_lon_lat() directly with the Airport's own coordinates - no
+    second projection formula, no recalibration."""
+    lat, lon = 47.4647, 8.5492
+    expected_x, expected_y = build._project_lon_lat(lon, lat)
+    engine = _engine()
+    with Session(engine) as session:
+        _seed_installation_airport(
+            session, name="Test Zurich", country="Switzerland",
+            latitude=lat, longitude=lon,
+            installations=[{"type": "greenEMAS"}],
+        )
+        build_site(tmp_path / "site", session=session, today=date(2026, 9, 2))
+    html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    section = _footprint_installed_section(html)
+    assert f'cx="{expected_x}" cy="{expected_y}"' in section
+
+
+def test_multi_installation_airport_with_coordinates_is_one_marker(tmp_path):
+    """Mission #26J Part K: LCY-shaped (two Installation rows, one per
+    runway end) but NOW seeded with real coordinates - must still produce
+    exactly ONE map marker, never two."""
+    engine = _engine()
+    with Session(engine) as session:
+        _seed_installation_airport(
+            session, name="Test London City Airport", country="United Kingdom", iata="LCY", icao="EGLC",
+            latitude=51.5053, longitude=0.0553,
+            installations=[
+                {"type": "EMASMAX", "install_year": 2023, "runway_end": "09", "confirmed_vendor": "Runway Safe"},
+                {"type": "EMASMAX", "install_year": 2023, "runway_end": "27", "confirmed_vendor": "Runway Safe"},
+            ],
+        )
+        build_site(tmp_path / "site", session=session, today=date(2026, 9, 2))
+    html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    section = _footprint_installed_section(html)
+    assert section.count('class="map-node map-node-installed"') == 1
+
+
+def test_marker_count_equals_unique_coordinate_bearing_airports(tmp_path):
+    """Mission #26J Part K: representative multi-airport fixture - marker
+    count must equal the number of unique Airports with coordinates, not
+    the number of Installation rows or countries."""
+    engine = _engine()
+    with Session(engine) as session:
+        _seed_installation_airport(
+            session, name="Test Airport A", country="France",
+            latitude=-20.8871, longitude=55.5103,
+            installations=[{"type": "greenEMAS"}],
+        )
+        _seed_installation_airport(
+            session, name="Test Airport B", country="France",
+            latitude=-12.8047, longitude=45.2811,
+            installations=[
+                {"type": "greenEMAS", "runway_end": "09"},
+                {"type": "greenEMAS", "runway_end": "27"},
+            ],
+        )
+        _seed_installation_airport(
+            session, name="Test Airport C No Coords", country="France",
+            installations=[{"type": "greenEMAS"}],
+        )
+        build_site(tmp_path / "site", session=session, today=date(2026, 9, 2))
+    html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    section = _footprint_installed_section(html)
+    # 2 airports have coordinates (A, B) -> 2 markers, regardless of B's 2
+    # Installation rows or the fact all 3 share one country.
+    assert section.count('class="map-node map-node-installed"') == 2
+
+
+def test_marker_has_accessible_title(tmp_path):
+    """Mission #26J Part N: each marker carries a real, non-empty <title>
+    naming the Airport - readable by assistive technology without hover,
+    matching the pre-existing per-country marker's own accessibility
+    precedent."""
+    engine = _engine()
+    with Session(engine) as session:
+        _seed_installation_airport(
+            session, name="Test Accessible Airport", country="Germany",
+            latitude=49.2146, longitude=7.1095,
+            installations=[{"type": "greenEMAS"}],
+        )
+        build_site(tmp_path / "site", session=session, today=date(2026, 9, 2))
+    html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    section = _footprint_installed_section(html)
+    m = re.search(r'<circle[^>]*class="map-node map-node-installed">\s*<title>(.*?)</title>', section, re.S)
+    assert m is not None
+    assert "Test Accessible Airport" in m.group(1)
+
+
+def test_no_hardcoded_run_dza_special_case_in_source():
+    """Mission #26J Part Q/R: RUN and DZA must emerge from GENERIC
+    airport-coordinate rendering, never a special-cased literal anywhere
+    in the modified view function."""
+    full_source = inspect.getsource(build._installed_base_global_view)
+    body = re.sub(r'""".*?"""', "", full_source, count=1, flags=re.S)
+    for forbidden in ("RUN", "DZA", "Roland Garros", "Dzaoudzi", "Réunion", "Mayotte"):
+        assert forbidden not in body
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +604,11 @@ def test_summary_still_contains_country_name_and_airport_count(tmp_path):
     assert "2 flygplatser med dokumenterad EMAS" in first_summary
 
 
-def test_summary_shows_no_marker_note_when_position_missing(tmp_path):
+def test_airport_row_shows_no_marker_note_when_coordinates_missing(tmp_path):
+    """Mission #26J: the "no map position" note moved from the country
+    <summary> header (retired - country headers no longer have their own
+    map position at all) onto the individual airport <li> that actually
+    lacks coordinates."""
     engine = _engine()
     with Session(engine) as session:
         _seed_installation_airport(
@@ -485,7 +619,11 @@ def test_summary_shows_no_marker_note_when_position_missing(tmp_path):
     html = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
     section = _footprint_installed_section(html)
     m = re.search(r'<summary class="footprint-country-header">(.*?)</summary>', section, re.S)
-    assert "ingen kartposition ännu" in m.group(1)
+    assert "ingen kartposition ännu" not in m.group(1)  # country header no longer carries this note
+    li_blocks = re.findall(r"<li>.*?</li>", section, re.S)
+    matching = [li for li in li_blocks if "Test Airport" in li]
+    assert len(matching) == 1
+    assert "ingen kartposition ännu" in matching[0]
 
 
 def test_airport_list_present_in_raw_html_even_though_collapsed(tmp_path):

@@ -201,18 +201,28 @@
         <label for="footprint-mode-current" class="footprint-toggle-label footprint-toggle-label-current">{{ t("footprint_mode_current") }}</label>
       </div>
 
-      {# --- MODE 1: Installerad bas - governed Installation data only --- #}
+      {# --- MODE 1: Installerad bas - governed Installation data only.
+         ("RWI - Mission #26J") Map markers are now AIRPORT-LEVEL - one
+         circle per Airport with usable coordinates (a.x/a.y, reused
+         verbatim from build.py's own _airport_location_view() via
+         installed_base_global's per-airport entries) - never a country-
+         centroid marker; _COUNTRY_MAP_POSITION is never read here. The
+         country grouping below is unchanged and exists ONLY for the
+         textual drilldown (Mission #24A-#24C), deliberately independent
+         of physical marker position. --- #}
       <div class="footprint-panel footprint-panel-installed">
         <p class="footprint-explain">{{ t("footprint_installed_explain") }}</p>
         {% if installed_base_global %}
         <svg class="global-map" viewBox="0 0 {{ map_viewbox_width }} {{ map_viewbox_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('footprint_mode_installed') }}">
           <path d="{{ world_land_path }}" class="map-land" fill-rule="evenodd"/>
           {% for node in installed_base_global %}
-          {% if node.x is not none %}
-          <circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius }}" class="map-node map-node-installed">
-            <title>{{ node.country }}: {{ node.airport_count }} {{ "flygplats" if node.airport_count == 1 else "flygplatser" }}</title>
+          {% for a in node.airports %}
+          {% if a.x is not none %}
+          <circle cx="{{ a.x }}" cy="{{ a.y }}" r="{{ installed_base_airport_marker_radius }}" class="map-node map-node-installed">
+            <title>{{ airport_label(a.code, a.name) }} {{ a.name }} ({{ node.country }})</title>
           </circle>
           {% endif %}
+          {% endfor %}
           {% endfor %}
         </svg>
         <p class="footprint-disclosure">{{ t("footprint_disclosure") }}</p>
@@ -223,15 +233,18 @@
              underlying airport data still present in the generated HTML
              regardless of expand/collapse state - see style.css's own
              .footprint-country/-header rules. Header content (flag/
-             country/count/no-marker note) and the airport <ul> are both
-             byte-for-byte unchanged from the pre-#24B markup - only the
-             wrapping tags changed (div -> details, div -> summary). #}
+             country/count) and the airport <ul> are both byte-for-byte
+             unchanged from the pre-#24B markup - only the wrapping tags
+             changed (div -> details, div -> summary). The per-country
+             "no map position" note ("RWI - Mission #23C") is retired by
+             Mission #26J - map placement is now per-Airport, so that
+             note has moved onto each individual airport <li> below
+             instead of the country header. #}
           <details class="footprint-country">
             <summary class="footprint-country-header">
               <span class="map-legend-flag">{{ node.flag or "" }}</span>
               <span class="map-legend-country">{{ node.country }}</span>
               <span class="footprint-country-count">{{ node.airport_count }} {{ "flygplats" if node.airport_count == 1 else "flygplatser" }} med dokumenterad EMAS</span>
-              {% if node.x is none %}<span class="footprint-no-marker">({{ t("footprint_no_marker") }})</span>{% endif %}
             </summary>
             <ul class="footprint-airport-list">
               {% for a in node.airports %}
@@ -241,6 +254,7 @@
                 <span class="footprint-tag">{% if a.year_label %}Installerad {{ a.year_label }}{% else %}{{ t("footprint_year_unknown") }}{% endif %}</span>
                 {% if a.ends_label %}<span class="footprint-tag">Bana {{ a.ends_label }}</span>{% endif %}
                 <span class="footprint-tag{{ ' footprint-tag-confirmed' if a.vendor_label else '' }}">{% if a.vendor_label %}Bekräftad leverantör: {{ a.vendor_label }}{% else %}{{ t("footprint_vendor_unconfirmed") }}{% endif %}</span>
+                {% if not a.has_marker %}<span class="footprint-no-marker">({{ t("footprint_no_marker") }})</span>{% endif %}
               </li>
               {% endfor %}
             </ul>
