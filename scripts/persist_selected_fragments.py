@@ -98,6 +98,12 @@ from app.services.evidence_attachment_guard import (
 )
 from app.services.selection_source_metadata import build_discovery_source_metadata_for_snapshot
 from app.services.snapshot_extraction import load_snapshot_for_extraction
+from app.services.stage_only_evidence_persistence import (
+    PlannedStageOnlyEvidence,
+    StageOnlyPersistenceResult,
+    apply_stage_only_persistence,
+    plan_stage_only_persistence,
+)
 from app.services.unknown_airport_discovery_integration import (
     DiscoveryIdentityResolutionResult,
     resolve_or_persist_discovery_identity,
@@ -146,6 +152,24 @@ class PersistRunnerError(ValueError):
 # ---------------------------------------------------------------------------
 
 
+def compute_stage_only_plan_fingerprint(planned: Sequence[PlannedStageOnlyEvidence]) -> str:
+    """Mission #25J1's own stage-only counterpart to
+    compute_selected_fragment_plan_fingerprint() below - deliberately a
+    SEPARATE fingerprint scheme, never reused across modes: a stage-only
+    plan has no candidate_airport_ids/guard_outcome/attached_airport_code
+    dimension at all, and mixing the two schemes would let a stale
+    full-governed preview's fingerprint accidentally satisfy a stage-only
+    apply's gate (or vice versa) purely by coincidental hash collision
+    risk in the caller's own bookkeeping, not by the fingerprint itself
+    actually describing the same plan."""
+    rows = sorted(
+        (p.document_identity, p.source_locator, p.raw_fragment_hash, p.raw_text)
+        for p in planned
+    )
+    payload = json.dumps({"stage_only_rows": rows}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def compute_selected_fragment_plan_fingerprint(
     planned: Sequence[PlannedGovernedEvidence], candidate_airport_ids: Sequence[int]
 ) -> str:
@@ -184,6 +208,13 @@ class PersistConfig:
     expected_fingerprint: "str | None" = None
     skip_backup: bool = False
     backup_directory: Path = BACKUP_DIRECTORY
+    # Mission #25J1 (architecture sign-off: Mission #25I). Selects the
+    # entirely separate stage-only path below: Source + unresolved
+    # SourceAssertion only, never the guard/UAC/EvidenceBag pipeline the
+    # rest of this module orchestrates. Mutually exclusive with
+    # candidate_airport_ids/no_known_candidates, which belong only to the
+    # full-governed path this flag deliberately bypasses.
+    stage_only: bool = False
 
 
 def run_persist(config: PersistConfig) -> dict:
@@ -196,6 +227,11 @@ def run_persist(config: PersistConfig) -> dict:
         raise PersistRunnerError("--allow-database-write requires --apply.")
     if config.no_known_candidates and config.candidate_airport_ids:
         raise PersistRunnerError("--no-known-candidates cannot be combined with --candidate-airport-id.")
+    if config.stage_only and (config.candidate_airport_ids or config.no_known_candidates):
+        raise PersistRunnerError(
+            "--stage-only cannot be combined with --candidate-airport-id/--no-known-candidates - "
+            "stage-only persistence never evaluates candidate identity at all."
+        )
 
     database = Path(config.database)
     report: dict = {
@@ -217,6 +253,7 @@ def run_persist(config: PersistConfig) -> dict:
         "applied": False,
         "apply_result": [],
         "blockers": [],
+        "stage_only": config.stage_only,
     }
 
     engine = build_engine(database)
@@ -266,6 +303,75 @@ def run_persist(config: PersistConfig) -> dict:
 
         kept = [(i, r) for i, r in enumerate(reviews, start=1) if r.decision == ReviewDecision.KEEP]
         report["fragments_kept"] = len(kept)
+
+        # --- STAGE-ONLY PATH (Mission #25J1): entirely separate from the
+        # full-governed path below - never shares its guard/UAC/EvidenceBag
+        # code, never touches schema_ready, candidate_airport_ids, or
+        # PlannedGovernedEvidence. Returns before any of that code is
+        # reached. ---
+        if config.stage_only:
+            planned_stage_only: list[PlannedStageOnlyEvidence] = []
+            for index, review in kept:
+                fragment = review.candidate_fragment
+                assert fragment is not None
+                plan = plan_stage_only_persistence(
+                    session, source_metadata, source_locator=fragment.source_locator, raw_text=fragment.raw_text,
+                )
+                planned_stage_only.append(plan)
+                report["planned_evidence"].append({
+                    "fragment_index": index,
+                    "source_locator": plan.source_locator,
+                    "raw_fragment_hash": plan.raw_fragment_hash,
+                    "raw_text": plan.raw_text,
+                    "source_would_be_created": plan.source_would_be_created,
+                    "source_id_if_existing": plan.source_id_if_existing,
+                    "source_assertion_would_be_created": plan.source_assertion_would_be_created,
+                    "source_assertion_id_if_existing": plan.source_assertion_id_if_existing,
+                    "assertion_type": "project_construction",
+                    "evidence_quality": "unverified_candidate",
+                    "review_state": "unreviewed",
+                    "identity_governance": "NOT EVALUATED - identity_guard_decision/airport_id/"
+                    "unknown_airport_candidate_id all remain NULL. No EvidenceBag, no UAC, "
+                    "no IdentityGuard call occurs in stage-only mode.",
+                })
+
+            fingerprint = compute_stage_only_plan_fingerprint(planned_stage_only)
+            report["plan_fingerprint"] = fingerprint
+
+            if not config.apply:
+                session.rollback()
+                return report
+
+            if config.expected_fingerprint is None or config.expected_fingerprint != fingerprint:
+                session.rollback()
+                report["blockers"].append(
+                    f"FINGERPRINT_MISMATCH: expected {config.expected_fingerprint!r}, computed {fingerprint!r}."
+                )
+                return report
+
+            if not config.skip_backup:
+                backup_path = backup_database(database, config.backup_directory)
+                report["backup_path"] = str(backup_path)
+
+            apply_results_stage_only: list[StageOnlyPersistenceResult] = []
+            for index, review in kept:
+                fragment = review.candidate_fragment
+                assert fragment is not None
+                apply_results_stage_only.append(
+                    apply_stage_only_persistence(
+                        session, source_metadata, source_locator=fragment.source_locator, raw_text=fragment.raw_text,
+                    )
+                )
+            session.commit()
+            report["applied"] = True
+            report["apply_result"] = [
+                {
+                    "source_id": r.source_id, "source_created": r.source_created,
+                    "source_assertion_id": r.source_assertion_id, "source_assertion_created": r.source_assertion_created,
+                }
+                for r in apply_results_stage_only
+            ]
+            return report
 
         if kept and not config.candidate_airport_ids and not config.no_known_candidates:
             raise PersistRunnerError(
@@ -396,6 +502,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--identity-name", default=None, help="Optional search-seed airport name (review context only, never affects IdentityGuard).")
     parser.add_argument("--identity-iata", default=None)
     parser.add_argument("--identity-icao", default=None)
+    parser.add_argument(
+        "--stage-only", action="store_true",
+        help="Mission #25J1: persist ONLY Source + an unresolved SourceAssertion for each KEPT "
+        "fragment - never the guard/UAC/EvidenceBag pipeline. Mutually exclusive with "
+        "--candidate-airport-id/--no-known-candidates.",
+    )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--allow-database-write", action="store_true")
     parser.add_argument("--expected-fingerprint", type=str, default=None)
@@ -418,7 +530,7 @@ def main(argv: "list[str] | None" = None) -> int:
         identity_name=args.identity_name, identity_iata=args.identity_iata, identity_icao=args.identity_icao,
         apply=args.apply, allow_database_write=args.allow_database_write,
         expected_fingerprint=args.expected_fingerprint, skip_backup=args.skip_backup,
-        backup_directory=args.backup_directory,
+        backup_directory=args.backup_directory, stage_only=args.stage_only,
     )
     print(_DISCLAIMER)
     print()
