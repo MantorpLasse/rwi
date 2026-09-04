@@ -757,8 +757,9 @@ def _parser() -> argparse.ArgumentParser:
         "--known-airport-assertion-type", type=str, default="airport_inventory",
         help="Only meaningful together with --known-airport-id. Checked against this "
         "module's own small allowlist (app.services.known_airport_evidence_persistence."
-        "ALLOWED_ASSERTION_TYPES) - default and, as of Mission #26D, only allowlisted "
-        "value: 'airport_inventory'.",
+        "ALLOWED_ASSERTION_TYPES) - default 'airport_inventory'; as of Mission #26L, "
+        "'project_construction' is also allowlisted (staged funding evidence about a "
+        "known Airport).",
     )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--allow-database-write", action="store_true")

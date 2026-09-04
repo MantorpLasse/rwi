@@ -362,6 +362,13 @@ def test_known_airport_wrong_fingerprint_no_write(seeded_db):
 
 
 def test_known_airport_assertion_type_not_allowlisted_rejected(seeded_db):
+    # "historical" is a real, CHECK-constraint-legal SourceAssertion.assertion_type
+    # (app.models.source_assertion.ASSERTION_TYPES) but is NOT in this module's own
+    # narrow ALLOWED_ASSERTION_TYPES allowlist - proves the module enforces its own
+    # allowlist, not merely the DB's CHECK constraint. "project_construction" was
+    # itself in this same "rejected" role before Mission #26L (RWI HQ "Funding
+    # Staging Foundation - Slice A") deliberately allowlisted it - see
+    # test_known_airport_project_construction_field_values_exact below.
     db_path, ids = seeded_db
     idx = _fragment_index(
         run_persist(PersistConfig(database=db_path, snapshot_id=ids["snapshot_id"], known_airport_id=ids["lcy_id"])),
@@ -371,9 +378,106 @@ def test_known_airport_assertion_type_not_allowlisted_rejected(seeded_db):
         run_persist(
             PersistConfig(
                 database=db_path, snapshot_id=ids["snapshot_id"], known_airport_id=ids["lcy_id"],
-                known_airport_assertion_type="project_construction", keep_indices=frozenset({idx}),
+                known_airport_assertion_type="historical", keep_indices=frozenset({idx}),
             )
         )
+
+
+# --- Mission #26L: project_construction is now allowlisted -----------------
+
+
+def test_known_airport_project_construction_field_values_exact(seeded_db):
+    """Mirrors test_known_airport_apply_field_values_exact exactly, but for
+    the newly-allowlisted assertion_type="project_construction" - proves the
+    known-Airport funding-evidence staging path preserves the same exact
+    field-value contract (identity known, meaning NOT accepted) that the
+    airport_inventory path has always had."""
+    db_path, ids = seeded_db
+    before_airport = _airport_row(db_path, ids["lcy_id"])
+
+    idx = _fragment_index(
+        run_persist(PersistConfig(database=db_path, snapshot_id=ids["snapshot_id"], known_airport_id=ids["lcy_id"])),
+        SENTENCE_1,
+    )
+    preview = run_persist(
+        PersistConfig(
+            database=db_path, snapshot_id=ids["snapshot_id"], known_airport_id=ids["lcy_id"],
+            known_airport_assertion_type="project_construction", keep_indices=frozenset({idx}),
+        )
+    )
+    assert preview["planned_evidence"][0]["assertion_type"] == "project_construction"
+    assert preview["planned_evidence"][0]["conflict"] is None
+    applied = run_persist(
+        PersistConfig(
+            database=db_path, snapshot_id=ids["snapshot_id"], known_airport_id=ids["lcy_id"],
+            known_airport_assertion_type="project_construction", keep_indices=frozenset({idx}),
+            apply=True, allow_database_write=True, expected_fingerprint=preview["plan_fingerprint"],
+        )
+    )
+    assert applied["applied"] is True
+    assert applied["blockers"] == []
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    with Session(engine) as session:
+        assertion = session.scalar(select(SourceAssertion).order_by(SourceAssertion.id.desc()))
+        assert assertion.airport_id == ids["lcy_id"]
+        assert assertion.assertion_type == "project_construction"
+        assert assertion.unknown_airport_candidate_id is None
+        assert assertion.runway_id is None
+        assert assertion.evidence_quality == "unverified_candidate"
+        assert assertion.review_state == "unreviewed"
+        assert assertion.identity_guard_decision is None
+        assert assertion.identity_guard_reason is None
+        assert assertion.intelligence_review_decision is None
+        assert assertion.promotion_policy_decision is None
+        assert SENTENCE_1 in assertion.raw_relevant_text
+        assert assertion.raw_fragment_hash == hashlib.sha256(assertion.raw_relevant_text.encode("utf-8")).hexdigest()
+
+    after_airport = _airport_row(db_path, ids["lcy_id"])
+    assert after_airport.name == before_airport.name
+    assert after_airport.iata_code == before_airport.iata_code
+    assert after_airport.icao_code == before_airport.icao_code
+    assert after_airport.country == before_airport.country
+    assert after_airport.latitude is None  # funding evidence never writes Airport columns
+    assert after_airport.longitude is None
+
+
+def test_known_airport_project_construction_no_signal_or_reviewer_action(seeded_db):
+    """Same 'permitted entities only' guarantee as
+    test_known_airport_apply_no_evidence_bag_uac_reviewer_action, exercised
+    for assertion_type="project_construction" - staging structured funding
+    evidence creates Source + SourceAssertion ONLY, never a Signal,
+    ReviewerAction, EvidenceBag, or UnknownAirportCandidate, and never
+    mutates Airport/Runway/Installation."""
+    db_path, ids = seeded_db
+    before = _counts(db_path)
+    idx = _fragment_index(
+        run_persist(PersistConfig(database=db_path, snapshot_id=ids["snapshot_id"], known_airport_id=ids["lcy_id"])),
+        SENTENCE_1,
+    )
+    preview = run_persist(
+        PersistConfig(
+            database=db_path, snapshot_id=ids["snapshot_id"], known_airport_id=ids["lcy_id"],
+            known_airport_assertion_type="project_construction", keep_indices=frozenset({idx}),
+        )
+    )
+    run_persist(
+        PersistConfig(
+            database=db_path, snapshot_id=ids["snapshot_id"], known_airport_id=ids["lcy_id"],
+            known_airport_assertion_type="project_construction", keep_indices=frozenset({idx}),
+            apply=True, allow_database_write=True, expected_fingerprint=preview["plan_fingerprint"],
+        )
+    )
+    after = _counts(db_path)
+    assert after["SourceAssertionEvidenceBag"] == before["SourceAssertionEvidenceBag"]
+    assert after["UnknownAirportCandidate"] == before["UnknownAirportCandidate"]
+    assert after["ReviewerAction"] == before["ReviewerAction"]
+    assert after["Signal"] == before["Signal"]
+    assert after["Runway"] == before["Runway"]
+    assert after["Installation"] == before["Installation"]
+    assert after["Airport"] == before["Airport"]
+    assert after["Source"] == before["Source"] + 1
+    assert after["SourceAssertion"] == before["SourceAssertion"] + 1
 
 
 # --- Mutual exclusivity with the other two modes' own flags ----------------

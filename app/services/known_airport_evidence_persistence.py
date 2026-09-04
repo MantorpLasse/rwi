@@ -49,15 +49,21 @@ caller supplies `assertion_type` explicitly rather than this module
 hardcoding one value, but it is checked against `ALLOWED_ASSERTION_TYPES`
 - a narrow, explicit allowlist, not the full
 app.models.source_assertion.ASSERTION_TYPES CHECK-constraint universe.
-V1 contains exactly one value, "airport_inventory" (Mission #26B's own
+V1 contained exactly one value, "airport_inventory" (Mission #26B's own
 approved semantic type for airport reference-data evidence, e.g.
 coordinates - see docs/architecture/rwi-known-airport-ambiguity...
-no, see Mission #26B's report). Extending the allowlist to a new value is
-a one-line, separately-reviewable change - never "any CHECK-constraint-
-legal string", which would let a caller silently smuggle
-"project_construction"/"historical" through this seam and blur the two
-services' distinct meanings (Mission #26D's own explicit "do not overload"
-warning, echoed from Mission #26C Part M).
+no, see Mission #26B's report). Mission #26L (RWI HQ "Funding Staging
+Foundation - Slice A") extended the allowlist by exactly one more value,
+"project_construction", so that structured funding evidence about an
+already-known Airport (a USAspending grant, an FAA AIP row) can be staged
+through this same narrow seam - identity already resolved, project/
+funding MEANING still NOT accepted, exactly the same distinction this
+module has always drawn for "airport_inventory" evidence. This remains a
+one-line, separately-reviewable allowlist, never "any CHECK-constraint-
+legal string", which would let a caller silently smuggle "historical"
+through this seam and blur the two services' distinct meanings (Mission
+#26D's own explicit "do not overload" warning, echoed from Mission #26C
+Part M).
 
 FIELD SEMANTICS for a SourceAssertion this module creates:
   airport_id = the caller's explicit, pre-validated, already-existing
@@ -146,9 +152,13 @@ __all__ = [
 # full app.models.source_assertion.ASSERTION_TYPES CHECK-constraint
 # universe. "airport_inventory" is Mission #26B's own approved semantic
 # type for airport reference-data evidence (coordinates being the first
-# acceptance case). Extending this tuple is a deliberate, one-line,
-# separately-reviewable future change - not exercised by this mission.
-ALLOWED_ASSERTION_TYPES = ("airport_inventory",)
+# acceptance case). "project_construction" was added by Mission #26L
+# ("Funding Staging Foundation - Slice A") to allow structured funding
+# evidence about an already-known Airport to be staged through this same
+# seam - identity resolved, project/funding meaning still NOT accepted.
+# Extending this tuple further remains a deliberate, one-line,
+# separately-reviewable change.
+ALLOWED_ASSERTION_TYPES = ("airport_inventory", "project_construction")
 
 
 class AssertionTypeNotAllowedError(ValueError):
