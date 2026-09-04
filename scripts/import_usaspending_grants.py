@@ -18,8 +18,7 @@ from app.acquisition.usaspending_grants import (
     fetch_all_emas_grants,
 )
 from app.database import SessionLocal, engine
-from app.models import Airport, Signal, Source, SourceAssertion
-from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE
+from app.models import Airport, Source, SourceAssertion
 
 # "...CARTERSVILLE-BARTOW COUNTY AIRPORT (VPC), LOCATED IN..." - state block
 # grants sometimes name a specific airport with its Loc ID this way.
@@ -204,6 +203,42 @@ def import_all(
     session_factory: Callable[[], Session] = SessionLocal,
     client: httpx.Client | None = None,
 ) -> dict:
+    """RWI HQ "USAspending Stage-Only Conversion" (Slice C of the funding
+    staging arc, following Slice A/known_airport_evidence_persistence and
+    Slice B/known_airport_funding_reviewer_action+signal_creation): every
+    grant - resolved or unresolved - is preserved as funding EVIDENCE only
+    (Source + SourceAssertion, assertion_type="project_construction"). This
+    function never creates a Signal, never records a ReviewerAction, and
+    never calls either Slice B lightweight promotion service - Signal
+    creation is a separate, later, explicitly human-approved step (see
+    app.services.known_airport_funding_reviewer_action /
+    known_airport_funding_signal_creation), never automatic on import.
+
+    AIRPORT-FABRICATION SAFETY (Slice C's own governance finding, "Part 5"):
+    resolve_airport() itself is unmodified - redesigning airport-identity
+    resolution is out of this slice's scope - but its RESOLVED_NEW outcome
+    (a real embedded FAA/ICAO/IATA-shaped Loc ID with no matching existing
+    Airport) creates a brand-new Airport from machine evidence alone as a
+    side effect of being CALLED, before this function ever sees the result -
+    directly violating the established RWI invariant this pipeline enforces
+    everywhere else ("machine evidence alone must not fabricate an
+    Airport"). This function refuses to let that fabrication reach disk: it
+    immediately rolls back the just-flushed, not-yet-committed Airport and
+    re-routes the grant through the SAME identity-unresolved staging path a
+    genuine UNRESOLVED result uses - never silently accepting the
+    fabrication, never silently discarding the grant's own evidence either.
+    Tracked separately in stats["airport_fabrication_refused"] so it is
+    never confused with an ordinary UNRESOLVED case in review. This is an
+    orchestration-level mitigation only; resolve_airport()'s own
+    RESOLVED_NEW branch remains untouched pending a separate, explicitly-
+    scoped HQ decision (see this slice's own final report).
+
+    AMOUNT SAFETY: grant.award_amount is preserved only inside the raw
+    evidence text (SourceAssertion.raw_relevant_text, the grant's own
+    description, verbatim) - never copied into any structured value field.
+    No estimated_total_value_usd, no estimated_emas_value_usd, no supplier
+    field, is populated or inferred anywhere in this function.
+    """
     owns_client = client is None
     client = client or httpx.Client(
         follow_redirects=True, headers={"User-Agent": "RunwaySafeIntelligence/1.0"}
@@ -211,7 +246,9 @@ def import_all(
     stats = {
         "grants_fetched": 0,
         "airports_created": 0,
-        "signals_created": 0,
+        "airport_fabrication_refused": 0,
+        "evidence_staged_resolved": 0,
+        "evidence_staged_unresolved": 0,
         "already_imported": 0,
         "unattributable": 0,
     }
@@ -229,14 +266,32 @@ def import_all(
                     continue
 
                 resolution = resolve_airport(session, grant)
+
                 if resolution.status == RESOLVED_NEW:
-                    stats["airports_created"] += 1
+                    # See this function's own docstring, "AIRPORT-FABRICATION
+                    # SAFETY". resolve_airport() already added+flushed a new
+                    # Airport for this branch as a side effect of being
+                    # called - discard it before it can ever be committed,
+                    # and treat this grant as identity-unresolved instead.
+                    session.rollback()
+                    stats["airport_fabrication_refused"] += 1
+                    resolution = AirportResolution(
+                        UNRESOLVED,
+                        raw_identifier=resolution.raw_identifier,
+                        raw_name=grant.recipient_name.title(),
+                        reason=(
+                            "resolve_airport() matched a real Loc-ID pattern with no existing Airport - "
+                            "Slice C refuses machine-driven Airport creation from funding evidence alone; "
+                            "this grant requires human review before any Airport is created for it"
+                        ),
+                    )
 
                 # The Source is created regardless of resolution outcome -
                 # it needs no Airport link, so a grant whose airport
-                # identity can't be established still keeps its evidence
-                # (title, recipient, description, award reference, URL)
-                # instead of vanishing without a trace.
+                # identity can't be established (or whose only path to one
+                # would have fabricated an Airport) still keeps its
+                # evidence (title, recipient, description, award reference,
+                # URL) instead of vanishing without a trace.
                 source = Source(
                     title=f"USAspending grant: {grant.recipient_name.title()}",
                     source_type="usaspending_grant",
@@ -253,7 +308,7 @@ def import_all(
                 session.flush()
 
                 if resolution.status == UNRESOLVED:
-                    # No Signal - Signal.airport_id is required. The raw
+                    # No Signal - identity is not established. The raw
                     # values are preserved on a SourceAssertion instead
                     # (airport_id left NULL), the repository's existing
                     # mechanism for evidence recorded before identity
@@ -273,25 +328,42 @@ def import_all(
                         )
                     )
                     stats["unattributable"] += 1
+                    stats["evidence_staged_unresolved"] += 1
                     session.commit()
                     continue
 
-                confidence = "high"
+                # RESOLVED_EXISTING: identity is already known. Stage
+                # funding evidence only, through the SAME lightweight field
+                # contract app.services.known_airport_evidence_persistence
+                # guarantees for assertion_type="project_construction"
+                # (evidence_quality="unverified_candidate",
+                # review_state="unreviewed", every identity/intelligence/
+                # promotion decision field left NULL) - exactly the shape
+                # app.services.known_airport_funding_lightweight_path_guard
+                # checks for. Constructed directly here rather than via
+                # apply_known_airport_evidence_persistence() itself: that
+                # function manages its own Source under a
+                # "discovery:{document_identity}" external_id convention,
+                # which this importer's own top-level "usaspending:
+                # {external_id}" already-imported check (above) would not
+                # recognize on replay - reusing it as-is would silently
+                # break this importer's own pre-existing idempotency
+                # contract. No Signal, no ReviewerAction, no call to either
+                # Slice B lightweight promotion service - human review is a
+                # separate, later, explicitly-authorized step.
                 session.add(
-                    Signal(
-                        airport=resolution.airport,
-                        source=source,
-                        title=signal_title(grant),
-                        category=classify_category(grant.description),
-                        confidence=confidence,
-                        status="identified",
-                        probability_score=DEFAULT_SCORE_BY_CONFIDENCE[confidence],
-                        planning_year=grant.start_date.year if grant.start_date else None,
-                        estimated_total_value_usd=grant.award_amount,
-                        notes=grant.description,
+                    SourceAssertion(
+                        source_id=source.id,
+                        airport_id=resolution.airport.id,
+                        assertion_type="project_construction",
+                        raw_airport_identifier=resolution.raw_identifier,
+                        raw_relevant_text=grant.description,
+                        source_record_identifier=external_id,
+                        evidence_quality="unverified_candidate",
+                        review_state="unreviewed",
                     )
                 )
-                stats["signals_created"] += 1
+                stats["evidence_staged_resolved"] += 1
                 session.commit()
     finally:
         if owns_client:
@@ -304,8 +376,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Fetch every historical USAspending.gov grant mentioning 'Engineered "
-            "Material Arresting System', match it to an Airport (creating one if "
-            "needed), and record a high-confidence Signal for each."
+            "Material Arresting System' and preserve each as funding evidence "
+            "(Source + SourceAssertion, assertion_type='project_construction') - "
+            "never a Signal, never an Airport created from machine evidence alone. "
+            "Human review and Signal promotion are separate, later, explicitly "
+            "authorized steps (see app.services.known_airport_funding_reviewer_action "
+            "/ known_airport_funding_signal_creation)."
         )
     )
     parser.add_argument("--allow-live-network", action="store_true")
@@ -325,11 +401,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Import failed: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Grants fetched (all-time):     {stats['grants_fetched']}")
-    print(f"Already imported (skipped):    {stats['already_imported']}")
-    print(f"Airports created:              {stats['airports_created']}")
-    print(f"Signals created:               {stats['signals_created']}")
-    print(f"Unattributable (no airport):   {stats['unattributable']}")
+    print(f"Grants fetched (all-time):        {stats['grants_fetched']}")
+    print(f"Already imported (skipped):       {stats['already_imported']}")
+    print(f"Airports created:                 {stats['airports_created']}")
+    print(f"Airport fabrication refused:      {stats['airport_fabrication_refused']}")
+    print(f"Evidence staged (known Airport):  {stats['evidence_staged_resolved']}")
+    print(f"Evidence staged (unresolved):     {stats['evidence_staged_unresolved']}")
+    print(f"Unattributable (no airport):      {stats['unattributable']}")
     return 0
 
 

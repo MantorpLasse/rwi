@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.acquisition.usaspending_grants import UsaspendingGrant
 from app.database import Base
-from app.models import Airport, Signal, Source, SourceAssertion
+from app.models import Airport, ReviewerAction, Signal, Source, SourceAssertion
 from scripts.import_usaspending_grants import (
     RESOLVED_EXISTING,
     RESOLVED_NEW,
@@ -17,6 +17,7 @@ from scripts.import_usaspending_grants import (
     classify_category,
     ensure_source_external_id_column,
     import_all,
+    main,
     resolve_airport,
     signal_title,
 )
@@ -256,10 +257,15 @@ def _client_with(grants_json):
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
-def test_import_all_creates_signal_for_matched_airport(session_factory):
+def test_import_all_stages_evidence_for_matched_airport_creates_no_signal(session_factory):
+    """RWI HQ 'USAspending Stage-Only Conversion' (Slice C): a
+    resolved-Airport grant is preserved as funding evidence only -
+    Source + one project_construction SourceAssertion - never a Signal."""
     with session_factory() as session:
-        session.add(Airport(name="Greater Binghamton Airport", faa_code="BGM", city="Binghamton", state_region="New York", country="USA"))
+        airport = Airport(name="Greater Binghamton Airport", faa_code="BGM", city="Binghamton", state_region="New York", country="USA")
+        session.add(airport)
         session.commit()
+        airport_id = airport.id
 
     row = {
         "generated_internal_id": "ASST_NON_BGM_1",
@@ -277,22 +283,74 @@ def test_import_all_creates_signal_for_matched_airport(session_factory):
     )
 
     assert stats["grants_fetched"] == 1
-    assert stats["signals_created"] == 1
+    assert stats["evidence_staged_resolved"] == 1
     assert stats["airports_created"] == 0
+    assert stats["airport_fabrication_refused"] == 0
     assert stats["unattributable"] == 0
 
     with session_factory() as session:
-        signal = session.scalar(select(Signal))
-        assert signal.confidence == "high"
-        assert signal.status == "identified"
-        assert signal.probability_score == 8.0
-        assert signal.category == "replacement"
-        assert signal.planning_year == 2026
-        assert signal.estimated_total_value_usd == Decimal("415226.0")
+        # 2. zero Signal.
+        assert session.scalars(select(Signal)).all() == []
+        # 3. zero ReviewerAction.
+        assert session.scalars(select(ReviewerAction)).all() == []
+        # only one Airport - the pre-existing one, none fabricated.
+        assert [a.id for a in session.scalars(select(Airport)).all()] == [airport_id]
 
         source = session.scalar(select(Source))
         assert source.source_type == "usaspending_grant"
         assert source.external_id == "usaspending:ASST_NON_BGM_1"
+        # 7/8. raw evidence and provenance preserved exactly.
+        assert source.summary == BGM_DESCRIPTION
+        assert source.document_reference == "BGM-1"
+        assert source.url == "https://www.usaspending.gov/award/ASST_NON_BGM_1"
+
+        # 1. one project_construction SourceAssertion only.
+        assertion = session.scalar(select(SourceAssertion))
+        assert assertion is not None
+        assert assertion.source_id == source.id
+        assert assertion.airport_id == airport_id
+        assert assertion.assertion_type == "project_construction"
+        assert assertion.raw_relevant_text == BGM_DESCRIPTION
+        assert assertion.evidence_quality == "unverified_candidate"
+        assert assertion.review_state == "unreviewed"
+        assert assertion.identity_guard_decision is None
+        assert assertion.intelligence_review_decision is None
+        assert assertion.promotion_policy_decision is None
+        # 6. award amount not copied into any Signal/value field - there is
+        # no structured amount field on SourceAssertion at all; the amount
+        # exists only inside the raw evidence text if the description
+        # mentions it (it does not, in this fixture - see the dedicated
+        # amount-safety test below for a description that does).
+        assert len(session.scalars(select(SourceAssertion)).all()) == 1
+
+
+def test_lightweight_funding_guard_accepts_the_staged_resolved_assertion(session_factory):
+    """Integration proof that the row this importer now stages for a
+    resolved-Airport grant satisfies Slice B's own eligibility guard exactly
+    - the two slices' field contracts are not merely intended to match, they
+    are verified to match here."""
+    from app.services.known_airport_funding_lightweight_path_guard import (
+        check_lightweight_funding_path_eligibility,
+    )
+
+    with session_factory() as session:
+        session.add(Airport(name="Greater Binghamton Airport", faa_code="BGM", city="Binghamton", state_region="New York", country="USA"))
+        session.commit()
+
+    row = {
+        "generated_internal_id": "ASST_NON_BGM_1",
+        "Award ID": "BGM-1",
+        "Recipient Name": "BROOME COUNTY",
+        "Award Amount": 415226.0,
+        "Description": BGM_DESCRIPTION,
+        "Awarding Agency": "Department of Transportation",
+        "Start Date": "2026-06-16",
+    }
+    import_all(end_date=date(2026, 12, 31), session_factory=session_factory, client=_client_with([row]))
+
+    with session_factory() as session:
+        assertion = session.scalar(select(SourceAssertion))
+        check_lightweight_funding_path_eligibility(assertion)  # must not raise
 
 
 def test_import_all_fails_closed_and_preserves_evidence_for_beneficiary_only_match(session_factory):
@@ -317,12 +375,13 @@ def test_import_all_fails_closed_and_preserves_evidence_for_beneficiary_only_mat
     )
 
     assert stats["airports_created"] == 0
-    assert stats["signals_created"] == 0
+    assert stats["evidence_staged_resolved"] == 0
     assert stats["unattributable"] == 1
 
     with session_factory() as session:
         assert session.scalars(select(Airport)).all() == []  # no fabricated Airport
-        assert session.scalars(select(Signal)).all() == []  # Signal.airport_id is required
+        assert session.scalars(select(Signal)).all() == []  # no Signal - evidence only
+        assert session.scalars(select(ReviewerAction)).all() == []
 
         source = session.scalar(select(Source))
         assert source is not None
@@ -365,7 +424,7 @@ def test_import_all_fails_closed_for_allegheny_shaped_authority_recipient(sessio
     )
 
     assert stats["airports_created"] == 0
-    assert stats["signals_created"] == 0
+    assert stats["evidence_staged_resolved"] == 0
     assert stats["unattributable"] == 1
 
     with session_factory() as session:
@@ -398,7 +457,7 @@ def test_import_all_preserves_evidence_when_totally_unattributable(session_facto
     )
 
     assert stats["unattributable"] == 1
-    assert stats["signals_created"] == 0
+    assert stats["evidence_staged_resolved"] == 0
 
     with session_factory() as session:
         assert session.scalars(select(Signal)).all() == []
@@ -438,6 +497,8 @@ def test_import_all_does_not_manufacture_duplicate_unresolved_rows_on_rerun(sess
 
 
 def test_import_all_is_idempotent_on_rerun(session_factory):
+    """5. Identical replay stages nothing new (no duplicate Source or
+    SourceAssertion) and creates zero Signal on either run."""
     row = {
         "generated_internal_id": "ASST_NON_BGM_1",
         "Award ID": "BGM-1",
@@ -454,10 +515,103 @@ def test_import_all_is_idempotent_on_rerun(session_factory):
     first = import_all(end_date=date(2026, 12, 31), session_factory=session_factory, client=_client_with([row]))
     second = import_all(end_date=date(2026, 12, 31), session_factory=session_factory, client=_client_with([row]))
 
-    assert first["signals_created"] == 1
-    assert second["signals_created"] == 0
+    assert first["evidence_staged_resolved"] == 1
+    assert second["evidence_staged_resolved"] == 0
     assert second["already_imported"] == 1
 
     with session_factory() as session:
-        assert len(session.scalars(select(Signal)).all()) == 1
+        assert session.scalars(select(Signal)).all() == []
         assert len(session.scalars(select(Source)).all()) == 1
+        assert len(session.scalars(select(SourceAssertion)).all()) == 1
+
+
+def test_import_all_does_not_reprocess_changed_description_on_replay(session_factory):
+    """3. A second fetch under the SAME external identity but different
+    description text is not reconciled or re-staged - this importer's
+    existing conflict semantics are Source-level external_id dedup only
+    (the whole grant is skipped once its Source exists), unchanged by this
+    slice. The originally staged evidence remains authoritative."""
+    with session_factory() as session:
+        session.add(Airport(name="Greater Binghamton Airport", faa_code="BGM", city="Binghamton", state_region="New York", country="USA"))
+        session.commit()
+
+    original_row = {
+        "generated_internal_id": "ASST_NON_BGM_1", "Award ID": "BGM-1", "Recipient Name": "BROOME COUNTY",
+        "Award Amount": 415226.0, "Description": BGM_DESCRIPTION,
+        "Awarding Agency": "Department of Transportation", "Start Date": "2026-06-16",
+    }
+    changed_row = dict(original_row, Description=BGM_DESCRIPTION + " AMENDED TEXT THAT NEVER APPEARS.")
+
+    import_all(end_date=date(2026, 12, 31), session_factory=session_factory, client=_client_with([original_row]))
+    second = import_all(end_date=date(2026, 12, 31), session_factory=session_factory, client=_client_with([changed_row]))
+
+    assert second["already_imported"] == 1
+    assert second["evidence_staged_resolved"] == 0
+    with session_factory() as session:
+        assertion = session.scalar(select(SourceAssertion))
+        assert assertion.raw_relevant_text == BGM_DESCRIPTION  # original text, not the amended one
+        assert len(session.scalars(select(SourceAssertion)).all()) == 1
+
+
+def test_import_all_refuses_airport_fabrication_from_embedded_loc_id(session_factory):
+    """Part 5: a RESOLVED_NEW-shaped grant (a real embedded Loc ID with no
+    matching existing Airport) must NOT result in a fabricated Airport,
+    a Signal, or a ReviewerAction - it is staged as identity-unresolved
+    evidence instead, distinctly counted."""
+    row = {
+        "generated_internal_id": "ASST_NON_VPC_1", "Award ID": "VPC-1", "Recipient Name": "GEORGIA DOT",
+        "Award Amount": 900000.0, "Description": GEORGIA_DOT_DESCRIPTION,
+        "Awarding Agency": "Department of Transportation", "Start Date": "2026-01-05",
+    }
+    stats = import_all(end_date=date(2026, 12, 31), session_factory=session_factory, client=_client_with([row]))
+
+    assert stats["airports_created"] == 0
+    assert stats["airport_fabrication_refused"] == 1
+    assert stats["evidence_staged_unresolved"] == 1
+    assert stats["unattributable"] == 1
+
+    with session_factory() as session:
+        assert session.scalars(select(Airport)).all() == []  # no fabricated "VPC" Airport
+        assert session.scalars(select(Signal)).all() == []
+        assert session.scalars(select(ReviewerAction)).all() == []
+
+        source = session.scalar(select(Source))
+        assert source is not None
+        assert source.external_id == "usaspending:ASST_NON_VPC_1"
+
+        assertion = session.scalar(select(SourceAssertion))
+        assert assertion.airport_id is None
+        assert assertion.assertion_type == "project_construction"
+        assert assertion.raw_relevant_text == GEORGIA_DOT_DESCRIPTION  # evidence preserved, not discarded
+        assert assertion.evidence_quality == "unverified_candidate"
+        assert assertion.review_state == "unreviewed"
+
+
+def test_import_all_never_populates_a_dollar_value_field():
+    """6. Neither the resolved nor unresolved path ever writes a dollar
+    amount into any Signal field - proven by construction, since neither
+    path creates a Signal at all, and SourceAssertion itself carries no
+    structured amount column."""
+    from sqlalchemy import inspect as sa_inspect
+
+    columns = {c.name for c in sa_inspect(SourceAssertion).columns}
+    assert "estimated_total_value_usd" not in columns
+    assert "estimated_emas_value_usd" not in columns
+
+
+def test_cli_write_and_network_gates_remain_unchanged(monkeypatch, capsys):
+    """10. --allow-live-network / --allow-database-write gates are
+    untouched by this slice - both are still required before any network
+    call or import_all() invocation is attempted."""
+    called = {"import_all": False}
+    monkeypatch.setattr(
+        "scripts.import_usaspending_grants.import_all", lambda *a, **k: called.__setitem__("import_all", True),
+    )
+
+    assert main([]) == 2
+    assert called["import_all"] is False
+    assert "--allow-live-network is required" in capsys.readouterr().err
+
+    assert main(["--allow-live-network"]) == 2
+    assert called["import_all"] is False
+    assert "--allow-database-write is required" in capsys.readouterr().err
