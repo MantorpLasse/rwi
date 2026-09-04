@@ -11,17 +11,47 @@ import pdfplumber
 
 
 AIP_GRANTS_URL_TEMPLATE = "https://www.faa.gov/airports/aip/{year}_aip_grants"
-_EXPECTED_HEADER = (
+# RWI HQ "FAA AIP Parser + Stage-Only Conversion": the table header is fixed
+# in every column EXCEPT the discretionary-amount column, whose exact label
+# text FAA has changed at least once ("Discretionary Amt" historically,
+# "Non-comp Discretionary Amt" as of current FY2026 material - the same
+# fiscal quantity, differently labeled). Modeled as an explicit, narrow
+# alias set for that ONE column - never a fuzzy/partial header match - so a
+# genuinely different table shape (wrong column count, wrong column order,
+# an unrecognized discretionary label, a missing/renamed column anywhere
+# else) still fails closed exactly as before.
+_EXPECTED_HEADER_PREFIX = (
     "ST",
     "City",
     "Airport",
     "Loc ID",
     "Project Description",
     "Entitlement Amt",
-    "Discretionary Amt",
-    "Total AIP",
 )
+_SUPPORTED_DISCRETIONARY_HEADERS = (
+    "Discretionary Amt",  # historical
+    "Non-comp Discretionary Amt",  # current FY2026 material
+)
+_EXPECTED_HEADER_SUFFIX = ("Total AIP",)
+_EXPECTED_HEADER_LENGTH = len(_EXPECTED_HEADER_PREFIX) + 1 + len(_EXPECTED_HEADER_SUFFIX)
 _PDF_HREF = re.compile(r'href="([^"]+\.pdf)"', re.IGNORECASE)
+
+
+def _is_supported_header(normalized_header: tuple[str, ...]) -> bool:
+    """Explicit structural check, never fuzzy: every column except the
+    discretionary-amount one (index len(_EXPECTED_HEADER_PREFIX)) must match
+    exactly; that one column must be exactly one of
+    _SUPPORTED_DISCRETIONARY_HEADERS, verbatim."""
+    if len(normalized_header) != _EXPECTED_HEADER_LENGTH:
+        return False
+    prefix_len = len(_EXPECTED_HEADER_PREFIX)
+    if normalized_header[:prefix_len] != _EXPECTED_HEADER_PREFIX:
+        return False
+    if normalized_header[prefix_len] not in _SUPPORTED_DISCRETIONARY_HEADERS:
+        return False
+    if normalized_header[prefix_len + 1:] != _EXPECTED_HEADER_SUFFIX:
+        return False
+    return True
 
 
 class AipGrantsError(ValueError):
@@ -88,13 +118,13 @@ def parse_grant_pdf(pdf_bytes: bytes, *, source_pdf_url: str) -> list[AipGrant]:
                 continue
             header, *rows = table
             normalized_header = tuple((cell or "").strip() for cell in header)
-            if normalized_header != _EXPECTED_HEADER:
+            if not _is_supported_header(normalized_header):
                 raise AipGrantsError(
                     f"Unexpected AIP grants table header on page {page_number}: "
                     f"{normalized_header!r}"
                 )
             for row in rows:
-                if len(row) != len(_EXPECTED_HEADER):
+                if len(row) != _EXPECTED_HEADER_LENGTH:
                     raise AipGrantsError(f"Unexpected AIP grants row shape: {row!r}")
                 state, city, airport_name, loc_id, description, entitlement, discretionary, total = row
                 loc_id = (loc_id or "").strip()
