@@ -18,6 +18,7 @@ FETCH_FILES = [
     REPO_ROOT / "app" / "acquisition" / "generic_web.py",
     REPO_ROOT / "app" / "services" / "generic_web_fetch.py",
     REPO_ROOT / "scripts" / "fetch_discovered_url.py",
+    REPO_ROOT / "scripts" / "fetch_research_candidate.py",
 ]
 
 FORBIDDEN_IMPORT_SUBSTRINGS = (
