@@ -1,5 +1,5 @@
 """Tests for app/services/research_loop.py (RWI HQ "Discovery Research
-Loop V1", Slice 2). Fake SearchProvider only - no network, no database.
+Loop V1", Slice 2/3). Fake SearchProvider only - no network, no database.
 """
 from __future__ import annotations
 
@@ -9,8 +9,18 @@ from app.discovery.query import SearchQuery
 from app.discovery.search import SearchOutcome, SearchOutcomeStatus, SearchResult
 from app.discovery.triage import PriorityBand
 from app.services.discovery_temporal_followup import AirportSearchContext
-from app.services.research_loop import ResearchLoopReport, run_research_loop
-from app.services.research_question_planning import ResearchClue, ResearchDimension
+from app.services.research_loop import (
+    DimensionSearchStatus,
+    ResearchLoopReport,
+    compute_dimension_search_status,
+    run_research_loop,
+)
+from app.services.research_question_planning import (
+    ResearchClue,
+    ResearchDimension,
+    plan_research_questions,
+    plan_research_search_queries,
+)
 
 _NOW = datetime(2026, 9, 4, tzinfo=timezone.utc)
 
@@ -21,6 +31,9 @@ ALL_FIVE_DIMENSIONS = (
     ResearchDimension.TIMING,
     ResearchDimension.SUPPLIER,
 )
+
+# RUNWAY_END=1 + INSTALLATION_TYPE=2 + PROJECT_PHASE=2 + TIMING=1 + SUPPLIER=1
+TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE = 7
 
 SDF_EVIDENCE_TEXT = (
     "Reconstruct Taxiway,Construct Engineered Material Arresting System Safety Area,"
@@ -62,64 +75,56 @@ def test_no_provider_returns_plan_only_zero_network():
     report = run_research_loop(clue, provider=None)
     assert isinstance(report, ResearchLoopReport)
     assert len(report.questions) == 5
-    assert report.question_outcomes == ()
+    assert len(report.planned_queries) == TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE
+    assert report.query_outcomes == ()
     assert report.triaged_candidates == ()
 
 
-# --- SDF offline acceptance test (Part 12) -----------------------------------
+# --- SDF offline acceptance test (Part 10) -----------------------------------
 
 
-def test_sdf_offline_acceptance_executes_exactly_five_questions_unchanged_queries():
+def test_sdf_offline_acceptance_executes_every_planned_query_unchanged():
     clue = _sdf_clue()
-    from app.services.research_question_planning import plan_research_questions
-    expected_questions = plan_research_questions(clue)
+    planned = plan_research_search_queries(clue)
+    assert len(planned) == TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE
 
     canned = {
-        expected_questions[0].search_query.rendered: SearchOutcome(
-            query=expected_questions[0].search_query, status=SearchOutcomeStatus.OK,
-            results=(_result(expected_questions[0].search_query, "https://faa.gov/sdf-runway-doc", title="SDF Runway 11/29 EMAS document"),),
-        ),
-        expected_questions[1].search_query.rendered: SearchOutcome(
-            query=expected_questions[1].search_query, status=SearchOutcomeStatus.NO_RESULTS,
+        planned[0].search_query.rendered: SearchOutcome(
+            query=planned[0].search_query, status=SearchOutcomeStatus.OK,
+            results=(_result(planned[0].search_query, "https://faa.gov/sdf-runway-doc", title="SDF Runway 11/29 EMAS document"),),
         ),
     }
     provider = _FakeProvider(canned)
 
     report = run_research_loop(clue, provider=provider)
 
-    assert len(report.question_outcomes) == 5
-    for qo in report.question_outcomes:
+    assert len(report.query_outcomes) == TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE
+    for qo in report.query_outcomes:
         # each executed SearchQuery is passed unchanged to the provider
-        assert qo.outcome.query == qo.question.search_query
-    assert {qo.question.dimension for qo in report.question_outcomes} == set(ALL_FIVE_DIMENSIONS)
-
-    statuses = {qo.question.dimension: qo.outcome.status for qo in report.question_outcomes}
-    assert statuses[ResearchDimension.RUNWAY_END] == SearchOutcomeStatus.OK
-    assert statuses[ResearchDimension.INSTALLATION_TYPE] == SearchOutcomeStatus.NO_RESULTS
-    # every other question defaulted to NO_RESULTS via the fake provider's canned fallback
-    assert statuses[ResearchDimension.PROJECT_PHASE] == SearchOutcomeStatus.NO_RESULTS
-    assert statuses[ResearchDimension.TIMING] == SearchOutcomeStatus.NO_RESULTS
-    assert statuses[ResearchDimension.SUPPLIER] == SearchOutcomeStatus.NO_RESULTS
+        assert qo.outcome.query == qo.planned_query.search_query
+    assert {qo.planned_query.dimension for qo in report.query_outcomes} == set(ALL_FIVE_DIMENSIONS)
 
 
-def test_sdf_offline_dedup_across_questions_and_triage_runs_once():
-    """A URL surfaced by TWO different dimensions' queries must appear
-    exactly once in triaged_candidates, with BOTH dimensions recovered."""
+def test_sdf_offline_dedup_across_planned_queries_and_triage_runs_once():
+    """A URL surfaced by planned queries across TWO different dimensions
+    must appear exactly once in triaged_candidates, with BOTH dimensions
+    recovered - and, within PROJECT_PHASE's own two concept queries, both
+    contribute to the same found_by list."""
     context = AirportSearchContext(name="Louisville Muhammad Ali International Airport", iata_code="SDF", icao_code="KSDF")
     clue = ResearchClue(
         evidence_text=SDF_EVIDENCE_TEXT, airport_context=context,
         unresolved_dimensions=(ResearchDimension.RUNWAY_END, ResearchDimension.PROJECT_PHASE),
     )
-    from app.services.research_question_planning import plan_research_questions
-    questions = plan_research_questions(clue)
+    planned = plan_research_search_queries(clue)
+    assert len(planned) == 3  # RUNWAY_END(1) + PROJECT_PHASE(2)
     shared_url = "https://faa.gov/sdf-emas-project"
 
     canned = {
-        q.search_query.rendered: SearchOutcome(
-            query=q.search_query, status=SearchOutcomeStatus.OK,
-            results=(_result(q.search_query, shared_url, title="SDF EMAS Runway Project - FAA"),),
+        p.search_query.rendered: SearchOutcome(
+            query=p.search_query, status=SearchOutcomeStatus.OK,
+            results=(_result(p.search_query, shared_url, title="SDF EMAS Runway Project - FAA"),),
         )
-        for q in questions
+        for p in planned
     }
     provider = _FakeProvider(canned)
 
@@ -129,7 +134,7 @@ def test_sdf_offline_dedup_across_questions_and_triage_runs_once():
     candidate = report.triaged_candidates[0]
     assert candidate.triaged.deduped.result.url == shared_url
     assert set(candidate.dimensions) == {ResearchDimension.RUNWAY_END, ResearchDimension.PROJECT_PHASE}
-    assert len(candidate.triaged.deduped.found_by) == 2
+    assert len(candidate.triaged.deduped.found_by) == 3
 
 
 def test_sdf_offline_no_answer_is_ever_inferred():
@@ -140,23 +145,41 @@ def test_sdf_offline_no_answer_is_ever_inferred():
     schedule, or project value."""
     clue = _sdf_clue()
     report = run_research_loop(clue, provider=None)  # plan-only: no results to accidentally leak an answer from
-    haystack = " ".join(f"{q.question} {q.reason} {q.search_query.rendered}" for q in report.questions).lower()
+    haystack = " ".join(
+        f"{q.question} {q.reason} {q.search_query.rendered}" for q in report.questions
+    ).lower()
+    haystack += " " + " ".join(
+        f"{p.question} {p.reason} {p.search_query.rendered}" for p in report.planned_queries
+    ).lower()
     for forbidden in ("17l", "35r", "17/35", "north end", "east runway", "is a replacement", "is a new installation", "$", "million"):
         assert forbidden not in haystack
 
 
-# --- Query-bias observability (Part 13) --------------------------------------
+# --- Query-plan hardening / bias observability (Part 4) ---------------------
 
 
-def test_report_preserves_exact_rendered_query_text():
+def test_report_preserves_the_widened_installation_type_and_project_phase_plan():
     clue = _sdf_clue(dimensions=(ResearchDimension.INSTALLATION_TYPE, ResearchDimension.PROJECT_PHASE))
     report = run_research_loop(clue, provider=None)
-    rendered = {q.dimension: q.search_query.rendered for q in report.questions}
-    assert rendered[ResearchDimension.INSTALLATION_TYPE] == '"Louisville Muhammad Ali International Airport" EMAS replacement'
-    assert rendered[ResearchDimension.PROJECT_PHASE] == '"Louisville Muhammad Ali International Airport" EMAS construction'
+    assert len(report.planned_queries) == 4  # 2 + 2
+
+    rendered_by_dimension: dict[ResearchDimension, list[str]] = {}
+    for p in report.planned_queries:
+        rendered_by_dimension.setdefault(p.dimension, []).append(p.search_query.rendered)
+
+    installation_rendered = rendered_by_dimension[ResearchDimension.INSTALLATION_TYPE]
+    project_phase_rendered = rendered_by_dimension[ResearchDimension.PROJECT_PHASE]
+
+    # never solely "EMAS replacement" / "EMAS construction" any more
+    assert installation_rendered != ['"Louisville Muhammad Ali International Airport" EMAS replacement']
+    assert project_phase_rendered != ['"Louisville Muhammad Ali International Airport" EMAS construction']
+    assert len(installation_rendered) == 2
+    assert len(project_phase_rendered) == 2
+    assert len(set(installation_rendered)) == 2  # both distinct
+    assert len(set(project_phase_rendered)) == 2
 
 
-# --- MHT safety test (Part 14) -----------------------------------------------
+# --- MHT safety test (Part 13) -----------------------------------------------
 
 
 def test_mht_runway_end_results_reported_never_resolved():
@@ -165,15 +188,15 @@ def test_mht_runway_end_results_reported_never_resolved():
         evidence_text="Reconstruct Engineered Material Arresting System Safety Area",
         airport_context=context, unresolved_dimensions=(ResearchDimension.RUNWAY_END,),
     )
-    from app.services.research_question_planning import plan_research_questions
-    question = plan_research_questions(clue)[0]
+    planned = plan_research_search_queries(clue)
+    query = planned[0].search_query
 
     provider = _FakeProvider({
-        question.search_query.rendered: SearchOutcome(
-            query=question.search_query, status=SearchOutcomeStatus.OK,
+        query.rendered: SearchOutcome(
+            query=query, status=SearchOutcomeStatus.OK,
             results=(
-                _result(question.search_query, "https://example.com/mht-06", title="MHT Runway 06 EMAS project"),
-                _result(question.search_query, "https://example.com/mht-24", title="MHT Runway 24 EMAS reconstruction"),
+                _result(query, "https://example.com/mht-06", title="MHT Runway 06 EMAS project"),
+                _result(query, "https://example.com/mht-24", title="MHT Runway 24 EMAS reconstruction"),
             ),
         )
     })
@@ -184,13 +207,20 @@ def test_mht_runway_end_results_reported_never_resolved():
     # never resolved, never chosen between.
     urls = {c.triaged.deduped.result.url for c in report.triaged_candidates}
     assert urls == {"https://example.com/mht-06", "https://example.com/mht-24"}
-    # the loop's OWN output (question/reason/query) never picks a side
-    haystack = f"{question.question} {question.reason} {question.search_query.rendered}"
+
+    # dimension status may legitimately become CANDIDATES_FOUND ...
+    status = compute_dimension_search_status(ResearchDimension.RUNWAY_END, report)
+    assert status == DimensionSearchStatus.CANDIDATES_FOUND
+    # ... but that NEVER means the research question was answered, and the
+    # loop's own output never picks a side.
+    haystack = f"{planned[0].question} {planned[0].reason} {query.rendered}"
     assert "06 is correct" not in haystack
     assert "24 is correct" not in haystack
+    assert "the runway is 06" not in haystack.lower()
+    assert "the runway is 24" not in haystack.lower()
 
 
-# --- BGM safety test (Part 15) -----------------------------------------------
+# --- BGM safety test (Part 15/16 precursor) ----------------------------------
 
 
 def test_bgm_ranks_results_without_touching_existing_signal_state():
@@ -200,23 +230,21 @@ def test_bgm_ranks_results_without_touching_existing_signal_state():
         airport_context=context,
         unresolved_dimensions=(ResearchDimension.SUPPLIER, ResearchDimension.INSTALLATION_TYPE),
     )
-    from app.services.research_question_planning import plan_research_questions
-    questions = plan_research_questions(clue)
+    planned = plan_research_search_queries(clue)
+    supplier_query = next(p.search_query for p in planned if p.dimension == ResearchDimension.SUPPLIER)
 
     provider = _FakeProvider({
-        questions[0].search_query.rendered: SearchOutcome(
-            query=questions[0].search_query, status=SearchOutcomeStatus.OK,
+        supplier_query.rendered: SearchOutcome(
+            query=supplier_query, status=SearchOutcomeStatus.OK,
             results=(
-                _result(questions[0].search_query, "https://example.com/bgm-a", title="BGM EMAS contractor announcement"),
-                _result(questions[0].search_query, "https://example.com/bgm-b", title="BGM airport authority board minutes EMAS"),
+                _result(supplier_query, "https://example.com/bgm-a", title="BGM EMAS contractor announcement"),
+                _result(supplier_query, "https://example.com/bgm-b", title="BGM airport authority board minutes EMAS"),
             ),
         )
     })
 
     report = run_research_loop(clue, provider=provider)
 
-    # results are ranked/deduplicated only - no Signal-shaped field
-    # (signal_id, matched Signal, etc.) exists anywhere on the report.
     urls = {c.triaged.deduped.result.url for c in report.triaged_candidates}
     assert urls == {"https://example.com/bgm-a", "https://example.com/bgm-b"}
     for c in report.triaged_candidates:
@@ -224,7 +252,7 @@ def test_bgm_ranks_results_without_touching_existing_signal_state():
         assert not hasattr(c.triaged, "signal_id")
 
 
-# --- No-result acceptance test (Part 16) -------------------------------------
+# --- No-result safety test (Part 14) -----------------------------------------
 
 
 def test_no_result_run_completes_cleanly_with_zero_triaged_candidates():
@@ -233,9 +261,77 @@ def test_no_result_run_completes_cleanly_with_zero_triaged_candidates():
 
     report = run_research_loop(clue, provider=provider)
 
-    assert len(report.question_outcomes) == 5
-    assert all(qo.outcome.status == SearchOutcomeStatus.NO_RESULTS for qo in report.question_outcomes)
+    assert len(report.query_outcomes) == TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE
+    assert all(qo.outcome.status == SearchOutcomeStatus.NO_RESULTS for qo in report.query_outcomes)
     assert report.triaged_candidates == ()
+    for dimension in ALL_FIVE_DIMENSIONS:
+        assert compute_dimension_search_status(dimension, report) == DimensionSearchStatus.NO_CANDIDATES_FOUND
+
+
+# --- Provider failure test (Part 15) -----------------------------------------
+
+
+def test_provider_failure_does_not_abort_the_run():
+    clue = _sdf_clue()
+    planned = plan_research_search_queries(clue)
+    canned = {
+        planned[0].search_query.rendered: SearchOutcome(
+            query=planned[0].search_query, status=SearchOutcomeStatus.PROVIDER_FAILURE, error="simulated failure",
+        ),
+        planned[1].search_query.rendered: SearchOutcome(
+            query=planned[1].search_query, status=SearchOutcomeStatus.OK,
+            results=(_result(planned[1].search_query, "https://example.com/still-works"),),
+        ),
+    }
+    report = run_research_loop(clue, provider=_FakeProvider(canned))
+
+    assert len(report.query_outcomes) == TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE  # every planned query still executed
+    failed = [qo for qo in report.query_outcomes if qo.outcome.status == SearchOutcomeStatus.PROVIDER_FAILURE]
+    assert len(failed) == 1
+    assert failed[0].outcome.error == "simulated failure"
+    assert len(report.triaged_candidates) == 1  # the OTHER query's real result still survives
+
+
+def test_search_failed_status_only_when_every_query_for_a_dimension_fails():
+    """A dimension with TWO planned queries where only ONE fails must NOT
+    be reported SEARCH_FAILED - it found candidates via the other query,
+    so it is CANDIDATES_FOUND (the failure is still visible in the
+    per-query breakdown, never hidden)."""
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(
+        evidence_text="x", airport_context=context,
+        unresolved_dimensions=(ResearchDimension.INSTALLATION_TYPE,),
+    )
+    planned = plan_research_search_queries(clue)
+    assert len(planned) == 2
+    canned = {
+        planned[0].search_query.rendered: SearchOutcome(
+            query=planned[0].search_query, status=SearchOutcomeStatus.PROVIDER_FAILURE, error="boom",
+        ),
+        planned[1].search_query.rendered: SearchOutcome(
+            query=planned[1].search_query, status=SearchOutcomeStatus.OK,
+            results=(_result(planned[1].search_query, "https://example.com/still-works", title="Test Airport EMAS replacement"),),
+        ),
+    }
+    report = run_research_loop(clue, provider=_FakeProvider(canned))
+    status = compute_dimension_search_status(ResearchDimension.INSTALLATION_TYPE, report)
+    assert status == DimensionSearchStatus.CANDIDATES_FOUND
+
+
+def test_search_failed_status_when_every_query_for_a_dimension_fails():
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(
+        evidence_text="x", airport_context=context,
+        unresolved_dimensions=(ResearchDimension.INSTALLATION_TYPE,),
+    )
+    planned = plan_research_search_queries(clue)
+    canned = {
+        p.search_query.rendered: SearchOutcome(query=p.search_query, status=SearchOutcomeStatus.PROVIDER_FAILURE, error="boom")
+        for p in planned
+    }
+    report = run_research_loop(clue, provider=_FakeProvider(canned))
+    status = compute_dimension_search_status(ResearchDimension.INSTALLATION_TYPE, report)
+    assert status == DimensionSearchStatus.SEARCH_FAILED
 
 
 # --- Determinism / dedup / triage reuse --------------------------------------
@@ -243,7 +339,6 @@ def test_no_result_run_completes_cleanly_with_zero_triaged_candidates():
 
 def test_same_inputs_produce_the_same_report_shape():
     clue = _sdf_clue()
-    from app.services.research_question_planning import plan_research_questions
     q0 = plan_research_questions(clue)[0]
     canned = {q0.search_query.rendered: SearchOutcome(
         query=q0.search_query, status=SearchOutcomeStatus.OK,
@@ -254,41 +349,20 @@ def test_same_inputs_produce_the_same_report_shape():
     report_b = run_research_loop(clue, provider=_FakeProvider(canned))
 
     assert report_a.questions == report_b.questions
+    assert report_a.planned_queries == report_b.planned_queries
     assert len(report_a.triaged_candidates) == len(report_b.triaged_candidates) == 1
     assert report_a.triaged_candidates[0].triaged.deduped.result.url == report_b.triaged_candidates[0].triaged.deduped.result.url
-
-
-def test_provider_failure_does_not_abort_the_run():
-    clue = _sdf_clue()
-    from app.services.research_question_planning import plan_research_questions
-    questions = plan_research_questions(clue)
-    canned = {
-        questions[0].search_query.rendered: SearchOutcome(
-            query=questions[0].search_query, status=SearchOutcomeStatus.PROVIDER_FAILURE, error="simulated failure",
-        ),
-        questions[1].search_query.rendered: SearchOutcome(
-            query=questions[1].search_query, status=SearchOutcomeStatus.OK,
-            results=(_result(questions[1].search_query, "https://example.com/still-works"),),
-        ),
-    }
-    report = run_research_loop(clue, provider=_FakeProvider(canned))
-
-    assert len(report.question_outcomes) == 5  # all 5 questions still executed
-    failed = [qo for qo in report.question_outcomes if qo.outcome.status == SearchOutcomeStatus.PROVIDER_FAILURE]
-    assert len(failed) == 1
-    assert failed[0].outcome.error == "simulated failure"
-    assert len(report.triaged_candidates) == 1  # the OTHER question's real result still survives
 
 
 def test_triage_band_semantics_are_reused_unmodified():
     """A strong-concept-in-title + identity match must still be HIGH,
     exactly matching app.discovery.triage's own existing rules - proves
-    this module never redefines triage."""
+    this module never redefines triage (mission's own explicit
+    "do not change triage semantics" instruction)."""
     context = AirportSearchContext(name="Test Airport")
     clue = ResearchClue(
         evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.RUNWAY_END,),
     )
-    from app.services.research_question_planning import plan_research_questions
     q = plan_research_questions(clue)[0]
     provider = _FakeProvider({
         q.search_query.rendered: SearchOutcome(
@@ -299,3 +373,40 @@ def test_triage_band_semantics_are_reused_unmodified():
     report = run_research_loop(clue, provider=provider)
     assert len(report.triaged_candidates) == 1
     assert report.triaged_candidates[0].triaged.band == PriorityBand.HIGH
+
+
+# --- Honest search status vs. research resolution (Slice 3 core fix) -------
+
+
+def test_candidates_found_never_implies_resolved():
+    """A dimension with a HIGH-band candidate is CANDIDATES_FOUND - and
+    the DimensionSearchStatus vocabulary itself contains no RESOLVED/
+    CONFIRMED/VERIFIED/ANSWERED/ESTABLISHED member, so there is no way to
+    even ACCIDENTALLY report this dimension as answered."""
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.SUPPLIER,))
+    q = plan_research_questions(clue)[0]
+    provider = _FakeProvider({
+        q.search_query.rendered: SearchOutcome(
+            query=q.search_query, status=SearchOutcomeStatus.OK,
+            results=(_result(q.search_query, "https://example.com/z", title="Test Airport EMAS supplier"),),
+        )
+    })
+    report = run_research_loop(clue, provider=provider)
+    status = compute_dimension_search_status(ResearchDimension.SUPPLIER, report)
+    assert status == DimensionSearchStatus.CANDIDATES_FOUND
+    banned = {"RESOLVED", "CONFIRMED", "VERIFIED", "ANSWERED", "ESTABLISHED"}
+    assert not (banned & {m.value for m in DimensionSearchStatus})
+
+
+def test_no_candidates_found_is_not_negative_evidence():
+    """A dimension with zero surviving candidates must never be reported
+    or interpretable as 'no supplier exists' - only that search found
+    nothing this round."""
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.SUPPLIER,))
+    report = run_research_loop(clue, provider=_FakeProvider({}))
+    status = compute_dimension_search_status(ResearchDimension.SUPPLIER, report)
+    assert status == DimensionSearchStatus.NO_CANDIDATES_FOUND
+    assert status != "no supplier"
+    assert status.value != "NO_SUPPLIER"

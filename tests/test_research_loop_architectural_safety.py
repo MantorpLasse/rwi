@@ -134,8 +134,13 @@ def test_existing_discovery_components_do_not_import_the_new_module():
     ]
     for path in existing_files:
         assert path.is_file(), f"expected existing file missing: {path}"
-        text = path.read_text(encoding="utf-8")
-        assert "research_loop" not in text, f"{path.name} must not import the new research loop module"
+        # AST-based (not a raw text/substring search): research_question_planning.py
+        # legitimately MENTIONS app.services.research_loop in prose (explaining
+        # that module is one of its consumers) without importing it - only an
+        # actual import statement is a real coupling violation.
+        imports = _imported_module_names(path)
+        offenders = [name for name in imports if "research_loop" in name]
+        assert not offenders, f"{path.name} must not import the new research loop module: {offenders}"
 
 
 def test_no_acceptance_or_fact_state_fields():
@@ -151,3 +156,20 @@ def test_no_acceptance_or_fact_state_fields():
         "accepted_claim", "current_state", "lifecycle_state", "status", "signal_id",
     }
     assert not (field_names & forbidden), f"forbidden field(s) found: {field_names & forbidden}"
+
+
+def test_dimension_search_status_vocabulary_avoids_resolution_words():
+    """RWI HQ 'Discovery Research Loop V1 - Slice 3', Part 2's own explicit
+    instruction: DimensionSearchStatus is SEARCH DISCOVERY STATUS only,
+    never evidence-resolution status - its own member VALUES (never merely
+    variable/docstring prose) must avoid RESOLVED/CONFIRMED/VERIFIED/
+    ANSWERED/ESTABLISHED or any synonym."""
+    from app.services.research_loop import DimensionSearchStatus
+
+    banned_substrings = ("RESOLVED", "CONFIRMED", "VERIFIED", "ANSWERED", "ESTABLISHED")
+    for member in DimensionSearchStatus:
+        for banned in banned_substrings:
+            assert banned not in member.value, f"DimensionSearchStatus.{member.name} contains banned word {banned!r}"
+    assert {m.value for m in DimensionSearchStatus} == {
+        "CANDIDATES_FOUND", "NO_CANDIDATES_FOUND", "SEARCH_FAILED",
+    }

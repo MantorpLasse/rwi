@@ -12,11 +12,13 @@ import pytest
 from app.discovery.query import SearchQuery
 from app.services.discovery_temporal_followup import AirportSearchContext, AirportSearchContextError
 from app.services.research_question_planning import (
+    PlannedResearchQuery,
     ResearchClue,
     ResearchClueError,
     ResearchDimension,
     ResearchQuestion,
     plan_research_questions,
+    plan_research_search_queries,
 )
 
 ALL_FIVE_DIMENSIONS = (
@@ -255,3 +257,113 @@ def test_query_generation_quotes_multi_word_airport_names():
     clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.SUPPLIER,))
     q = plan_research_questions(clue)[0]
     assert q.search_query.rendered == '"London City Airport" EMAS supplier'
+
+
+# --- Slice 3: plan_research_search_queries() query-quality hardening -------
+
+
+def test_installation_type_search_plan_is_no_longer_solely_replacement():
+    """Part 10/4: the live SDF dry run found a single 'replacement' term
+    biases recall away from new-installation evidence - the widened plan
+    must not consist solely of that one term any more."""
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.INSTALLATION_TYPE,))
+    planned = plan_research_search_queries(clue)
+    rendered = [p.search_query.rendered for p in planned]
+    assert rendered != ["Test Airport EMAS replacement"]
+    assert len(rendered) >= 2
+    assert len(set(rendered)) == len(rendered)  # no duplicate rendered queries
+
+
+def test_project_phase_search_plan_is_no_longer_solely_construction():
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.PROJECT_PHASE,))
+    planned = plan_research_search_queries(clue)
+    rendered = [p.search_query.rendered for p in planned]
+    assert rendered != ["Test Airport EMAS construction"]
+    assert len(rendered) >= 2
+    assert len(set(rendered)) == len(rendered)
+
+
+def test_installation_type_plan_searches_neutrally_across_new_and_replacement():
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.INSTALLATION_TYPE,))
+    rendered = " ".join(p.search_query.rendered.lower() for p in plan_research_search_queries(clue))
+    assert "new" in rendered
+    assert "replacement" in rendered or "reconstruction" in rendered
+
+
+def test_project_phase_plan_emphasizes_emas_lifecycle_language():
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.PROJECT_PHASE,))
+    rendered = " ".join(p.search_query.rendered.lower() for p in plan_research_search_queries(clue))
+    assert any(term in rendered for term in ("design", "bid"))
+    assert any(term in rendered for term in ("installation", "completion"))
+
+
+def test_single_query_dimensions_unaffected_by_widening():
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(
+        evidence_text="x", airport_context=context,
+        unresolved_dimensions=(ResearchDimension.RUNWAY_END, ResearchDimension.TIMING, ResearchDimension.SUPPLIER),
+    )
+    planned = plan_research_search_queries(clue)
+    by_dimension: dict = {}
+    for p in planned:
+        by_dimension.setdefault(p.dimension, []).append(p)
+    assert len(by_dimension[ResearchDimension.RUNWAY_END]) == 1
+    assert len(by_dimension[ResearchDimension.TIMING]) == 1
+    assert len(by_dimension[ResearchDimension.SUPPLIER]) == 1
+
+
+def test_plan_research_search_queries_matches_first_entry_of_research_question():
+    """ResearchQuestion.search_query and plan_research_search_queries()'s
+    own first entry for that dimension must never independently disagree -
+    both are derived from the exact same _QUERY_CONCEPTS table."""
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(
+        evidence_text="x", airport_context=context,
+        unresolved_dimensions=(ResearchDimension.INSTALLATION_TYPE, ResearchDimension.RUNWAY_END),
+    )
+    questions = {q.dimension: q for q in plan_research_questions(clue)}
+    planned = plan_research_search_queries(clue)
+    for dimension, question in questions.items():
+        first_planned = next(p for p in planned if p.dimension == dimension)
+        assert first_planned.search_query.rendered == question.search_query.rendered
+
+
+def test_plan_research_search_queries_is_deterministic_and_ordered():
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(
+        ResearchDimension.SUPPLIER, ResearchDimension.INSTALLATION_TYPE, ResearchDimension.RUNWAY_END,
+    ))
+    first = plan_research_search_queries(clue)
+    second = plan_research_search_queries(clue)
+    assert first == second
+
+    # canonical dimension order (RUNWAY_END, INSTALLATION_TYPE, SUPPLIER per
+    # enum declaration order), never the caller's own supply order, and
+    # INSTALLATION_TYPE's own two entries stay adjacent/in-order.
+    assert [p.dimension for p in first] == [
+        ResearchDimension.RUNWAY_END,
+        ResearchDimension.INSTALLATION_TYPE, ResearchDimension.INSTALLATION_TYPE,
+        ResearchDimension.SUPPLIER,
+    ]
+
+
+def test_plan_research_search_queries_empty_dimensions_returns_empty():
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=())
+    assert plan_research_search_queries(clue) == ()
+
+
+def test_planned_research_query_is_the_documented_shape():
+    context = AirportSearchContext(name="Test Airport")
+    clue = ResearchClue(evidence_text="x", airport_context=context, unresolved_dimensions=(ResearchDimension.SUPPLIER,))
+    planned = plan_research_search_queries(clue)
+    assert len(planned) == 1
+    p = planned[0]
+    assert isinstance(p, PlannedResearchQuery)
+    assert isinstance(p.search_query, SearchQuery)
+    assert p.dimension == ResearchDimension.SUPPLIER
+    assert p.question and p.reason

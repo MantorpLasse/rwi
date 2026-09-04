@@ -139,7 +139,7 @@ def test_allow_live_network_executes_against_registered_provider(tmp_path, capsy
     with Session(engine) as session:
         text = cli.load_evidence_text(session, aid)
     from app.services.discovery_temporal_followup import AirportSearchContext
-    from app.services.research_question_planning import ResearchClue, ResearchDimension, plan_research_questions
+    from app.services.research_question_planning import ResearchClue, ResearchDimension, plan_research_search_queries
     context = AirportSearchContext(name="Louisville Muhammad Ali International Airport", iata_code="SDF", icao_code="KSDF")
     clue = ResearchClue(
         evidence_text=text, airport_context=context,
@@ -148,11 +148,11 @@ def test_allow_live_network_executes_against_registered_provider(tmp_path, capsy
             ResearchDimension.PROJECT_PHASE, ResearchDimension.TIMING, ResearchDimension.SUPPLIER,
         ),
     )
-    questions = plan_research_questions(clue)
+    planned = plan_research_search_queries(clue)
     canned = {
-        questions[0].search_query.rendered: SearchOutcome(
-            query=questions[0].search_query, status=SearchOutcomeStatus.OK,
-            results=(_result(questions[0].search_query, "https://faa.gov/sdf-doc", title="SDF EMAS project document"),),
+        planned[0].search_query.rendered: SearchOutcome(
+            query=planned[0].search_query, status=SearchOutcomeStatus.OK,
+            results=(_result(planned[0].search_query, "https://faa.gov/sdf-doc", title="SDF EMAS project document"),),
         )
     }
     monkeypatch.setitem(cli.PROVIDER_REGISTRY, "brave", _FakeProvider(canned))
@@ -163,11 +163,16 @@ def test_allow_live_network_executes_against_registered_provider(tmp_path, capsy
     out = capsys.readouterr().out
     assert exit_code == 0
     assert "SEARCH SUMMARY" in out
-    assert "5 queries" in out
-    assert "HIGH" in out or "MEDIUM" in out or "LOW" in out
+    assert "7 queries" in out  # RUNWAY_END(1)+INSTALLATION_TYPE(2)+PROJECT_PHASE(2)+TIMING(1)+SUPPLIER(1)
     assert "https://faa.gov/sdf-doc" in out
-    assert "UNRESOLVED / NO RESULT" in out
     assert "STOP" in out
+    # Slice 3's own honest-status vocabulary, present for every dimension
+    assert "Search status: CANDIDATES_FOUND" in out or "Search status: NO_CANDIDATES_FOUND" in out
+    assert "Research status: STILL UNRESOLVED" in out
+    # the old, removed, false-resolution section must never reappear
+    assert "UNRESOLVED / NO RESULT" not in out
+    for banned in ("Search status: RESOLVED", "Search status: CONFIRMED", "resolved_dimensions"):
+        assert banned not in out
 
 
 def test_json_output_shape(tmp_path, capsys, monkeypatch):
@@ -182,15 +187,17 @@ def test_json_output_shape(tmp_path, capsys, monkeypatch):
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert len(payload["questions"]) == 5
-    assert len(payload["question_outcomes"]) == 5
+    assert len(payload["query_outcomes"]) == 7
     assert payload["triaged_candidates"] == []
     assert payload["network_used"] is True
-    assert set(payload["unresolved_dimensions"]) == {
-        "RUNWAY_END", "INSTALLATION_TYPE", "PROJECT_PHASE", "TIMING", "SUPPLIER",
-    }
+    assert "unresolved_dimensions" not in payload  # the removed, defective field must never reappear
+    for q in payload["questions"]:
+        assert q["search_status"] == "NO_CANDIDATES_FOUND"
+        assert q["research_status"] == "STILL_UNRESOLVED"
+        assert len(q["queries"]) >= 1
 
 
-def test_json_plan_only_mode_has_null_unresolved_dimensions(tmp_path, capsys):
+def test_json_plan_only_mode_has_null_search_status(tmp_path, capsys):
     db_path = str(tmp_path / "test.db")
     aid = _seed_source_assertion(db_path)
     exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--json"])
@@ -198,5 +205,22 @@ def test_json_plan_only_mode_has_null_unresolved_dimensions(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["network_used"] is False
-    assert payload["unresolved_dimensions"] is None
-    assert payload["question_outcomes"] == []
+    assert payload["query_outcomes"] == []
+    for q in payload["questions"]:
+        assert q["search_status"] is None
+        assert q["research_status"] is None
+
+
+def test_json_installation_type_and_project_phase_have_two_queries(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+    exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--json"])
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    by_dimension = {q["dimension"]: q["queries"] for q in payload["questions"]}
+    assert len(by_dimension["INSTALLATION_TYPE"]) == 2
+    assert len(by_dimension["PROJECT_PHASE"]) == 2
+    assert len(by_dimension["RUNWAY_END"]) == 1
+    assert len(by_dimension["TIMING"]) == 1
+    assert len(by_dimension["SUPPLIER"]) == 1

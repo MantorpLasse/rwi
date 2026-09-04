@@ -1,5 +1,15 @@
-"""Discovery Research Loop V1, Slice 2 CLI (RWI HQ "Discovery Research
-Loop V1 - Slice 2").
+"""Discovery Research Loop V1, Slice 2/3 CLI (RWI HQ "Discovery Research
+Loop V1 - Slice 2/3").
+
+SLICE 3: reports each requested ResearchDimension's SEARCH status
+(CANDIDATES_FOUND / NO_CANDIDATES_FOUND / SEARCH_FAILED - search discovery
+only) alongside a constant, unconditional "remains unresolved pending
+preserved evidence review" statement - never a computed "resolved"/
+"unresolved" verdict derived from search-result quality (Slice 2's own
+`unresolved_dimensions: []` output was exactly this defect: it conflated
+"found a MEDIUM candidate" with "answered the question," which are
+permanently different things in this pipeline - see
+app.services.research_loop's own module docstring "CORE SEMANTIC RULE").
 
     persisted SourceAssertion (read-only)
         -> explicit, human-chosen ResearchDimension list
@@ -56,10 +66,9 @@ from sqlalchemy.orm import Session
 
 from app.discovery.brave_search_provider import BraveSearchProvider
 from app.discovery.search import SearchOutcomeStatus, SearchProvider
-from app.discovery.triage import PriorityBand
 from app.models import SourceAssertion
 from app.services.discovery_temporal_followup import AirportSearchContext, AirportSearchContextError
-from app.services.research_loop import ResearchLoopReport, run_research_loop
+from app.services.research_loop import ResearchLoopReport, compute_dimension_search_status, run_research_loop
 from app.services.research_question_planning import ResearchClue, ResearchClueError, ResearchDimension
 
 # Same registration convention as scripts/discover_airport_sources.py and
@@ -127,21 +136,20 @@ def load_evidence_text(session: Session, source_assertion_id: int) -> str:
     return assertion.raw_relevant_text
 
 
-def _band_items(report: ResearchLoopReport, band: PriorityBand):
-    return [c for c in report.triaged_candidates if c.triaged.band is band]
+_MAX_CANDIDATES_SHOWN_PER_DIMENSION_HUMAN = 5
+
+_RESEARCH_STATUS_LINE = (
+    "Research status: STILL UNRESOLVED - search candidates are not evidence "
+    "and do not resolve this research question."
+)
 
 
-def _dimensions_with_no_high_or_medium(report: ResearchLoopReport) -> "list[ResearchDimension]":
-    """A dimension is UNRESOLVED / NO RESULT if none of its question's
-    surfaced candidates ended up HIGH or MEDIUM (covers NO_RESULTS,
-    PROVIDER_FAILURE, and "found results but none rose above LOW" alike -
-    all three are honestly the same outcome from a Commander's point of
-    view: no stronger discovery candidate was found)."""
-    strong_dimensions: set[ResearchDimension] = set()
-    for candidate in report.triaged_candidates:
-        if candidate.triaged.band in (PriorityBand.HIGH, PriorityBand.MEDIUM):
-            strong_dimensions.update(candidate.dimensions)
-    return [q.dimension for q in report.questions if q.dimension not in strong_dimensions]
+def _queries_for(report: ResearchLoopReport, dimension: ResearchDimension):
+    return [p for p in report.planned_queries if p.dimension is dimension]
+
+
+def _candidates_for(report: ResearchLoopReport, dimension: ResearchDimension):
+    return [c for c in report.triaged_candidates if dimension in c.dimensions]
 
 
 def _print_human(report: ResearchLoopReport, *, network_used: bool) -> None:
@@ -153,21 +161,43 @@ def _print_human(report: ResearchLoopReport, *, network_used: bool) -> None:
     excerpt = report.clue.evidence_text
     print(f"Evidence excerpt: {excerpt[:200]}{'...' if len(excerpt) > 200 else ''}")
     print(f"Dimensions: {', '.join(q.dimension.value for q in report.questions)}")
+    print("\nSearch candidates are not evidence and do not resolve the research question.")
 
-    print("\nQUESTIONS")
-    for i, q in enumerate(report.questions, start=1):
-        print(f"{i}. {q.dimension.value}")
-        print(f"   Search: {q.search_query.rendered}")
-        print(f"   Reason: {q.reason}")
+    for q in report.questions:
+        dimension = q.dimension
+        queries = _queries_for(report, dimension)
+        print(f"\n{dimension.value}")
+        print(f"Question: {q.question}")
+        print(f"Reason: {q.reason}")
+        print("Queries:")
+        for planned in queries:
+            print(f"  {planned.search_query.rendered}")
+
+        if not network_used:
+            continue
+
+        status = compute_dimension_search_status(dimension, report)
+        print(f"Search status: {status.value}")
+        print(_RESEARCH_STATUS_LINE)
+        candidates = _candidates_for(report, dimension)
+        if candidates:
+            shown = candidates[:_MAX_CANDIDATES_SHOWN_PER_DIMENSION_HUMAN]
+            print(f"Top candidates (showing {len(shown)} of {len(candidates)}):")
+            for c in shown:
+                r = c.triaged.deduped.result
+                print(f"  [{c.triaged.band.value}] {r.title}")
+                print(f"    {r.url}")
+                print(f"    domain: {c.triaged.domain_category.value}; why: {'; '.join(c.triaged.reasons)}")
 
     if not network_used:
         print(
             "\nNo --allow-live-network given: NO SEARCH PROVIDER EXECUTED. "
             "No network access was performed - the plan above was never searched."
         )
+        print(_FETCH_HINT)
         return
 
-    outcomes = [qo.outcome for qo in report.question_outcomes]
+    outcomes = [qo.outcome for qo in report.query_outcomes]
     failures = [o for o in outcomes if o.status == SearchOutcomeStatus.PROVIDER_FAILURE]
     no_results = [o for o in outcomes if o.status == SearchOutcomeStatus.NO_RESULTS]
     ok = [o for o in outcomes if o.status == SearchOutcomeStatus.OK]
@@ -184,32 +214,6 @@ def _print_human(report: ResearchLoopReport, *, network_used: bool) -> None:
         for o in failures:
             print(f"  [{o.query.rendered}] {o.error}")
 
-    print("\nPRIORITY RESULTS")
-    for band in (PriorityBand.HIGH, PriorityBand.MEDIUM):
-        items = _band_items(report, band)
-        print(f"\n{band.value} ({len(items)}) - discovery candidates, not evidence")
-        for c in items:
-            r = c.triaged.deduped.result
-            dims = ", ".join(d.value for d in c.dimensions) or "(dimension not recovered)"
-            print(f"\n  - {r.title}")
-            print(f"    {r.url}")
-            print(f"    domain: {c.triaged.domain_category.value}")
-            print(f"    why: {'; '.join(c.triaged.reasons)}")
-            print(f"    originating dimension(s): {dims}")
-
-    low = _band_items(report, PriorityBand.LOW)
-    print(f"\nLOW ({len(low)}) - compact, not discarded")
-    for c in low:
-        r = c.triaged.deduped.result
-        print(f"  - {r.title} | {r.url}")
-
-    unresolved = _dimensions_with_no_high_or_medium(report)
-    print("\nUNRESOLVED / NO RESULT")
-    if not unresolved:
-        print("  (every requested dimension surfaced at least one HIGH/MEDIUM candidate)")
-    for dimension in unresolved:
-        print(f"  - {dimension.value}: no useful search result found")
-
     print(_FETCH_HINT)
 
 
@@ -217,6 +221,7 @@ def _print_json(report: ResearchLoopReport, *, network_used: bool) -> None:
     context = report.clue.airport_context
     payload = {
         "_disclaimer": _DISCLAIMER,
+        "_research_status_note": _RESEARCH_STATUS_LINE,
         "clue": {
             "airport_name": context.name, "iata_code": context.iata_code, "icao_code": context.icao_code,
             "evidence_excerpt": report.clue.evidence_text[:200],
@@ -225,18 +230,26 @@ def _print_json(report: ResearchLoopReport, *, network_used: bool) -> None:
         "questions": [
             {
                 "dimension": q.dimension.value, "question": q.question,
-                "search_query": q.search_query.rendered, "reason": q.reason,
+                "reason": q.reason,
+                "queries": [p.search_query.rendered for p in _queries_for(report, q.dimension)],
+                # search_status is search-discovery status ONLY - never
+                # evidence-resolution status. research_status is always
+                # the same, constant, unconditional string (module
+                # docstring "CORE SEMANTIC RULE") - it is never computed
+                # from search-result quality.
+                "search_status": compute_dimension_search_status(q.dimension, report).value if network_used else None,
+                "research_status": "STILL_UNRESOLVED" if network_used else None,
             }
             for q in report.questions
         ],
         "network_used": network_used,
-        "question_outcomes": [
+        "query_outcomes": [
             {
-                "dimension": qo.question.dimension.value, "query": qo.outcome.query.rendered,
+                "dimension": qo.planned_query.dimension.value, "query": qo.outcome.query.rendered,
                 "status": qo.outcome.status.value, "error": qo.outcome.error,
                 "result_count": len(qo.outcome.results),
             }
-            for qo in report.question_outcomes
+            for qo in report.query_outcomes
         ],
         "triaged_candidates": [
             {
@@ -251,7 +264,6 @@ def _print_json(report: ResearchLoopReport, *, network_used: bool) -> None:
             }
             for c in report.triaged_candidates
         ],
-        "unresolved_dimensions": [d.value for d in _dimensions_with_no_high_or_medium(report)] if network_used else None,
     }
     print(json.dumps(payload, indent=2))
 

@@ -69,6 +69,28 @@ that derives unresolved_dimensions from Signal/SourceAssertion field state
 (inspecting which fields are populated vs. None) - that adapter is
 explicitly NOT built here.
 
+QUERY-PLAN CARDINALITY (RWI HQ "Discovery Research Loop V1 - Slice 3"):
+Slice 2's real live SDF dry run found INSTALLATION_TYPE's single
+"replacement" concept term biased recall toward replacement language and
+away from new-installation evidence, and PROJECT_PHASE's single
+"construction" term pulled in substantial generic terminal/parking-
+expansion noise unrelated to EMAS. The fix is a small, fixed, per-
+dimension EXPANSION of concept terms (_QUERY_CONCEPTS, now a tuple per
+dimension instead of one string), never an OR-string or fuzzy query and
+never an LLM-generated one. `ResearchQuestion` itself is DELIBERATELY left
+unchanged in shape - it remains exactly one human question per dimension,
+its own `search_query` field always set to that dimension's FIRST concept
+term (so it stays a single, valid, backward-compatible query, never a
+second responsibility bolted onto the type). The FULL query plan (all
+concept terms for all requested dimensions) is available separately via
+`plan_research_search_queries()` -> `PlannedResearchQuery`, a small,
+additive, runtime-only search-plan layer engineered specifically so a
+caller needing "every query for every dimension" (app.services.research_loop,
+Slice 2) has one, while a caller needing only "the human-readable
+question text" (unchanged since Slice 1) is unaffected. Both functions
+read from the exact same `_QUERY_CONCEPTS` table, so they can never
+independently disagree about what a dimension's first/primary query is.
+
 Never imports app.models, app.database, any persistence/governance
 service, or any network/search-execution module - see
 tests/test_research_question_planning_architectural_safety.py, which
@@ -87,7 +109,9 @@ __all__ = [
     "ResearchClueError",
     "ResearchClue",
     "ResearchQuestion",
+    "PlannedResearchQuery",
     "plan_research_questions",
+    "plan_research_search_queries",
 ]
 
 
@@ -144,19 +168,31 @@ _DIMENSION_LABEL: dict[ResearchDimension, str] = {
     ResearchDimension.SUPPLIER: "supplier",
 }
 
-# Short search-query anchor term per dimension, rendered alongside "EMAS"
+# Search-query anchor term(s) per dimension, rendered alongside "EMAS"
 # (RWI's own domain-wide concept term, already used throughout
-# app.discovery.query's own _CONCEPT_PLAN - not SDF-specific). "replacement"
-# and "construction" are reused verbatim from already-established repo
-# vocabulary (scripts/import_usaspending_grants.py::_REPLACEMENT_WORDS and
-# app.discovery.query._CONCEPT_PLAN's own "construction" concept,
-# respectively) rather than inventing new terms.
-_QUERY_CONCEPT: dict[ResearchDimension, str] = {
-    ResearchDimension.RUNWAY_END: "runway",
-    ResearchDimension.INSTALLATION_TYPE: "replacement",
-    ResearchDimension.PROJECT_PHASE: "construction",
-    ResearchDimension.TIMING: "schedule",
-    ResearchDimension.SUPPLIER: "supplier",
+# app.discovery.query's own _CONCEPT_PLAN - not SDF-specific). Three
+# dimensions keep a single, already-proven term; INSTALLATION_TYPE and
+# PROJECT_PHASE were widened to two terms each by Slice 3, per the real
+# live SDF dry run's own findings (module docstring "QUERY-PLAN
+# CARDINALITY"):
+#   - INSTALLATION_TYPE: "replacement" alone biased recall toward
+#     replacement language. "new installation" and "replacement
+#     reconstruction" together search neutrally across both possibilities
+#     (mission's own explicit "Preferred intent").
+#   - PROJECT_PHASE: "construction" alone pulled in generic terminal/
+#     parking-expansion noise unrelated to EMAS. "design bid" and
+#     "installation completion" emphasize EMAS-specific project-lifecycle
+#     language instead (mission's own explicit example wording, used
+#     verbatim).
+# The FIRST entry in each tuple is also the one _question_for() uses for
+# ResearchQuestion.search_query (module docstring) - never a separately
+# maintained value.
+_QUERY_CONCEPTS: dict[ResearchDimension, "tuple[str, ...]"] = {
+    ResearchDimension.RUNWAY_END: ("runway",),
+    ResearchDimension.INSTALLATION_TYPE: ("new installation", "replacement reconstruction"),
+    ResearchDimension.PROJECT_PHASE: ("design bid", "installation completion"),
+    ResearchDimension.TIMING: ("schedule",),
+    ResearchDimension.SUPPLIER: ("supplier",),
 }
 
 # Fixed canonical order (enum declaration order) - output order never
@@ -211,7 +247,27 @@ class ResearchClue:
 class ResearchQuestion:
     """One deterministic research question - never an accepted fact, never
     a conclusion. `search_query` reuses app.discovery.query.SearchQuery
-    verbatim, not a new query type."""
+    verbatim, not a new query type - it is that dimension's FIRST concept
+    term (_QUERY_CONCEPTS[dimension][0]); see plan_research_search_queries()
+    for the full query plan when a dimension has more than one."""
+
+    dimension: ResearchDimension
+    question: str
+    search_query: SearchQuery
+    reason: str
+
+
+@dataclass(frozen=True)
+class PlannedResearchQuery:
+    """One concrete SearchQuery serving one ResearchDimension - the
+    search-plan layer (module docstring "QUERY-PLAN CARDINALITY"), kept
+    deliberately separate from ResearchQuestion rather than overloading it
+    with a second responsibility. `question`/`reason` are the SAME text as
+    that dimension's own ResearchQuestion - every PlannedResearchQuery for
+    one dimension explains the same underlying question, just via a
+    different literal search angle (self-evident from `search_query.rendered`
+    itself, e.g. "new installation" vs. "replacement reconstruction" -
+    no separate per-angle narrative is invented)."""
 
     dimension: ResearchDimension
     question: str
@@ -236,23 +292,30 @@ def _render_query(name: str, concept: str) -> str:
     return f"{rendered_name} EMAS {concept}"
 
 
-def _question_for(clue: ResearchClue, dimension: ResearchDimension) -> ResearchQuestion:
-    name = clue.airport_context.name
-    concept = _QUERY_CONCEPT[dimension]
-    rendered = _render_query(name, concept)
+def _reason_for(clue: ResearchClue, dimension: ResearchDimension) -> str:
     excerpt = _bounded_excerpt(clue.evidence_text)
     label = _DIMENSION_LABEL[dimension]
+    return f'Evidence ("{excerpt}") does not establish {label} - it remains unresolved.'
+
+
+def _search_query_for(name: str, dimension: ResearchDimension, concept: str) -> SearchQuery:
+    return SearchQuery(
+        rendered=_render_query(name, concept),
+        template_id=f"research_question_{dimension.value.lower()}_{concept.replace(' ', '_')}",
+        identity_field="name",
+        identity_value=name,
+    )
+
+
+def _question_for(clue: ResearchClue, dimension: ResearchDimension) -> ResearchQuestion:
+    name = clue.airport_context.name
+    primary_concept = _QUERY_CONCEPTS[dimension][0]
 
     return ResearchQuestion(
         dimension=dimension,
         question=_QUESTION_TEXT[dimension],
-        search_query=SearchQuery(
-            rendered=rendered,
-            template_id=f"research_question_{dimension.value.lower()}",
-            identity_field="name",
-            identity_value=name,
-        ),
-        reason=f'Evidence ("{excerpt}") does not establish {label} - it remains unresolved.',
+        search_query=_search_query_for(name, dimension, primary_concept),
+        reason=_reason_for(clue, dimension),
     )
 
 
@@ -272,3 +335,35 @@ def plan_research_questions(clue: ResearchClue) -> "tuple[ResearchQuestion, ...]
         for dimension in _DIMENSION_ORDER
         if dimension in requested
     )
+
+
+def plan_research_search_queries(clue: ResearchClue) -> "tuple[PlannedResearchQuery, ...]":
+    """Pure, deterministic: the FULL query plan - every concept term for
+    every requested dimension, in fixed canonical dimension order, and in
+    fixed concept order within a dimension (matches _QUERY_CONCEPTS'
+    own declaration order). A dimension with N concept terms produces N
+    PlannedResearchQuery entries, each with a distinct `search_query`
+    (never duplicate rendered text - see the module's own tests). This is
+    the query plan app.services.research_loop actually executes; use
+    plan_research_questions() instead when only the human-readable
+    one-question-per-dimension text is needed.
+    """
+    requested = set(clue.unresolved_dimensions)
+    name = clue.airport_context.name
+    question_text = {d: _QUESTION_TEXT[d] for d in _DIMENSION_ORDER}
+    reason_text = {d: _reason_for(clue, d) for d in _DIMENSION_ORDER if d in requested}
+
+    planned: list[PlannedResearchQuery] = []
+    for dimension in _DIMENSION_ORDER:
+        if dimension not in requested:
+            continue
+        for concept in _QUERY_CONCEPTS[dimension]:
+            planned.append(
+                PlannedResearchQuery(
+                    dimension=dimension,
+                    question=question_text[dimension],
+                    search_query=_search_query_for(name, dimension, concept),
+                    reason=reason_text[dimension],
+                )
+            )
+    return tuple(planned)
