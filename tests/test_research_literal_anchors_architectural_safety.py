@@ -123,26 +123,37 @@ def test_research_anchor_has_no_resolution_or_confidence_field():
     assert field_names == {"text", "kind", "dimension_hint"}
 
 
-def test_existing_frozen_modules_do_not_import_the_new_module():
-    """One-way dependency only: this new module may depend downward on
-    research_question_planning, but nothing pre-existing depends on it -
-    especially not research_loop.py or research_airport_clue.py (Slice
-    5E's own explicit "does NOT wire the new planner into the live
-    research CLI" instruction)."""
+def test_only_the_authorized_slice_5f_consumers_import_the_new_module():
+    """One-way dependency only: this module may depend downward on
+    research_question_planning, and, as of RWI HQ "Discovery Research
+    Loop V1 - Slice 5F", is legitimately imported by exactly
+    app/services/research_loop.py (behind a default-False opt-in
+    parameter) and scripts/research_airport_clue.py (behind an explicit
+    --use-literal-anchors CLI flag, for display only). No other
+    pre-existing, frozen component may import it."""
+    authorized_consumers = {
+        REPO_ROOT / "app" / "services" / "research_loop.py",
+        REPO_ROOT / "scripts" / "research_airport_clue.py",
+    }
     existing_files = [
         REPO_ROOT / "app" / "services" / "research_question_planning.py",
-        REPO_ROOT / "app" / "services" / "research_loop.py",
         REPO_ROOT / "app" / "services" / "discovery_temporal_followup.py",
-        REPO_ROOT / "scripts" / "research_airport_clue.py",
         REPO_ROOT / "app" / "discovery" / "query.py",
         REPO_ROOT / "app" / "discovery" / "search.py",
         REPO_ROOT / "app" / "discovery" / "triage.py",
     ]
     for path in existing_files:
         assert path.is_file(), f"expected existing file missing: {path}"
+        assert path not in authorized_consumers
         imports = _imported_module_names(path)
         offenders = [name for name in imports if "research_literal_anchors" in name]
-        assert not offenders, f"{path.name} must not import the new anchors module in Slice 5E: {offenders}"
+        assert not offenders, f"{path.name} must not import the new anchors module: {offenders}"
+
+    for path in authorized_consumers:
+        assert path.is_file(), f"expected existing file missing: {path}"
+        imports = _imported_module_names(path)
+        offenders = [name for name in imports if "research_literal_anchors" in name]
+        assert offenders, f"{path.name} was expected to import the new anchors module as of Slice 5F"
 
 
 def test_research_question_planning_untouched_import_set():

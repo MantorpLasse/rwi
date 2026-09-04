@@ -410,3 +410,91 @@ def test_no_candidates_found_is_not_negative_evidence():
     assert status == DimensionSearchStatus.NO_CANDIDATES_FOUND
     assert status != "no supplier"
     assert status.value != "NO_SUPPLIER"
+
+
+# --- Literal-anchor opt-in (RWI HQ "Discovery Research Loop V1 - Slice 5F") --
+
+# The exact, real, preserved SourceAssertion 258 text (Airport World candidate).
+SA258_EVIDENCE_TEXT = (
+    "On the airfield, reconstruction is expected on Taxiways B and D, phase 1 of the East "
+    "Runway’s Engineered Materials Arresting System (EMAS) will be installed and electrical "
+    "work will continue including the completion of the SDF MicroGrid."
+)
+
+
+def _sdf_clue_with_text(evidence_text: str, dimensions=ALL_FIVE_DIMENSIONS) -> ResearchClue:
+    context = AirportSearchContext(
+        name="Louisville Muhammad Ali International Airport", iata_code="SDF", icao_code="KSDF",
+    )
+    return ResearchClue(evidence_text=evidence_text, airport_context=context, unresolved_dimensions=dimensions)
+
+
+def test_default_behavior_is_unchanged_seven_query_baseline():
+    """use_literal_anchors defaults to False - existing behavior, byte-for-
+    behavior, for every existing caller that never passes it."""
+    clue = _sdf_clue_with_text(SA258_EVIDENCE_TEXT)
+    report = run_research_loop(clue, provider=None)
+    assert len(report.planned_queries) == TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE
+    assert report.planned_queries == plan_research_search_queries(clue)
+
+
+def test_use_literal_anchors_false_explicit_matches_default():
+    clue = _sdf_clue_with_text(SA258_EVIDENCE_TEXT)
+    default_report = run_research_loop(clue, provider=None)
+    explicit_false_report = run_research_loop(clue, provider=None, use_literal_anchors=False)
+    assert default_report.planned_queries == explicit_false_report.planned_queries
+
+
+def test_opt_in_uses_anchor_aware_planner_sa258_gives_nine_queries():
+    clue = _sdf_clue_with_text(SA258_EVIDENCE_TEXT)
+    report = run_research_loop(clue, provider=None, use_literal_anchors=True)
+    assert len(report.planned_queries) == 9
+    rendered = {p.search_query.rendered for p in report.planned_queries}
+    name = "Louisville Muhammad Ali International Airport"
+    assert f'"{name}" EMAS "East Runway"' in rendered
+    assert f'"{name}" EMAS "phase 1"' in rendered
+
+
+def test_opt_in_sa257_style_evidence_stays_at_seven_queries():
+    clue = _sdf_clue_with_text(SDF_EVIDENCE_TEXT)  # the existing FAA-AIP-style fixture
+    report = run_research_loop(clue, provider=None, use_literal_anchors=True)
+    assert len(report.planned_queries) == TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE
+    assert report.planned_queries == plan_research_search_queries(clue)
+
+
+def test_opt_in_baseline_prefix_unchanged():
+    clue = _sdf_clue_with_text(SA258_EVIDENCE_TEXT)
+    baseline = plan_research_search_queries(clue)
+    anchor_aware_report = run_research_loop(clue, provider=None, use_literal_anchors=True)
+    assert anchor_aware_report.planned_queries[: len(baseline)] == baseline
+
+
+def test_dimension_search_status_vocabulary_unaffected_by_opt_in():
+    clue = _sdf_clue_with_text(SA258_EVIDENCE_TEXT)
+    report = run_research_loop(clue, provider=_FakeProvider({}), use_literal_anchors=True)
+    for dimension in ALL_FIVE_DIMENSIONS:
+        status = compute_dimension_search_status(dimension, report)
+        assert status in set(DimensionSearchStatus)
+    assert {m.value for m in DimensionSearchStatus} == {"CANDIDATES_FOUND", "NO_CANDIDATES_FOUND", "SEARCH_FAILED"}
+
+
+def test_opt_in_with_live_provider_executes_the_extra_anchor_queries():
+    """Proves the two extra anchor queries are ACTUALLY executed through
+    the injected provider when opted in - not merely planned."""
+    clue = _sdf_clue_with_text(SA258_EVIDENCE_TEXT)
+    plan = run_research_loop(clue, provider=None, use_literal_anchors=True).planned_queries
+    anchor_queries = [p for p in plan if "East Runway" in p.search_query.rendered or '"phase 1"' in p.search_query.rendered]
+    assert len(anchor_queries) == 2
+
+    canned = {
+        p.search_query.rendered: SearchOutcome(
+            query=p.search_query, status=SearchOutcomeStatus.OK,
+            results=(_result(p.search_query, f"https://example.com/{i}", title="Anchor hit"),),
+        )
+        for i, p in enumerate(anchor_queries)
+    }
+    report = run_research_loop(clue, provider=_FakeProvider(canned), use_literal_anchors=True)
+    assert len(report.query_outcomes) == 9
+    executed_rendered = {qo.outcome.query.rendered for qo in report.query_outcomes}
+    for aq in anchor_queries:
+        assert aq.search_query.rendered in executed_rendered

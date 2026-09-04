@@ -86,6 +86,11 @@ def test_imports_only_authorized_runtime_types():
         "app.discovery.search",
         "app.discovery.triage",
         "app.services.research_question_planning",
+        # RWI HQ "Discovery Research Loop V1 - Slice 5F": the explicit,
+        # default-False opt-in seam for literal-anchor-aware query
+        # planning (Slice 5E). Reused unmodified - see
+        # run_research_loop's own docstring for the exact contract.
+        "app.services.research_literal_anchors",
     }
 
 

@@ -52,6 +52,12 @@ Invocation (matches this repository's existing script convention):
         --search-name "Louisville Muhammad Ali International Airport" \\
         --search-iata SDF --search-icao KSDF \\
         --allow-live-network
+
+RWI HQ "Discovery Research Loop V1 - Slice 5F": pass --use-literal-anchors
+to additionally search bounded, literal, evidence-derived terms found in
+the preserved text itself (app.services.research_literal_anchors, Slice
+5E) - opt-in, default OFF. Omitting the flag is byte-for-behavior
+identical to every prior slice.
 """
 
 from __future__ import annotations
@@ -68,6 +74,7 @@ from app.discovery.brave_search_provider import BraveSearchProvider
 from app.discovery.search import SearchOutcomeStatus, SearchProvider
 from app.models import SourceAssertion
 from app.services.discovery_temporal_followup import AirportSearchContext, AirportSearchContextError
+from app.services.research_literal_anchors import extract_literal_anchors
 from app.services.research_loop import ResearchLoopReport, compute_dimension_search_status, run_research_loop
 from app.services.research_question_planning import ResearchClue, ResearchClueError, ResearchDimension
 
@@ -119,6 +126,14 @@ def _parser() -> argparse.ArgumentParser:
         help="Execute the generated questions against a real SearchProvider (brave). "
         "Omit to print the question plan only, with zero network access.",
     )
+    parser.add_argument(
+        "--use-literal-anchors", action="store_true",
+        help="RWI HQ 'Discovery Research Loop V1 - Slice 5F'. Opt-in, default OFF. When "
+        "given, bounded, literal, evidence-derived query variants (app.services."
+        "research_literal_anchors, Slice 5E) are added to the plan alongside the "
+        "existing baseline queries. Without this flag, behavior is byte-for-behavior "
+        "identical to every prior slice.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text.")
     return parser
 
@@ -152,7 +167,7 @@ def _candidates_for(report: ResearchLoopReport, dimension: ResearchDimension):
     return [c for c in report.triaged_candidates if dimension in c.dimensions]
 
 
-def _print_human(report: ResearchLoopReport, *, network_used: bool) -> None:
+def _print_human(report: ResearchLoopReport, *, network_used: bool, use_literal_anchors: bool) -> None:
     print(_DISCLAIMER)
 
     context = report.clue.airport_context
@@ -161,6 +176,15 @@ def _print_human(report: ResearchLoopReport, *, network_used: bool) -> None:
     excerpt = report.clue.evidence_text
     print(f"Evidence excerpt: {excerpt[:200]}{'...' if len(excerpt) > 200 else ''}")
     print(f"Dimensions: {', '.join(q.dimension.value for q in report.questions)}")
+    print(f"Literal anchors: {'ENABLED' if use_literal_anchors else 'disabled'}")
+    if use_literal_anchors:
+        anchors = extract_literal_anchors(report.clue.evidence_text, airport_context=context)
+        if anchors:
+            print("Extracted literal anchors (explainability only - not a resolved value or answer):")
+            for a in anchors:
+                print(f"  - {a.text!r} [{a.kind.value}] -> {a.dimension_hint.value}")
+        else:
+            print("Extracted literal anchors: none found - plan is identical to the baseline plan.")
     print("\nSearch candidates are not evidence and do not resolve the research question.")
 
     for q in report.questions:
@@ -217,8 +241,9 @@ def _print_human(report: ResearchLoopReport, *, network_used: bool) -> None:
     print(_FETCH_HINT)
 
 
-def _print_json(report: ResearchLoopReport, *, network_used: bool) -> None:
+def _print_json(report: ResearchLoopReport, *, network_used: bool, use_literal_anchors: bool) -> None:
     context = report.clue.airport_context
+    anchors = extract_literal_anchors(report.clue.evidence_text, airport_context=context) if use_literal_anchors else ()
     payload = {
         "_disclaimer": _DISCLAIMER,
         "_research_status_note": _RESEARCH_STATUS_LINE,
@@ -227,6 +252,10 @@ def _print_json(report: ResearchLoopReport, *, network_used: bool) -> None:
             "evidence_excerpt": report.clue.evidence_text[:200],
             "dimensions": [q.dimension.value for q in report.questions],
         },
+        "literal_anchors_enabled": use_literal_anchors,
+        "literal_anchors": [
+            {"text": a.text, "kind": a.kind.value, "dimension_hint": a.dimension_hint.value} for a in anchors
+        ],
         "questions": [
             {
                 "dimension": q.dimension.value, "question": q.question,
@@ -298,12 +327,12 @@ def main(argv: "Sequence[str] | None" = None) -> int:
         return 2
 
     provider: "SearchProvider | None" = PROVIDER_REGISTRY["brave"] if args.allow_live_network else None
-    report = run_research_loop(clue, provider=provider)
+    report = run_research_loop(clue, provider=provider, use_literal_anchors=args.use_literal_anchors)
 
     if args.json:
-        _print_json(report, network_used=args.allow_live_network)
+        _print_json(report, network_used=args.allow_live_network, use_literal_anchors=args.use_literal_anchors)
     else:
-        _print_human(report, network_used=args.allow_live_network)
+        _print_human(report, network_used=args.allow_live_network, use_literal_anchors=args.use_literal_anchors)
     return 0
 
 

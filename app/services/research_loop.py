@@ -5,7 +5,13 @@ status reporting.
     ResearchClue
         -> plan_research_search_queries() (Slice 3, reused unmodified from
            app.services.research_question_planning - the FULL query plan,
-           possibly more than one SearchQuery per dimension)
+           possibly more than one SearchQuery per dimension), OR, ONLY when
+           the caller explicitly passes use_literal_anchors=True (Slice 5F,
+           default False - see run_research_loop's own docstring),
+           plan_research_search_queries_with_anchors() (Slice 5E, reused
+           unmodified from app.services.research_literal_anchors - the
+           same baseline plan plus bounded, literal, evidence-derived
+           query variants)
         -> execute each PlannedResearchQuery.search_query through an
            injected SearchProvider (app.discovery.search - unmodified)
         -> collect every SearchOutcome (one per planned query, honestly,
@@ -102,6 +108,7 @@ from app.discovery.dedup import deduplicate_results
 from app.discovery.identity import AirportIdentity
 from app.discovery.search import SearchOutcome, SearchOutcomeStatus, SearchProvider
 from app.discovery.triage import TriagedResult, triage_results
+from app.services.research_literal_anchors import plan_research_search_queries_with_anchors
 from app.services.research_question_planning import (
     PlannedResearchQuery,
     ResearchClue,
@@ -227,7 +234,7 @@ def compute_dimension_search_status(
 
 
 def run_research_loop(
-    clue: ResearchClue, *, provider: "SearchProvider | None" = None,
+    clue: ResearchClue, *, provider: "SearchProvider | None" = None, use_literal_anchors: bool = False,
 ) -> ResearchLoopReport:
     """Pure orchestration (aside from the one injected provider.search()
     call per planned query) - no database, no file, no persistence of any
@@ -236,9 +243,26 @@ def run_research_loop(
     `run(identity, provider=None)` convention exactly - useful for
     reviewing exactly what would be searched before spending a live
     network budget.
+
+    `use_literal_anchors` (RWI HQ "Discovery Research Loop V1 - Slice 5F",
+    default False - existing callers/behavior are completely unaffected
+    unless this is explicitly passed True): when False (the default),
+    `planned_queries` is exactly `plan_research_search_queries(clue)`,
+    byte-for-behavior identical to every prior slice. When True,
+    `planned_queries` is `plan_research_search_queries_with_anchors(clue)`
+    instead (app.services.research_literal_anchors, Slice 5E) - the
+    existing baseline plan plus bounded, literal, evidence-derived query
+    variants, always as an unmodified prefix. This flag changes ONLY
+    which queries get executed; it introduces no new DimensionSearchStatus
+    member, no new ResearchQuestion/ResearchClue semantic, and no
+    resolution of any kind - CANDIDATES_FOUND still means only "search
+    returned candidates," exactly as before.
     """
     questions = plan_research_questions(clue)
-    planned_queries = plan_research_search_queries(clue)
+    planned_queries = (
+        plan_research_search_queries_with_anchors(clue) if use_literal_anchors
+        else plan_research_search_queries(clue)
+    )
 
     if provider is None:
         return ResearchLoopReport(

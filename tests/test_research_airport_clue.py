@@ -211,6 +211,77 @@ def test_json_plan_only_mode_has_null_search_status(tmp_path, capsys):
         assert q["research_status"] is None
 
 
+# --- Literal-anchor CLI opt-in (RWI HQ "Discovery Research Loop V1 - Slice 5F") ---
+
+SA258_TEXT = (
+    "On the airfield, reconstruction is expected on Taxiways B and D, phase 1 of the East "
+    "Runway’s Engineered Materials Arresting System (EMAS) will be installed and electrical "
+    "work will continue including the completion of the SDF MicroGrid."
+)
+
+
+def test_cli_without_flag_is_unchanged(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path, text=SA258_TEXT)
+    exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Literal anchors: disabled" in out
+    assert "Extracted literal anchors" not in out
+
+
+def test_cli_with_flag_enables_anchor_aware_planning_and_shows_anchors(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path, text=SA258_TEXT)
+    exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--use-literal-anchors"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Literal anchors: ENABLED" in out
+    assert "'East Runway' [DIRECTIONAL_RUNWAY_NAME] -> RUNWAY_END" in out
+    assert "'phase 1' [PHASE_LITERAL] -> PROJECT_PHASE" in out
+    assert 'EMAS "East Runway"' in out
+    assert 'EMAS "phase 1"' in out
+
+
+def test_cli_flag_never_writes_to_database(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path, text=SA258_TEXT)
+    before = open(db_path, "rb").read()
+    cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--use-literal-anchors"])
+    after = open(db_path, "rb").read()
+    assert before == after
+
+
+def test_json_flag_reports_anchors_and_enabled_state(tmp_path, capsys, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path, text=SA258_TEXT)
+    monkeypatch.setitem(cli.PROVIDER_REGISTRY, "brave", _FakeProvider({}))
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS,
+        "--use-literal-anchors", "--allow-live-network", "--json",
+    ])
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["literal_anchors_enabled"] is True
+    anchors = {(a["text"], a["kind"], a["dimension_hint"]) for a in payload["literal_anchors"]}
+    assert ("East Runway", "DIRECTIONAL_RUNWAY_NAME", "RUNWAY_END") in anchors
+    assert ("phase 1", "PHASE_LITERAL", "PROJECT_PHASE") in anchors
+    all_queries = {q for question in payload["questions"] for q in question["queries"]}
+    assert len(all_queries) == 9
+
+
+def test_json_flag_omitted_reports_disabled_and_empty_anchors(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path, text=SA258_TEXT)
+    exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--json"])
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["literal_anchors_enabled"] is False
+    assert payload["literal_anchors"] == []
+
+
 def test_json_installation_type_and_project_phase_have_two_queries(tmp_path, capsys):
     db_path = str(tmp_path / "test.db")
     aid = _seed_source_assertion(db_path)

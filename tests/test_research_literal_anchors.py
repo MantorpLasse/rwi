@@ -253,21 +253,13 @@ def test_question_and_reason_text_match_existing_research_question():
 
 
 def test_dimension_search_status_vocabulary_unaffected():
-    """This module is not wired into app.services.research_loop in Slice
-    5E (mission's own explicit "does NOT wire the new planner into the
-    live research CLI" instruction) - proven here by confirming
-    DimensionSearchStatus's own vocabulary is exactly the pre-existing
-    three members, completely unchanged by this module's mere existence,
-    and that run_research_loop (unmodified) still only ever executes the
-    original plan_research_search_queries(), never this module's anchor-
-    aware variant."""
-    import inspect
-
-    from app.services.research_loop import DimensionSearchStatus, run_research_loop
+    """As of RWI HQ "Discovery Research Loop V1 - Slice 5F",
+    run_research_loop() DOES wire in this module, but only behind an
+    explicit, default-False `use_literal_anchors` parameter (see
+    tests/test_research_loop.py for the default/opt-in behavior proof) -
+    this test only confirms DimensionSearchStatus's own vocabulary is
+    exactly the pre-existing three members, completely unaffected by this
+    module's existence or use."""
+    from app.services.research_loop import DimensionSearchStatus
 
     assert {m.value for m in DimensionSearchStatus} == {"CANDIDATES_FOUND", "NO_CANDIDATES_FOUND", "SEARCH_FAILED"}
-    source = inspect.getsource(run_research_loop)
-    assert "plan_research_search_queries_with_anchors" not in source
-    assert "research_literal_anchors" not in inspect.getsource(
-        __import__("app.services.research_loop", fromlist=["research_loop"])
-    )
