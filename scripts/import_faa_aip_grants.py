@@ -24,6 +24,17 @@ Because the two scripts don't share a common external ID, cross-source
 dedup between this script's staged evidence and USAspending's is not
 automatic - a human reviewer comparing candidate evidence for the same
 airport should check both.
+
+RWI HQ "FAA AIP Amount Parser + Relevance Gate": this script no longer
+stages every AIP grant row - app.acquisition.faa_aip_grants.is_runway_safety_relevant()
+gates persistence to rows whose project description explicitly names EMAS
+or an "arresting system" (see that function's own docstring for the full
+rationale and the two existing repository precedents it is modeled on).
+A row failing this gate creates nothing at all (no Source, no
+SourceAssertion) - it is counted only via stats["irrelevant_rows_skipped"].
+"Relevant" means only "worth staging for human review," never an accepted
+EMAS fact, a same-real-world-effort conclusion, a Signal, an opportunity, a
+project value, or a supplier attribution.
 """
 
 from __future__ import annotations
@@ -42,6 +53,7 @@ from app.acquisition.faa_aip_grants import (
     AipGrant,
     AipGrantsError,
     discover_grant_pdf_urls,
+    is_runway_safety_relevant,
     parse_grant_pdf,
 )
 from app.database import SessionLocal
@@ -118,6 +130,7 @@ def import_year(
     stats = {
         "pdfs": 0,
         "grants": 0,
+        "irrelevant_rows_skipped": 0,
         "already_imported": 0,
         "evidence_staged_resolved": 0,
         "evidence_staged_unresolved": 0,
@@ -136,6 +149,16 @@ def import_year(
                 stats["grants"] += len(grants)
 
                 for grant in grants:
+                    # RWI HQ "FAA AIP Amount Parser + Relevance Gate", Part 5:
+                    # the FAA AIP radar must NOT stage every AIP grant row -
+                    # only rows worth staging for human runway-safety review.
+                    # An irrelevant row creates absolutely nothing (no
+                    # Source, no SourceAssertion) - it is not remembered
+                    # merely to record that it existed.
+                    if not is_runway_safety_relevant(grant.project_description):
+                        stats["irrelevant_rows_skipped"] += 1
+                        continue
+
                     external_id = _external_id_for(grant)
                     if session.scalar(select(Source).where(Source.external_id == external_id)):
                         stats["already_imported"] += 1
@@ -234,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"PDFs processed:                   {stats['pdfs']}")
     print(f"Grant rows parsed:                {stats['grants']}")
+    print(f"Irrelevant rows skipped:          {stats['irrelevant_rows_skipped']}")
     print(f"Already imported (skipped):       {stats['already_imported']}")
     print(f"Evidence staged (known Airport):  {stats['evidence_staged_resolved']}")
     print(f"Evidence staged (unresolved):     {stats['evidence_staged_unresolved']}")

@@ -71,6 +71,69 @@ class AipGrant:
     source_pdf_url: str
 
 
+# RWI HQ "FAA AIP Amount Parser + Relevance Gate" (Part 3/4 recon and
+# design): a small, narrow, STANDALONE text predicate for this importer -
+# deliberately NOT wired into app.services.emas_relevance_evaluation's ERG1
+# evidence-class evaluator (evaluate_emas_relevance()). ERG1 is designed to
+# consume ALREADY-CLASSIFIED EmasEvidenceObservation facts, never raw text -
+# building a genuine "extraction-layer adapter" that correctly maps terse
+# FAA AIP project-title phrases onto its 7-class taxonomy (with the "hard
+# extraction-layer precision requirements" ERG1's own docstring insists on -
+# e.g. never conflating aviation EMAS "arresting system" with an unrelated
+# "arresting" usage, never conflating a genuine RSA deficiency with routine
+# RSA maintenance) is a separately-scoped undertaking, not "the smallest
+# safe correction" this mission calls for. Recommended as a future, explicitly
+# -scoped mission (see this mission's own final report).
+#
+# Recon (Part 3): two existing, narrower-than-you'd-guess precedents already
+# exist in this repository for "does this text describe EMAS":
+#   - app.services.signal_rules.KEYWORDS = ("EMAS", "RSA",
+#     "runway safety area", "arresting system") - BROADER, includes RSA/
+#     "runway safety area" unconditionally. This mission's own explicit
+#     caution ("Be cautious with generic: Runway Safety Area, RSA... may
+#     describe ordinary safety-area work with no EMAS component") argues
+#     against reusing this list as-is for a persistence gate.
+#   - scripts/import_faa_construction_report.py::_mentions_keyword() =
+#     "EMAS" in haystack or "arresting system" in haystack.lower() -
+#     NARROWER, already a real, currently-used, already-proven pattern for
+#     a different (but adjacent) FAA source, and it deliberately excludes
+#     RSA/"runway safety area" entirely. This predicate is modeled directly
+#     on THIS narrower, already-precedented pattern, not the broader one.
+#
+# "Engineered Material Arresting System" is not matched as a separate
+# phrase because it is unnecessary: that exact phrase always contains
+# "arresting system" as a substring, so the single ARRESTING_SYSTEM check
+# already recognizes it - verified directly against the real live SDF row
+# ("...Construct Engineered Material Arresting System Safety Area...").
+#
+# EMAS uses a WORD-BOUNDARY-anchored pattern (never a bare substring check)
+# specifically because a bare substring check would false-positive on an
+# ordinary English word like "SCHEMAS" (which literally contains "EMAS") -
+# this is a real, demonstrable false-positive mechanism, not a hypothetical
+# one, and word-boundary anchoring is a MORE precise check, never a fuzzier
+# one. "arresting system" is a two-word phrase and does not need the same
+# treatment.
+_EMAS_ABBREVIATION_PATTERN = re.compile(r"\bEMAS\b", re.IGNORECASE)
+_ARRESTING_SYSTEM_PATTERN = re.compile(r"arresting\s+system", re.IGNORECASE)
+
+
+def is_runway_safety_relevant(project_description: str) -> bool:
+    """True only if the project description explicitly names EMAS or an
+    "arresting system" - never true merely because the row is at an
+    Airport, mentions a runway, or funds generic runway/taxiway/terminal/
+    apron/lighting/noise work. Deterministic and explainable: exactly two
+    fixed, narrow, word-boundary-aware patterns, never fuzzy matching,
+    never arbitrary text scoring. "Relevant" means only "worth staging for
+    human review" - never an accepted EMAS fact, never a same-real-world-
+    effort conclusion, never a Signal, opportunity, project value, or
+    supplier attribution (see this module's own module-level recon comment
+    above and this mission's own final report, Part 4)."""
+    return bool(
+        _EMAS_ABBREVIATION_PATTERN.search(project_description)
+        or _ARRESTING_SYSTEM_PATTERN.search(project_description)
+    )
+
+
 def discover_grant_pdf_urls(
     year: int, *, client: httpx.Client, timeout: float = 30.0
 ) -> list[str]:
@@ -91,10 +154,38 @@ def discover_grant_pdf_urls(
     return resolved
 
 
+# RWI HQ "FAA AIP Amount Parser + Relevance Gate": a confirmed live-data
+# artifact (found in the FY2026 preview, AIP_FY26_5.pdf specifically - 24
+# real cells, e.g. '$ 2 5,272,482.00' for $25,272,482.00) - a PDF
+# kerning/rendering quirk that inserts a stray space between two of the
+# leading digits of a large amount. Matches any run of one-or-more Unicode
+# whitespace characters (not merely ASCII space), so it is removed
+# uniformly wherever it appears in the cell, not just this one known shape.
+_INTERNAL_WHITESPACE_PATTERN = re.compile(r"\s+")
+
+
 def _parse_amount(raw: str | None) -> Decimal | None:
+    """Parses one currency-formatted AIP grant amount cell.
+
+    Cleanup order: strip leading/trailing whitespace, remove the currency
+    symbol and thousands separators, then remove EVERY remaining
+    whitespace character anywhere in the string (see
+    _INTERNAL_WHITESPACE_PATTERN - a confirmed real PDF-extraction
+    artifact, never a genuinely different number). This is deliberate,
+    uniform normalization applied identically to every cell - never
+    selective digit extraction, never a guess at what a malformed cell
+    "probably" meant. The fully-cleaned string must still parse as a
+    single valid Decimal literal in one pass (exactly one optional sign,
+    digits, optional single decimal point) or this function returns None,
+    exactly as before - a malformed cell (stray letters, two decimal
+    points, two numbers concatenated by another PDF artifact) still fails
+    Decimal(...) after normalization and is never coerced into a
+    plausible-looking number. Blank and "-" remain None, unchanged.
+    """
     if raw is None:
         return None
-    cleaned = raw.strip().replace("$", "").replace(",", "").strip()
+    cleaned = raw.strip().replace("$", "").replace(",", "")
+    cleaned = _INTERNAL_WHITESPACE_PATTERN.sub("", cleaned)
     if not cleaned or cleaned == "-":
         return None
     try:
