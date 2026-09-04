@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Sequence
+from typing import Sequence, TextIO
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -62,6 +62,30 @@ from app.services.generic_web_fetch import RobotsDisallowedError, fetch_discover
 from app.services.snapshot_extraction import load_snapshot_for_extraction
 
 _DEFAULT_PREVIEW_CHARS = 500
+
+
+def _safe_print(*values: object, file: "TextIO | None" = None, sep: str = " ", end: str = "\n") -> None:
+    """print() that can never raise UnicodeEncodeError, regardless of the
+    active stream's encoding (e.g. a Windows console bound to cp1252).
+
+    A real fetched web page can legitimately contain any valid Unicode
+    character (an emoji in a nav bar, smart punctuation, non-Latin
+    script...) - a restrictive terminal encoding must never crash the
+    Commander's report because of it. This is OUTPUT-ONLY safety: it
+    changes nothing about the Snapshot payload, its sha256, or the
+    ExtractedDocument's own text, which stay the real, un-mutated value
+    everywhere else (database, memory, this function's own `values`
+    arguments are never modified) - only what actually reaches this one
+    stream may fall back to a readable backslash-escape for a character
+    that stream's encoding cannot represent.
+    """
+    stream = file if file is not None else sys.stdout
+    text = sep.join(str(value) for value in values) + end
+    try:
+        stream.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(text.encode(encoding, errors="backslashreplace").decode(encoding, errors="replace"))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -107,28 +131,28 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _print_discovered_candidate(args: argparse.Namespace) -> None:
-    print("=== DISCOVERED CANDIDATE (Commander-supplied, not looked up by this script) ===")
-    print(f"Title: {args.candidate_title or '(not supplied)'}")
-    print(f"URL: {args.url}")
-    print(f"Dimension(s): {', '.join(args.candidate_dimension) if args.candidate_dimension else '(not supplied)'}")
-    print(f"Originating query: {args.candidate_query or '(not supplied)'}")
-    print(f"Triage band: {args.candidate_triage_band or '(not supplied)'}")
+    _safe_print("=== DISCOVERED CANDIDATE (Commander-supplied, not looked up by this script) ===")
+    _safe_print(f"Title: {args.candidate_title or '(not supplied)'}")
+    _safe_print(f"URL: {args.url}")
+    _safe_print(f"Dimension(s): {', '.join(args.candidate_dimension) if args.candidate_dimension else '(not supplied)'}")
+    _safe_print(f"Originating query: {args.candidate_query or '(not supplied)'}")
+    _safe_print(f"Triage band: {args.candidate_triage_band or '(not supplied)'}")
     if args.candidate_reason:
-        print("Triage reasons:")
+        _safe_print("Triage reasons:")
         for reason in args.candidate_reason:
-            print(f"  - {reason}")
+            _safe_print(f"  - {reason}")
     else:
-        print("Triage reasons: (not supplied)")
+        _safe_print("Triage reasons: (not supplied)")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
 
     if not args.allow_live_network:
-        print("Refusing fetch: --allow-live-network is required.", file=sys.stderr)
+        _safe_print("Refusing fetch: --allow-live-network is required.", file=sys.stderr)
         return 2
     if not args.allow_database_write:
-        print("Refusing fetch: --allow-database-write is required.", file=sys.stderr)
+        _safe_print("Refusing fetch: --allow-database-write is required.", file=sys.stderr)
         return 2
 
     _print_discovered_candidate(args)
@@ -138,37 +162,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             run = fetch_discovered_url(session, args.url)
         except (UnsafeFetchTargetError, ResponseTooLargeError, TooManyRedirectsError) as exc:
-            print(f"\n=== FETCH ===\nFETCH BLOCKED (safety): {type(exc).__name__}: {exc}", file=sys.stderr)
+            _safe_print(f"\n=== FETCH ===\nFETCH BLOCKED (safety): {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
         except RobotsDisallowedError as exc:
-            print(f"\n=== FETCH ===\nFETCH BLOCKED (robots.txt): {exc}", file=sys.stderr)
+            _safe_print(f"\n=== FETCH ===\nFETCH BLOCKED (robots.txt): {exc}", file=sys.stderr)
             return 2
         except Exception as exc:  # AcquisitionService.acquire() re-raises on failure
-            print(f"\n=== FETCH ===\nFETCH FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+            _safe_print(f"\n=== FETCH ===\nFETCH FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
 
-        print("\n=== FETCH ===")
-        print(f"Status: {run.status.value}")
-        print(f"Final URL: {run.final_url}")
-        print(f"HTTP status: {run.http_status}")
-        print(f"Content type: {run.content_type}")
-        print(f"Duration: {run.duration_seconds:.2f}s")
+        _safe_print("\n=== FETCH ===")
+        _safe_print(f"Status: {run.status.value}")
+        _safe_print(f"Final URL: {run.final_url}")
+        _safe_print(f"HTTP status: {run.http_status}")
+        _safe_print(f"Content type: {run.content_type}")
+        _safe_print(f"Duration: {run.duration_seconds:.2f}s")
 
         if run.snapshot is None:
-            print("\nNo Snapshot was produced - nothing to extract. STOP.")
-            print(
+            _safe_print("\nNo Snapshot was produced - nothing to extract. STOP.")
+            _safe_print(
                 "\n=== GOVERNANCE ===\n"
                 "No fact accepted. No Signal created. No same-effort conclusion. No publication.\n"
                 "Nothing beyond the acquisition rows above was written to the database."
             )
             return 0
 
-        print("\n=== SNAPSHOT ===")
-        print(f"Snapshot id: {run.snapshot.id}")
-        print(f"sha256: {run.snapshot.sha256}")
-        print(f"byte_size: {run.snapshot.byte_size}")
-        print(f"media_type: {run.snapshot.media_type}")
-        print(f"retrieved_at: {run.snapshot.retrieved_at}")
+        _safe_print("\n=== SNAPSHOT ===")
+        _safe_print(f"Snapshot id: {run.snapshot.id}")
+        _safe_print(f"sha256: {run.snapshot.sha256}")
+        _safe_print(f"byte_size: {run.snapshot.byte_size}")
+        _safe_print(f"media_type: {run.snapshot.media_type}")
+        _safe_print(f"retrieved_at: {run.snapshot.retrieved_at}")
 
         loaded = load_snapshot_for_extraction(session, run.snapshot.id)
 
@@ -179,24 +203,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     total_text = "".join(page.text for page in document.pages)
     preview = total_text[: args.preview_chars]
 
-    print("\n=== EXTRACTION ===")
-    print("Extraction ID: N/A - Extraction is never persisted as a database row in this pipeline;")
-    print("it is a pure, deterministic recomputation from the Snapshot's own payload, identified only by:")
-    print(f"  document_identity: {document.document_identity}")
-    print(f"Extractor: {document.extractor_name} v{document.extractor_version}")
-    print(f"Status: {document.status.value}")
-    print(f"Page count: {document.page_count}")
-    print(f"Total extracted text length: {len(total_text)} chars")
+    _safe_print("\n=== EXTRACTION ===")
+    _safe_print("Extraction ID: N/A - Extraction is never persisted as a database row in this pipeline;")
+    _safe_print("it is a pure, deterministic recomputation from the Snapshot's own payload, identified only by:")
+    _safe_print(f"  document_identity: {document.document_identity}")
+    _safe_print(f"Extractor: {document.extractor_name} v{document.extractor_version}")
+    _safe_print(f"Status: {document.status.value}")
+    _safe_print(f"Page count: {document.page_count}")
+    _safe_print(f"Total extracted text length: {len(total_text)} chars")
     if document.warnings:
-        print("Warnings:")
+        _safe_print("Warnings:")
         for warning in document.warnings:
-            print(f"  - {warning}")
-    print(f"\nBounded preview (first {args.preview_chars} chars of extracted text):")
-    print("-" * 60)
-    print(preview if preview else "(no text extracted)")
-    print("-" * 60)
+            _safe_print(f"  - {warning}")
+    _safe_print(f"\nBounded preview (first {args.preview_chars} chars of extracted text):")
+    _safe_print("-" * 60)
+    _safe_print(preview if preview else "(no text extracted)")
+    _safe_print("-" * 60)
 
-    print(
+    _safe_print(
         "\n=== GOVERNANCE ===\n"
         "No fact accepted. No Signal created. No same-effort conclusion. No publication.\n"
         "Extracted text is a derived parser representation, not evidence or a verified claim.\n"
@@ -204,7 +228,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "(via the existing, unmodified fetch_discovered_url()) - no Source, SourceAssertion,\n"
         "CandidateFragment, Signal, Installation, Airport, or ReviewerAction row was created."
     )
-    print(
+    _safe_print(
         "\n=== NEXT POSSIBLE STEP ===\n"
         "This preserved Snapshot may be reviewed by a human via the existing\n"
         f"scripts/review_fragment_selection.py --database {args.database} --snapshot-id {run.snapshot.id} ...\n"
