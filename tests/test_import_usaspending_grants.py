@@ -11,7 +11,6 @@ from app.database import Base
 from app.models import Airport, ReviewerAction, Signal, Source, SourceAssertion
 from scripts.import_usaspending_grants import (
     RESOLVED_EXISTING,
-    RESOLVED_NEW,
     UNRESOLVED,
     _format_amount,
     classify_category,
@@ -178,12 +177,20 @@ def test_resolve_airport_fails_closed_for_allegheny_shaped_authority_recipient(s
         assert len(session.scalars(select(Airport)).all()) == 0
 
 
-def test_resolve_airport_creates_new_airport_from_embedded_loc_id_when_unknown(session_factory):
+def test_resolve_airport_fails_closed_for_unknown_embedded_loc_id(session_factory):
+    """RWI HQ 'USAspending Airport Resolver Hardening': a real embedded
+    Loc ID with no matching existing Airport must now resolve UNRESOLVED,
+    never create an Airport - the resolver itself fails closed, no
+    orchestration-level rollback safety net required."""
     with session_factory() as session:
         resolution = resolve_airport(session, make_grant(GEORGIA_DOT_DESCRIPTION))
 
-        assert resolution.status == RESOLVED_NEW
-        assert resolution.airport.faa_code == "VPC"
+        assert resolution.status == UNRESOLVED
+        assert resolution.airport is None
+        assert resolution.raw_identifier == "VPC"
+        assert resolution.raw_name == "Test Recipient"
+        assert "no existing Airport has this code" in resolution.reason
+        assert session.scalars(select(Airport)).all() == []  # no Airport fabricated
 
 
 def test_resolve_airport_fails_closed_when_ambiguous(session_factory):
@@ -284,8 +291,6 @@ def test_import_all_stages_evidence_for_matched_airport_creates_no_signal(sessio
 
     assert stats["grants_fetched"] == 1
     assert stats["evidence_staged_resolved"] == 1
-    assert stats["airports_created"] == 0
-    assert stats["airport_fabrication_refused"] == 0
     assert stats["unattributable"] == 0
 
     with session_factory() as session:
@@ -374,7 +379,6 @@ def test_import_all_fails_closed_and_preserves_evidence_for_beneficiary_only_mat
         client=_client_with([row]),
     )
 
-    assert stats["airports_created"] == 0
     assert stats["evidence_staged_resolved"] == 0
     assert stats["unattributable"] == 1
 
@@ -423,7 +427,6 @@ def test_import_all_fails_closed_for_allegheny_shaped_authority_recipient(sessio
         client=_client_with([row]),
     )
 
-    assert stats["airports_created"] == 0
     assert stats["evidence_staged_resolved"] == 0
     assert stats["unattributable"] == 1
 
@@ -553,11 +556,33 @@ def test_import_all_does_not_reprocess_changed_description_on_replay(session_fac
         assert len(session.scalars(select(SourceAssertion)).all()) == 1
 
 
-def test_import_all_refuses_airport_fabrication_from_embedded_loc_id(session_factory):
-    """Part 5: a RESOLVED_NEW-shaped grant (a real embedded Loc ID with no
-    matching existing Airport) must NOT result in a fabricated Airport,
-    a Signal, or a ReviewerAction - it is staged as identity-unresolved
-    evidence instead, distinctly counted."""
+def test_import_all_contains_no_rollback_workaround():
+    """RWI HQ 'USAspending Airport Resolver Hardening', requirement 7: since
+    resolve_airport() now fails closed on its own, import_all() no longer
+    needs (and no longer contains) an actual session.rollback() CALL as a
+    safety net to discard a machine-fabricated Airport. AST-based (not a
+    plain text search) so this survives docstring prose that merely
+    NARRATES the removed workaround by name."""
+    import ast
+    import inspect
+
+    from scripts import import_usaspending_grants
+
+    tree = ast.parse(inspect.getsource(import_usaspending_grants.import_all))
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "rollback"
+    ]
+    assert calls == []
+
+
+def test_import_all_stages_unknown_loc_id_grant_as_unresolved_no_rollback_needed(session_factory):
+    """RWI HQ 'USAspending Airport Resolver Hardening': a grant with a real
+    embedded Loc ID but no matching existing Airport must NOT result in a
+    fabricated Airport, a Signal, or a ReviewerAction - it is staged as
+    identity-unresolved evidence, through the resolver's OWN fail-closed
+    behavior (no orchestration-level rollback workaround exists any more -
+    there is nothing for import_all() to detect or undo)."""
     row = {
         "generated_internal_id": "ASST_NON_VPC_1", "Award ID": "VPC-1", "Recipient Name": "GEORGIA DOT",
         "Award Amount": 900000.0, "Description": GEORGIA_DOT_DESCRIPTION,
@@ -565,9 +590,8 @@ def test_import_all_refuses_airport_fabrication_from_embedded_loc_id(session_fac
     }
     stats = import_all(end_date=date(2026, 12, 31), session_factory=session_factory, client=_client_with([row]))
 
-    assert stats["airports_created"] == 0
-    assert stats["airport_fabrication_refused"] == 1
     assert stats["evidence_staged_unresolved"] == 1
+    assert stats["evidence_staged_resolved"] == 0
     assert stats["unattributable"] == 1
 
     with session_factory() as session:
@@ -578,6 +602,11 @@ def test_import_all_refuses_airport_fabrication_from_embedded_loc_id(session_fac
         source = session.scalar(select(Source))
         assert source is not None
         assert source.external_id == "usaspending:ASST_NON_VPC_1"
+
+        assertion = session.scalar(select(SourceAssertion))
+        assert assertion.airport_id is None
+        assert assertion.raw_airport_identifier == "VPC"  # the Loc ID itself preserved
+        assert assertion.raw_relevant_text == GEORGIA_DOT_DESCRIPTION
 
         assertion = session.scalar(select(SourceAssertion))
         assert assertion.airport_id is None

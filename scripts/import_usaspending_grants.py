@@ -32,8 +32,14 @@ BENEFICIARY_PATTERN = re.compile(
 _REPLACEMENT_WORDS = ("RECONSTRUCT", "REPLACE")
 
 # resolve_airport() outcomes (docs/domain/usaspending-airport-resolution-fail-closed-report.md).
+# RESOLVED_NEW ("resolved_new" - the resolver used to construct a new
+# Airport from an embedded, real-shaped but unmatched Loc ID) was removed by
+# RWI HQ "USAspending Airport Resolver Hardening": resolve_airport() can no
+# longer create an Airport under any circumstance, so that outcome is no
+# longer reachable and the constant is gone, not merely dead-branched.
+# Caller recon (that mission's own Part 1) confirmed no code outside this
+# module and its own tests ever imported or depended on it.
 RESOLVED_EXISTING = "resolved_existing"
-RESOLVED_NEW = "resolved_new"
 UNRESOLVED = "unresolved"
 
 
@@ -133,17 +139,27 @@ def resolve_airport(session: Session, grant: UsaspendingGrant) -> AirportResolut
     shaped code), then the standard beneficiary city/state sentence matched
     against an EXISTING Airport.
 
-    A new Airport is created ONLY from a real embedded Loc ID - never from
-    a recipient organization name or a city/state match alone. A grant's
-    `recipient_name` is who received the money, not necessarily the
-    airport: it can be an airport AUTHORITY operating more than one
+    NEVER creates an Airport, under any circumstance (RWI HQ "USAspending
+    Airport Resolver Hardening" - the established invariant "machine
+    evidence alone must not create Airport" now holds inside this resolver
+    itself, not merely as an orchestration-level safety net in import_all()).
+    A real, embedded Loc ID that does not match an existing Airport is
+    UNRESOLVED, exactly like every other unmatched case - the identifier
+    itself is preserved (raw_identifier) for later human review, but no
+    Airport is fabricated from it. Previously (pre-hardening) this branch
+    treated a real FAA/ICAO/IATA-shaped identifier as "sufficient grounds"
+    to create a new Airport on the spot; that reasoning is retired.
+
+    A grant's `recipient_name` is who received the money, not necessarily
+    the airport: it can be an airport AUTHORITY operating more than one
     facility (see the Allegheny County Airport Authority case in
     docs/domain/usaspending-airport-resolution-fail-closed-report.md, where
-    this exact fallback fabricated an Airport named after the authority
-    instead of the airport it actually funded). Every other case - no
-    pattern match at all, an ambiguous city/state match, or a city/state
-    match with zero existing Airport - is UNRESOLVED: identity is left
-    unset rather than guessed, per RWI's fail-closed principle.
+    an earlier fallback fabricated an Airport named after the authority
+    instead of the airport it actually funded). Every unmatched case - no
+    pattern match at all, an embedded Loc ID with no existing Airport, an
+    ambiguous city/state match, or a city/state match with zero existing
+    Airport - is UNRESOLVED: identity is left unset rather than guessed,
+    per RWI's fail-closed principle.
     """
     loc_id_match = LOC_ID_PATTERN.search(grant.description)
     if loc_id_match:
@@ -151,12 +167,18 @@ def resolve_airport(session: Session, grant: UsaspendingGrant) -> AirportResolut
         airport = find_airport_by_code(session, code)
         if airport is not None:
             return AirportResolution(RESOLVED_EXISTING, airport=airport, raw_identifier=code)
-        # A real Loc ID we don't have yet - an actual FAA/ICAO/IATA-shaped
-        # identifier is sufficient grounds to create a new Airport.
-        airport = Airport(faa_code=code, name=grant.recipient_name.title(), country="USA")
-        session.add(airport)
-        session.flush()
-        return AirportResolution(RESOLVED_NEW, airport=airport, raw_identifier=code)
+        # A real Loc-ID-shaped identifier was found, but no governed Airport
+        # exists for it yet - fail closed rather than fabricate one.
+        return AirportResolution(
+            UNRESOLVED,
+            raw_identifier=code,
+            raw_name=grant.recipient_name.title(),
+            reason=(
+                "a Loc ID matching the expected FAA/ICAO/IATA shape was found in the grant description, "
+                "but no existing Airport has this code - machine evidence alone must not create an "
+                "Airport; this grant requires human review before any Airport is created for it"
+            ),
+        )
 
     beneficiary_match = BENEFICIARY_PATTERN.search(grant.description)
     if not beneficiary_match:
@@ -214,24 +236,16 @@ def import_all(
     app.services.known_airport_funding_reviewer_action /
     known_airport_funding_signal_creation), never automatic on import.
 
-    AIRPORT-FABRICATION SAFETY (Slice C's own governance finding, "Part 5"):
-    resolve_airport() itself is unmodified - redesigning airport-identity
-    resolution is out of this slice's scope - but its RESOLVED_NEW outcome
-    (a real embedded FAA/ICAO/IATA-shaped Loc ID with no matching existing
-    Airport) creates a brand-new Airport from machine evidence alone as a
-    side effect of being CALLED, before this function ever sees the result -
-    directly violating the established RWI invariant this pipeline enforces
-    everywhere else ("machine evidence alone must not fabricate an
-    Airport"). This function refuses to let that fabrication reach disk: it
-    immediately rolls back the just-flushed, not-yet-committed Airport and
-    re-routes the grant through the SAME identity-unresolved staging path a
-    genuine UNRESOLVED result uses - never silently accepting the
-    fabrication, never silently discarding the grant's own evidence either.
-    Tracked separately in stats["airport_fabrication_refused"] so it is
-    never confused with an ordinary UNRESOLVED case in review. This is an
-    orchestration-level mitigation only; resolve_airport()'s own
-    RESOLVED_NEW branch remains untouched pending a separate, explicitly-
-    scoped HQ decision (see this slice's own final report).
+    AIRPORT-FABRICATION SAFETY: resolve_airport() itself can no longer
+    create an Airport under any circumstance (RWI HQ "USAspending Airport
+    Resolver Hardening") - a real embedded Loc ID with no matching existing
+    Airport is UNRESOLVED, like every other unmatched case. This function
+    used to need an orchestration-level rollback workaround (RESOLVED_NEW
+    detection + session.rollback()) to protect against a fabrication that
+    happened inside resolve_airport() itself, before this function ever saw
+    the result (RWI HQ "USAspending Stage-Only Conversion", Slice C's own
+    Part 5 finding); that workaround has been removed as genuinely
+    unreachable now that the resolver fails closed on its own.
 
     AMOUNT SAFETY: grant.award_amount is preserved only inside the raw
     evidence text (SourceAssertion.raw_relevant_text, the grant's own
@@ -245,8 +259,6 @@ def import_all(
     )
     stats = {
         "grants_fetched": 0,
-        "airports_created": 0,
-        "airport_fabrication_refused": 0,
         "evidence_staged_resolved": 0,
         "evidence_staged_unresolved": 0,
         "already_imported": 0,
@@ -265,26 +277,10 @@ def import_all(
                     stats["already_imported"] += 1
                     continue
 
+                # resolve_airport() itself never creates an Airport - see
+                # this function's own docstring, "AIRPORT-FABRICATION
+                # SAFETY". No rollback workaround is needed here any more.
                 resolution = resolve_airport(session, grant)
-
-                if resolution.status == RESOLVED_NEW:
-                    # See this function's own docstring, "AIRPORT-FABRICATION
-                    # SAFETY". resolve_airport() already added+flushed a new
-                    # Airport for this branch as a side effect of being
-                    # called - discard it before it can ever be committed,
-                    # and treat this grant as identity-unresolved instead.
-                    session.rollback()
-                    stats["airport_fabrication_refused"] += 1
-                    resolution = AirportResolution(
-                        UNRESOLVED,
-                        raw_identifier=resolution.raw_identifier,
-                        raw_name=grant.recipient_name.title(),
-                        reason=(
-                            "resolve_airport() matched a real Loc-ID pattern with no existing Airport - "
-                            "Slice C refuses machine-driven Airport creation from funding evidence alone; "
-                            "this grant requires human review before any Airport is created for it"
-                        ),
-                    )
 
                 # The Source is created regardless of resolution outcome -
                 # it needs no Airport link, so a grant whose airport
@@ -403,8 +399,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Grants fetched (all-time):        {stats['grants_fetched']}")
     print(f"Already imported (skipped):       {stats['already_imported']}")
-    print(f"Airports created:                 {stats['airports_created']}")
-    print(f"Airport fabrication refused:      {stats['airport_fabrication_refused']}")
     print(f"Evidence staged (known Airport):  {stats['evidence_staged_resolved']}")
     print(f"Evidence staged (unresolved):     {stats['evidence_staged_unresolved']}")
     print(f"Unattributable (no airport):      {stats['unattributable']}")
