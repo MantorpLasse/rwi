@@ -27,7 +27,16 @@ class AcquisitionPayload:
     request_url: str
     final_url: str
     retrieved_headers: dict[str, str]
-    http_status: int
+    # RWI HQ "Manual File Acquisition Provider + CLI" mission: widened from
+    # `int` to `int | None` - every existing HTTP-based provider (FAA,
+    # generic-web, Tableau, MAC Granicus) still always supplies a real
+    # status code, completely unchanged; this only makes room for a
+    # legitimately non-HTTP provider (app.acquisition.manual_file) to say
+    # "no HTTP status exists" honestly rather than fabricate one.
+    # AcquisitionRun.http_status (app/models/acquisition.py) has always
+    # been Optional[int] - this was the one place the dataclass itself
+    # hadn't caught up to that.
+    http_status: int | None
     content_type: str | None
     duration_seconds: float
     provider_version: str
