@@ -347,6 +347,16 @@ def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
         # source_notes. source_notes itself IS public - sourced research
         # with a citation, the Signal equivalent of Installation.notes
         # ("Detaljer från källan").
+        # RWI HQ "Signal source_notes Presentation Wiring" mission: this
+        # field was already documented above (see the "source_notes itself
+        # IS public" comment on this same function) as intended for public
+        # display, and signal_detail.html has always had a ready
+        # "Detaljer från källan" block waiting for it - this was the one
+        # line missing to actually connect the two. Exposed verbatim, never
+        # transformed/reinterpreted - None stays None so the template's own
+        # `{% if signal.source_notes %}` guard continues to hide the card
+        # for every Signal that has none, exactly as before this mission.
+        source_notes=signal.source_notes,
         confirmed_vendor=signal.confirmed_vendor,
         likely_supplier=signal.likely_supplier,
         supplier_reason=signal.supplier_reason,

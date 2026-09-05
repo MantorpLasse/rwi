@@ -600,8 +600,25 @@ def test_build_site_never_exposes_signal_notes_or_manual_year_estimate(tmp_path)
     assert "Källan anger kostnad och datum i fritext." in airport_html
 
 
-def test_build_site_omits_signal_source_notes_and_private_notes(tmp_path):
-    """Raw signal research notes stay out of public HTML and data.json."""
+def test_build_site_exposes_signal_source_notes_but_omits_private_notes(tmp_path):
+    """Signal.source_notes is sourced research, not a personal annotation
+    (see _signal_view()'s own "source_notes itself IS public... the Signal
+    equivalent of Installation.notes" comment, and the precedent set by
+    test_build_site_never_exposes_signal_notes_or_manual_year_estimate's own
+    Installation.notes assertions above) - it belongs in the "Detaljer från
+    källan" card in both signal_detail.html and data.json, exactly like
+    Installation.notes already does for airports. Signal.notes (the private
+    "Min bedömning" annotation) must still never reach either output.
+
+    NOTE: this test previously asserted the exact opposite for
+    source_notes - that it stayed out of both signal_html and data.json.
+    That was the omission bug this repository's own "Signal source_notes
+    Presentation Wiring" mission fixed: signal_detail.html already had a
+    complete, correctly-labeled "Detaljer från källan" block gated on
+    `{% if signal.source_notes %}`, but _signal_view() never actually put
+    `source_notes` on the SimpleNamespace it feeds that template, so the
+    block was permanently dead. This test is updated to match the
+    documented, intended public boundary rather than the pre-fix bug."""
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
@@ -623,14 +640,141 @@ def test_build_site_omits_signal_source_notes_and_private_notes(tmp_path):
         build_site(output, session=session)
 
     signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
-    assert "Bekräftat via Draft Environmental Assessment" not in signal_html
+    assert "Detaljer från källan" in signal_html
+    assert "Bekräftat via Draft Environmental Assessment" in signal_html
     assert "Min privata anteckning" not in signal_html
     assert "Min bedömning" not in signal_html
 
     data = json.loads((output / "data.json").read_text(encoding="utf-8"))
     signal_data = next(s for s in data["signals"] if s["id"] == signal.id)
-    assert "source_notes" not in signal_data
+    assert signal_data["source_notes"] == "Bekräftat via Draft Environmental Assessment (fultoncountyga.gov)."
     assert "notes" not in signal_data
+
+
+def test_signal_view_exposes_source_notes_verbatim(tmp_path):
+    """Code-level proof (not just rendered HTML): _signal_view() puts
+    signal.source_notes on the returned SimpleNamespace unchanged - no
+    transformation, truncation, or reinterpretation."""
+    from datetime import date as _date
+
+    from app.static_export import build as build_module
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Test Field", iata_code="TST", country="USA")
+        session.add(airport)
+        session.flush()
+        signal = Signal(
+            airport=airport,
+            title="Test signal",
+            category="new_installation",
+            confidence="high",
+            source_notes="Exact verbatim source text, kr 4.2M, 2027-Q3.",
+        )
+        session.add(signal)
+        session.commit()
+
+        view = build_module._signal_view(signal, today=_date(2026, 8, 30))
+        assert view.source_notes == "Exact verbatim source text, kr 4.2M, 2027-Q3."
+
+
+def test_signal_view_source_notes_none_stays_none(tmp_path):
+    """A Signal that never had source_notes set produces a view with
+    source_notes=None, so signal_detail.html's own `{% if signal.source_notes %}`
+    guard continues to hide the "Detaljer från källan" card exactly as
+    before this mission - no card, no empty box, no placeholder text."""
+    from datetime import date as _date
+
+    from app.static_export import build as build_module
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Test Field 2", iata_code="TS2", country="USA")
+        session.add(airport)
+        session.flush()
+        signal = Signal(
+            airport=airport,
+            title="Test signal without source notes",
+            category="new_installation",
+            confidence="high",
+        )
+        session.add(signal)
+        session.commit()
+
+        view = build_module._signal_view(signal, today=_date(2026, 8, 30))
+        assert view.source_notes is None
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    signal_html = (output / "signals" / f"{signal.id}.html").read_text(encoding="utf-8")
+    assert "Detaljer från källan" not in signal_html
+
+
+def test_signal_source_notes_never_infers_financial_or_supplier_fields(tmp_path):
+    """This mission wires ONE field (source_notes) through verbatim - it
+    must never cause any financial/supplier field to be derived, inferred,
+    or otherwise populated from that free text, even when the text itself
+    contains numbers/vendor-shaped words."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Test Field 3", iata_code="TS3", country="USA")
+        session.add(airport)
+        session.flush()
+        signal = Signal(
+            airport=airport,
+            title="Test signal with money-shaped source notes",
+            category="new_installation",
+            confidence="high",
+            source_notes="Runway Safe was awarded a $5,000,000 contract per the bid tabulation.",
+        )
+        session.add(signal)
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    signal_data = next(s for s in data["signals"] if s["id"] == signal.id)
+    assert signal_data["confirmed_vendor"] is None
+    assert signal_data["likely_supplier"] is None
+    assert signal_data["supplier_reason"] is None
+    assert signal_data["estimated_total_value_usd"] is None
+    assert signal_data["estimated_emas_value_usd"] is None
+
+
+def test_unpublished_signal_with_source_notes_produces_no_detail_page(tmp_path):
+    """Publication gating (Signal.published, via app.services.signal_publication)
+    is completely orthogonal to this mission's source_notes wiring - an
+    unpublished Signal with source_notes set must still produce no detail
+    page and no data.json entry at all, exactly as before this mission."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Test Field 4", iata_code="TS4", country="USA")
+        session.add(airport)
+        session.flush()
+        signal = Signal(
+            airport=airport,
+            title="Unpublished signal with source notes",
+            category="new_installation",
+            confidence="high",
+            source_notes="This should never reach the public site at all.",
+            published=False,
+        )
+        session.add(signal)
+        session.commit()
+        signal_id = signal.id
+
+        output = tmp_path / "site"
+        build_site(output, session=session)
+
+    assert not (output / "signals" / f"{signal_id}.html").exists()
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    assert all(s["id"] != signal_id for s in data["signals"])
 
 
 # ---------------------------------------------------------------------------
