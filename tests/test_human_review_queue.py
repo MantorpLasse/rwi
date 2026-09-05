@@ -30,10 +30,12 @@ from app.services.evidence_attachment_guard import CandidateAirport
 from app.services.governed_signal_creation import link_source_assertion_to_duplicate_signal
 from app.services.human_review_claim_enrichment import enrich_claims
 from app.services.human_review_queue import (
+    GOVERNANCE_STAGE_STAGED_UNREVIEWED,
     ReviewWorkflowState,
     derive_workflow_state,
     list_human_review_items,
     list_review_workflow_items,
+    list_staged_evidence_items,
 )
 from app.services.intelligence_review_persistence import persist_intelligence_review
 from app.services.promotion_policy_evaluation import PromotionPolicyContext, SourceAuthorityTier
@@ -133,6 +135,40 @@ def _bare_assertion(
         identity_guard_decision=identity_guard_decision, identity_guard_reason="identity reason",
         intelligence_review_decision=intelligence_review_decision, intelligence_review_reason="intelligence reason",
         promotion_policy_decision=promotion_policy_decision, promotion_policy_reason="promotion reason",
+    )
+    if created_at is not None:
+        assertion.created_at = created_at
+    session.add(assertion)
+    session.flush()
+    return assertion
+
+
+def _staged_assertion(
+    session: Session, *, airport_id: "int | None" = None, signal_id: "int | None" = None,
+    unknown_airport_candidate_id: "int | None" = None, evidence_quality: str = "unverified_candidate",
+    review_state: str = "unreviewed", created_at: "datetime | None" = None,
+    source_locator: str = "page:1;chars:0-10", artifact_identity: str = "staged-artifact-1",
+    raw_fragment_hash: str = "staged-hash-1", raw_relevant_text: str = "staged evidence text",
+    source_type: str = "web_discovery",
+) -> SourceAssertion:
+    """Builds a SourceAssertion in EXACTLY the shape
+    app.services.stage_only_evidence_persistence (airport_id=None) and
+    app.services.known_airport_evidence_persistence (airport_id=<int>) both
+    actually produce - identity_guard_decision/intelligence_review_decision/
+    promotion_policy_decision all None, matching those modules' own real
+    persistence code verbatim, not a guess."""
+    source = Source(title="Staged Test Source", source_type=source_type, reliability_level="unverified")
+    session.add(source)
+    session.flush()
+    assertion = SourceAssertion(
+        source_id=source.id, airport_id=airport_id, unknown_airport_candidate_id=unknown_airport_candidate_id,
+        assertion_type="project_construction", source_locator=source_locator,
+        raw_fragment_hash=raw_fragment_hash, artifact_identity=artifact_identity,
+        raw_relevant_text=raw_relevant_text, evidence_quality=evidence_quality, review_state=review_state,
+        identity_guard_decision=None, identity_guard_reason=None,
+        intelligence_review_decision=None, intelligence_review_reason=None,
+        promotion_policy_decision=None, promotion_policy_reason=None,
+        signal_id=signal_id,
     )
     if created_at is not None:
         assertion.created_at = created_at
@@ -1007,3 +1043,267 @@ class TestInternationalWorkflowReadiness:
         item = list_review_workflow_items(session)[0]
         assert item.review_workflow_state == ReviewWorkflowState.RESOLVED_DUPLICATE.value
         assert item.invariant_warnings == ()
+
+
+# --- 25-40. Staged evidence lane (RWI HQ "Commander Review Queue - Staged Evidence Lane") ---
+
+
+class TestStagedEvidenceLane:
+    """25-33. list_staged_evidence_items() surfaces preserved candidate
+    evidence that never entered governance review - a structurally
+    separate population from the governed queue above, using fixtures
+    shaped exactly like the real persistence paths that produce it."""
+
+    def test_known_airport_shaped_row_surfaced(self, session):
+        """SA255/256/258 shape: airport_id resolved, everything else None."""
+        assertion = _staged_assertion(session, airport_id=45)
+        session.commit()
+        items = list_staged_evidence_items(session)
+        assert len(items) == 1
+        assert items[0].source_assertion_id == assertion.id
+        assert items[0].airport_id == 45
+
+    def test_stage_only_shaped_row_also_surfaced(self, session):
+        """The other real persistence shape: airport_id left NULL entirely."""
+        assertion = _staged_assertion(session, airport_id=None)
+        session.commit()
+        items = list_staged_evidence_items(session)
+        assert len(items) == 1
+        assert items[0].airport_id is None
+
+    def test_governance_stage_is_exactly_staged_unreviewed(self, session):
+        _staged_assertion(session, airport_id=45)
+        session.commit()
+        item = list_staged_evidence_items(session)[0]
+        assert item.governance_stage == "STAGED_UNREVIEWED"
+        assert item.governance_stage == GOVERNANCE_STAGE_STAGED_UNREVIEWED
+
+    def test_staged_rows_distinct_from_governed_review_rows(self, session):
+        """A row that HAS been through identity/intelligence/promotion
+        evaluation must never appear as staged, even if it happens to
+        share other field values."""
+        _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        _staged_assertion(session, airport_id=45)
+        session.commit()
+        staged_ids = {item.source_assertion_id for item in list_staged_evidence_items(session)}
+        governed_ids = {item.source_assertion_id for item in list_review_workflow_items(session)}
+        assert staged_ids & governed_ids == set()
+        assert len(staged_ids) == 1
+        assert len(governed_ids) == 1
+
+    def test_existing_governed_predicate_unchanged_by_staged_rows_presence(self, session):
+        """Adding staged rows must never widen, narrow, or otherwise affect
+        the pre-existing governed queue's own output."""
+        governed = _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        session.commit()
+        before_active = list_human_review_items(session)
+        before_all = list_review_workflow_items(session)
+
+        for i in range(5):
+            _staged_assertion(session, airport_id=None, source_locator=f"loc-staged-{i}", artifact_identity=f"artifact-staged-{i}", raw_fragment_hash=f"hash-staged-{i}")
+        session.commit()
+
+        after_active = list_human_review_items(session)
+        after_all = list_review_workflow_items(session)
+        assert [i.source_assertion_id for i in before_active] == [i.source_assertion_id for i in after_active]
+        assert [i.source_assertion_id for i in before_all] == [i.source_assertion_id for i in after_all]
+        assert after_active[0].source_assertion_id == governed.id
+
+    def test_promoted_staged_row_no_longer_appears_as_staged(self, session):
+        """The real, evidenced SA257 case: known-airport-staged evidence
+        that was already promoted via the lightweight path (signal_id set)
+        must no longer appear as awaiting Commander attention, even though
+        promotion_policy_decision itself is still None (that field is never
+        populated by the lightweight path either)."""
+        target = _existing_signal(session)
+        session.commit()
+        promoted = _staged_assertion(session, airport_id=45)
+        promoted.signal_id = target.id
+        session.commit()
+        assert list_staged_evidence_items(session) == ()
+
+    def test_uac_linked_row_excluded_from_staged(self, session):
+        """A row already routed through UAC candidate formation implies
+        SOME identity-resolution work already happened - a meaningfully
+        different situation from evidence never examined at all."""
+        _staged_assertion(session, airport_id=None, unknown_airport_candidate_id=999)
+        session.commit()
+        assert list_staged_evidence_items(session) == ()
+
+    def test_no_governance_decisions_synthesized(self, session):
+        _staged_assertion(session, airport_id=45)
+        session.commit()
+        item = list_staged_evidence_items(session)[0]
+        assert item.identity_guard_decision is None
+        assert item.intelligence_review_decision is None
+        assert item.promotion_policy_decision is None
+        assert item.linked_signal_id is None
+
+    def test_deterministic_ordering(self, session):
+        older = _staged_assertion(
+            session, airport_id=None, created_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="loc-a", artifact_identity="artifact-a", raw_fragment_hash="hash-a",
+        )
+        newer = _staged_assertion(
+            session, airport_id=None, created_at=datetime(2024, 6, 1, tzinfo=UTC),
+            source_locator="loc-b", artifact_identity="artifact-b", raw_fragment_hash="hash-b",
+        )
+        session.commit()
+        items = list_staged_evidence_items(session)
+        assert [i.source_assertion_id for i in items] == [newer.id, older.id]
+
+    def test_exact_set_for_mixed_fixture(self, session):
+        """Only the genuinely staged-shaped rows are returned - never a
+        superset, never a subset."""
+        staged_a = _staged_assertion(session, airport_id=45, source_locator="loc-s1", artifact_identity="artifact-s1", raw_fragment_hash="hash-s1")
+        staged_b = _staged_assertion(session, airport_id=None, source_locator="loc-s2", artifact_identity="artifact-s2", raw_fragment_hash="hash-s2")
+        _bare_assertion(session, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+        _bare_assertion(session, promotion_policy_decision=None)  # malformed/incomplete, not staged-shaped
+        session.commit()
+        ids = {item.source_assertion_id for item in list_staged_evidence_items(session)}
+        assert ids == {staged_a.id, staged_b.id}
+
+    def test_optional_limit_applies(self, session):
+        for i in range(3):
+            _staged_assertion(session, airport_id=None, source_locator=f"loc-lim-{i}", artifact_identity=f"artifact-lim-{i}", raw_fragment_hash=f"hash-lim-{i}")
+        session.commit()
+        assert len(list_staged_evidence_items(session)) == 3
+        assert len(list_staged_evidence_items(session, limit=2)) == 2
+
+    def test_no_db_writes_from_staged_query(self, session):
+        _staged_assertion(session, airport_id=45)
+        session.commit()
+        before = [(a.id, a.signal_id) for a in session.scalars(select(SourceAssertion)).all()]
+        list_staged_evidence_items(session)
+        after = [(a.id, a.signal_id) for a in session.scalars(select(SourceAssertion)).all()]
+        assert before == after
+
+    def test_no_signal_writes_from_staged_query(self, session):
+        _staged_assertion(session, airport_id=45)
+        session.commit()
+        before = session.scalars(select(Signal)).all()
+        list_staged_evidence_items(session)
+        after = session.scalars(select(Signal)).all()
+        assert len(before) == len(after) == 0
+
+    def test_staged_query_never_constructs_a_reviewer_action_or_mutates_session(self):
+        """The whole human_review_queue module is inspected here (matching
+        test_queue_module_never_constructs_a_reviewer_action_or_mutates_session's
+        own convention exactly) - this automatically covers the new staged
+        code too, with no separate AST walk needed."""
+        tree = ast.parse(inspect.getsource(hrq))
+        forbidden_attrs = {"add", "flush", "commit", "delete", "update"}
+        hits = [
+            node.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs
+        ]
+        assert hits == []
+
+
+class TestCLIStagedState:
+    """34-40. CLI --state staged: distinct rendering, distinct empty
+    message, unaffected pre-existing states."""
+
+    def test_cli_staged_state_surfaces_rows(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            _staged_assertion(s, airport_id=45)
+            s.commit()
+        engine.dispose()
+
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        assert len(report.items) == 1
+        rendered = cli.render_report(report, state="staged")
+        assert "STAGED EVIDENCE" in rendered
+        assert "STAGED_UNREVIEWED" in rendered
+        assert "not evaluated" in rendered
+
+    def test_cli_staged_empty_message_is_distinct(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        rendered = cli.render_report(report, state="staged")
+        assert "No staged evidence is currently awaiting Commander attention." in rendered
+        assert "Nothing currently requires a human decision" not in rendered
+
+    def test_cli_staged_read_only(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            _staged_assertion(s, airport_id=45)
+            s.commit()
+        engine.dispose()
+
+        sha_before = _file_sha(db)
+        cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        sha_after = _file_sha(db)
+        assert sha_before == sha_after
+
+    def test_existing_states_unaffected_by_staged_rows(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            _bare_assertion(s, promotion_policy_decision="HUMAN_REVIEW_REQUIRED")
+            for i in range(3):
+                _staged_assertion(s, airport_id=None, source_locator=f"loc-x{i}", artifact_identity=f"artifact-x{i}", raw_fragment_hash=f"hash-x{i}")
+            s.commit()
+        engine.dispose()
+
+        active_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="active"))
+        all_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="all"))
+        resolved_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="resolved"))
+        assert len(active_report.items) == 1
+        assert len(all_report.items) == 1
+        assert resolved_report.items == ()
+
+    def test_sa235_sa222_style_rows_remain_compatible(self, tmp_path):
+        """A resolved-signal-created row and a resolved-duplicate row (the
+        real SA235/SA222 shapes) still render correctly under 'all'/
+        'resolved', unaffected by the new staged lane's existence."""
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            approved = _bare_assertion(s, promotion_policy_decision="HUMAN_REVIEW_REQUIRED", source_locator="loc-approved", artifact_identity="artifact-approved", raw_fragment_hash="hash-approved")
+            s.commit()
+            record_reviewer_action(s, approved, action="APPROVE_SIGNAL", reason="x", reviewer="human:t")
+            signal = _existing_signal(s)
+            s.commit()
+            approved.signal_id = signal.id
+            s.commit()
+
+            duplicate = _bare_assertion(s, promotion_policy_decision="HUMAN_REVIEW_REQUIRED", source_locator="loc-dup", artifact_identity="artifact-dup", raw_fragment_hash="hash-dup")
+            target = _existing_signal(s, published=False)
+            s.commit()
+            record_reviewer_action(s, duplicate, action="MARK_DUPLICATE", reason="x", reviewer="human:t", duplicate_of_signal_id=target.id)
+            duplicate.signal_id = target.id
+            s.commit()
+        engine.dispose()
+
+        resolved_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="resolved"))
+        assert len(resolved_report.items) == 2
+        rendered = cli.render_report(resolved_report, state="resolved")
+        assert "RESOLVED_SIGNAL_CREATED" in rendered
+        assert "RESOLVED_DUPLICATE" in rendered
+
+    def test_staged_state_never_creates_reviewer_action_or_signal(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            _staged_assertion(s, airport_id=45)
+            s.commit()
+            before_signals = len(s.scalars(select(Signal)).all())
+        engine.dispose()
+
+        cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            after_signals = len(s.scalars(select(Signal)).all())
+        engine.dispose()
+        assert before_signals == after_signals == 0
+
+    def test_staged_valid_state_choice(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        # "staged" must not raise ValueError the way an invalid state would.
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        assert report.blockers == ()

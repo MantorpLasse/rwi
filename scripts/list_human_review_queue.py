@@ -5,6 +5,7 @@
     python -m scripts.list_human_review_queue --database data/runway_safe.db --limit 20
     python -m scripts.list_human_review_queue --state all
     python -m scripts.list_human_review_queue --state resolved
+    python -m scripts.list_human_review_queue --state staged
     python -m scripts.list_human_review_queue --state reconciliation
 
 Default (`--state active`): prints only SourceAssertion rows that still need
@@ -82,10 +83,13 @@ from sqlalchemy.orm import Session
 
 from app.services.human_review_claim_enrichment import enrich_claims
 from app.services.human_review_queue import (
+    GOVERNANCE_STAGE_STAGED_UNREVIEWED,
     HumanReviewItem,
     ReviewWorkflowState,
+    StagedEvidenceItem,
     list_human_review_items,
     list_review_workflow_items,
+    list_staged_evidence_items,
 )
 from app.services.human_review_reconciliation import (
     ReconciliationReviewItem,
@@ -126,16 +130,18 @@ class ReviewQueueReport:
     testable behavior.
 
     `items` holds `HumanReviewItem` for state in {"active", "all",
-    "resolved"} and `ReconciliationReviewItem` for state == "reconciliation"
-    - a plain, untyped tuple rather than a generic/union wrapper, matching
-    this module's own existing "no parallel code path" preference; the two
-    item shapes are only ever handled together in `render_report()`/
-    `render_item_report()` below, which dispatch on `isinstance`."""
+    "resolved"}, `ReconciliationReviewItem` for state == "reconciliation",
+    and `StagedEvidenceItem` (RWI HQ "Commander Review Queue - Staged
+    Evidence Lane") for state == "staged" - a plain, untyped tuple rather
+    than a generic/union wrapper, matching this module's own existing "no
+    parallel code path" preference; the item shapes are only ever handled
+    together in `render_report()`/`render_item_report()` below, which
+    dispatch on `isinstance`."""
 
     database: str
     schema_readiness: dict
     blockers: "tuple[str, ...]" = ()
-    items: "tuple[HumanReviewItem, ...] | tuple[ReconciliationReviewItem, ...]" = ()
+    items: "tuple[HumanReviewItem, ...] | tuple[ReconciliationReviewItem, ...] | tuple[StagedEvidenceItem, ...]" = ()
 
 
 def build_readonly_engine(database: Path):
@@ -179,7 +185,7 @@ def check_schema_readiness(database: Path) -> dict:
     }
 
 
-_VALID_STATE_FILTERS = ("active", "all", "resolved", "reconciliation")
+_VALID_STATE_FILTERS = ("active", "all", "resolved", "reconciliation", "staged")
 
 # The reconciliation-aware states that actually mean "a human has something
 # new to look at" - CLEAR_TO_CREATE items list_reconciliation_review_items()
@@ -213,7 +219,15 @@ def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
     or DISTINCT_CONFIRMED_PENDING_SIGNAL) - CLEAR_TO_CREATE items that
     function also evaluates are not shown here, since reconciliation has
     nothing new to say about them (matches the R4D mission's own "avoid
-    turning the queue into a global Signal dedup scanner" instruction).
+    turning the queue into a global Signal dedup scanner" instruction);
+    "staged" (RWI HQ "Commander Review Queue - Staged Evidence Lane") -
+    app.services.human_review_queue.list_staged_evidence_items() - preserved
+    candidate evidence (e.g. stage-only or known-airport-staged funding/
+    discovery SourceAssertions) that has never entered the governed
+    promotion-review workflow at all. A COMPLETELY SEPARATE population from
+    every state above - never merged with, and never widening,
+    the promotion_policy_decision == HUMAN_REVIEW_REQUIRED predicate the
+    other states all share.
 
     REVIEW-CHECKPOINT FIX: "resolved" must NOT pass `config.limit` into the
     inner list_review_workflow_items() call - that function's own `limit`
@@ -249,13 +263,21 @@ def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
                 all_items = list_review_workflow_items(session)
                 resolved = tuple(item for item in all_items if item.review_workflow_state in _RESOLVED_STATES)
                 items = resolved[: config.limit] if config.limit is not None else resolved
-            else:  # "reconciliation"
+            elif config.state == "reconciliation":
                 all_reconciliation_items = list_reconciliation_review_items(session)
                 attention = tuple(
                     entry for entry in all_reconciliation_items
                     if entry.reconciliation_review_state in _RECONCILIATION_ATTENTION_STATES
                 )
                 items = attention[: config.limit] if config.limit is not None else attention
+            else:  # "staged" (RWI HQ "Commander Review Queue - Staged Evidence Lane")
+                # A SEPARATE population from every state above: preserved
+                # candidate evidence that was never routed through IdentityGuard/
+                # intelligence review/promotion policy at all - never the
+                # governed-review predicate widened, never merged with it. See
+                # app.services.human_review_queue's own module section for the
+                # exact predicate and why it is intentionally narrow.
+                items = list_staged_evidence_items(session, limit=config.limit)
             session.rollback()  # defensive - this session never adds/flushes anything
     finally:
         engine.dispose()
@@ -331,7 +353,74 @@ def _render_reconciliation_section(entry: ReconciliationReviewItem) -> "list[str
     return lines
 
 
-def render_item_report(item: "HumanReviewItem | ReconciliationReviewItem") -> str:
+_NOT_EVALUATED = "not evaluated (this evidence class is not routed through IdentityGuard/intelligence review/promotion policy)"
+
+_STAGED_NEXT_ACTION = (
+    "Requires Commander evidence review; no unified CLI action exists yet. "
+    "Further Research Loop (scripts/research_airport_clue.py) or Fetch/preserve "
+    "(scripts/fetch_discovered_url.py) may add more preserved evidence, but neither "
+    "advances governance automatically."
+)
+
+
+def _render_staged_item_report(item: StagedEvidenceItem) -> str:
+    """Text formatting only - every value already exists on `item`, nothing
+    computed here. Deliberately does NOT reuse render_item_report()'s own
+    HumanReviewItem-shaped layout (no Identity/Intelligence/Promotion
+    review sections implying evaluation occurred) - see module docstring
+    "staged" state description for why this is a structurally separate
+    population, not merely a filtered view of the same one."""
+    lines: "list[str]" = []
+    lines.append("=" * 78)
+    lines.append(f"SourceAssertion #{item.source_assertion_id}  [STAGED_UNREVIEWED]")
+    lines.append("=" * 78)
+
+    lines.append("")
+    lines.append("Airport")
+    lines.append(f"  id={item.airport_id}  code={item.airport_code}  name={item.airport_name}")
+
+    lines.append("")
+    lines.append("Source")
+    lines.append(f"  id={item.source_id}  title={item.source_title!r}")
+    lines.append(f"  publisher={item.source_publisher}  url={item.source_url}")
+    lines.append(f"  document_reference={item.source_document_reference}")
+    lines.append(
+        f"  reliability_level (existing coarse field, NOT a PromotionPolicy "
+        f"SourceAuthorityTier)={item.source_reliability_level_raw!r}"
+    )
+
+    lines.append("")
+    lines.append("Evidence")
+    lines.append(f"  assertion_type={item.assertion_type}")
+    lines.append(f"  evidence_quality={item.evidence_quality}")
+    lines.append(f"  review_state={item.review_state}")
+    lines.append(f"  artifact_identity={item.artifact_identity}")
+    lines.append(f"  source_locator={item.source_locator}")
+    lines.append(f"  raw_fragment_hash={item.raw_fragment_hash}")
+    lines.append(f"  parser_identifier={item.parser_identifier}")
+    lines.append("  raw_relevant_text:")
+    for text_line in (item.raw_relevant_text or "(none preserved)").splitlines():
+        lines.append(f"    {text_line}")
+
+    lines.append("")
+    lines.append("Governance review")
+    lines.append(f"  governance_stage={item.governance_stage}")
+    lines.append(f"  identity_guard_decision={item.identity_guard_decision if item.identity_guard_decision is not None else _NOT_EVALUATED}")
+    lines.append(f"  intelligence_review_decision={item.intelligence_review_decision if item.intelligence_review_decision is not None else _NOT_EVALUATED}")
+    lines.append(f"  promotion_policy_decision={item.promotion_policy_decision if item.promotion_policy_decision is not None else _NOT_EVALUATED}")
+    lines.append(f"  linked_signal_id={item.linked_signal_id}")
+
+    lines.append("")
+    lines.append("Next legitimate action")
+    lines.append(f"  {_STAGED_NEXT_ACTION}")
+
+    return "\n".join(lines)
+
+
+def render_item_report(item: "HumanReviewItem | ReconciliationReviewItem | StagedEvidenceItem") -> str:
+    if isinstance(item, StagedEvidenceItem):
+        return _render_staged_item_report(item)
+
     reconciliation_entry: "ReconciliationReviewItem | None" = None
     if isinstance(item, ReconciliationReviewItem):
         reconciliation_entry = item
@@ -439,6 +528,18 @@ _EMPTY_MESSAGE_BY_STATE = {
     "all": "No governed evidence is currently HUMAN_REVIEW_REQUIRED.",
     "resolved": "No governed evidence has been resolved (rejected/duplicate/signal-created) yet.",
     "reconciliation": "No governed evidence currently requires reconciliation review or re-review.",
+    # Deliberately NOT the same wording as "active" - this lane's rows never
+    # implied a governed "human decision" was ever computed in the first
+    # place, so an empty result here must not read as if the same kind of
+    # decision-readiness was checked and found clear.
+    "staged": "No staged evidence is currently awaiting Commander attention.",
+}
+
+# Printed once, above the item list, only for states where the population's
+# governance meaning could otherwise be misread. Empty string = no banner
+# (every pre-existing state's own output is unchanged).
+_STATE_BANNER = {
+    "staged": "STAGED EVIDENCE — NOT YET GOVERNANCE-REVIEWED",
 }
 
 
@@ -453,7 +554,12 @@ def render_report(report: ReviewQueueReport, *, state: str = DEFAULT_STATE_FILTE
         empty_message = _EMPTY_MESSAGE_BY_STATE.get(state, _EMPTY_MESSAGE_BY_STATE["active"])
         return f"Database: {report.database}\n{empty_message}\n"
 
-    parts = [f"Database: {report.database}\n{len(report.items)} item(s) in the '{state}' human review view:\n"]
+    banner = _STATE_BANNER.get(state, "")
+    header = f"Database: {report.database}\n"
+    if banner:
+        header += f"{banner}\n"
+    header += f"{len(report.items)} item(s) in the '{state}' human review view:\n"
+    parts = [header]
     for item in report.items:
         parts.append(render_item_report(item))
         parts.append("")
@@ -468,7 +574,9 @@ def _parser() -> argparse.ArgumentParser:
         "--state", choices=_VALID_STATE_FILTERS, default=DEFAULT_STATE_FILTER,
         help="active (default): needs a human decision now. all: every HUMAN_REVIEW_REQUIRED row, any state. "
         "resolved: only rejected/duplicate/signal-created items. reconciliation (R4D): governed rows where "
-        "fresh reconciliation currently requires attention (blocked or a stale distinct confirmation).",
+        "fresh reconciliation currently requires attention (blocked or a stale distinct confirmation). "
+        "staged: preserved candidate evidence never routed through governance review at all - a separate "
+        "population, never merged with the governed states above.",
     )
     return parser
 

@@ -111,6 +111,9 @@ __all__ = [
     "ReviewWorkflowState",
     "list_human_review_items",
     "list_review_workflow_items",
+    "StagedEvidenceItem",
+    "GOVERNANCE_STAGE_STAGED_UNREVIEWED",
+    "list_staged_evidence_items",
 ]
 
 _EXPECTED_IDENTITY_DECISION = "ATTACH_CONFIRMED"
@@ -396,3 +399,181 @@ def list_human_review_items(session: Session, *, limit: "int | None" = None) -> 
     if limit is not None:
         active = active[:limit]
     return active
+
+
+# ---------------------------------------------------------------------------
+# Staged evidence lane (RWI HQ "Commander Review Queue - Staged Evidence
+# Lane", following the recon in "Commander Review Queue Coverage").
+#
+# EVERYTHING ABOVE THIS POINT IS UNCHANGED. list_review_workflow_items() and
+# list_human_review_items() still answer exactly the same question they
+# always have - "which already-fully-governed SourceAssertion needs a human
+# promotion decision right now" - via the exact same, untouched
+# promotion_policy_decision == HUMAN_REVIEW_REQUIRED predicate. This section
+# adds a SEPARATE, PARALLEL read path for a genuinely different population:
+# preserved candidate evidence that was never routed through IdentityGuard /
+# intelligence review / promotion policy at all (app.services.
+# stage_only_evidence_persistence and app.services.known_airport_evidence_persistence
+# both hardcode identity_guard_decision/intelligence_review_decision/
+# promotion_policy_decision to NULL at construction, by design - see those
+# modules' own docstrings). NULL is not "pending governance evaluation" for
+# this population; it is "governance evaluation does not apply to this
+# evidence class at all." Conflating the two into one predicate (e.g. "OR
+# promotion_policy_decision IS NULL" on the existing queue) would silently
+# blur two structurally different meanings of NULL under one list - this
+# module keeps them as two entirely separate query functions instead, so
+# neither can accidentally widen the other.
+# ---------------------------------------------------------------------------
+
+# Presentation-only label (never persisted, never added to any model/enum) -
+# the ONLY value list_staged_evidence_items() ever produces. Deliberately
+# NOT a ReviewWorkflowState member: a staged row has not entered that
+# workflow's population at all, so borrowing its vocabulary (even a new
+# member on that same enum) would misleadingly suggest it eventually will,
+# on the same track, once "reviewed" in whatever sense that enum implies.
+GOVERNANCE_STAGE_STAGED_UNREVIEWED = "STAGED_UNREVIEWED"
+
+
+@dataclass(frozen=True)
+class StagedEvidenceItem:
+    """One staged-evidence queue entry - an immutable, ORM-free snapshot,
+    structurally parallel to HumanReviewItem but for a different
+    population. `identity_guard_decision`/`intelligence_review_decision`/
+    `promotion_policy_decision`/`linked_signal_id` are always None for
+    every row this module's own predicate can return (enforced by that
+    predicate, not merely expected) - carried here anyway, explicitly, so
+    a caller/renderer states "not evaluated" from a real field rather than
+    inventing that text from nothing. `governance_stage` is always
+    GOVERNANCE_STAGE_STAGED_UNREVIEWED - see that constant's own docstring
+    for why it is not a ReviewWorkflowState member."""
+
+    source_assertion_id: int
+    airport_id: "int | None"
+    airport_name: "str | None"
+    airport_code: "str | None"
+
+    source_id: int
+    source_type: "str | None"
+    source_title: "str | None"
+    source_publisher: "str | None"
+    source_url: "str | None"
+    source_document_reference: "str | None"
+    source_reliability_level_raw: "str | None"
+    source_published_date: "date | None"
+
+    artifact_identity: "str | None"
+    source_locator: "str | None"
+    raw_fragment_hash: "str | None"
+    raw_relevant_text: "str | None"
+    parser_identifier: "str | None"
+
+    assertion_type: str
+    evidence_quality: "str | None"
+    review_state: "str | None"
+
+    identity_guard_decision: "str | None"
+    intelligence_review_decision: "str | None"
+    promotion_policy_decision: "str | None"
+    linked_signal_id: "int | None"
+
+    governance_stage: str = GOVERNANCE_STAGE_STAGED_UNREVIEWED
+
+
+def _staged_evidence_predicate():
+    """The narrowest predicate that matches exactly the persisted shape
+    app.services.stage_only_evidence_persistence and
+    app.services.known_airport_evidence_persistence actually write - never
+    a bare `promotion_policy_decision IS NULL` (that alone would also catch
+    any other row that happens to have an unevaluated/malformed governance
+    state for an unrelated reason). Every condition below is a real,
+    verified invariant of those two persistence paths, not a guess:
+
+      identity_guard_decision IS NULL        - never set by either path
+      intelligence_review_decision IS NULL   - never set by either path
+      promotion_policy_decision IS NULL      - never set by either path
+      evidence_quality == "unverified_candidate" - hardcoded by both paths
+      review_state == "unreviewed"           - hardcoded by both paths
+      signal_id IS NULL                      - excludes a row already
+          promoted via the lightweight known-airport-funding review path
+          (app.services.known_airport_funding_reviewer_action /
+          known_airport_funding_signal_creation) - once a Signal exists,
+          the row already had Commander attention and is no longer
+          "awaiting" it, even though promotion_policy_decision itself is
+          still NULL (that field is never populated by the lightweight
+          path either - see the real, evidenced case of a
+          formerly-staged row that IS excluded by this signal_id check
+          alone, in tests/test_human_review_queue.py).
+      unknown_airport_candidate_id IS NULL   - excludes any row already
+          routed through UAC candidate formation - that shape implies
+          SOME identity-resolution work already happened, which is a
+          meaningfully different situation from evidence that has never
+          been examined at all, even though its own
+          identity_guard_decision may also be NULL at this exact moment.
+
+    A row satisfying every one of these is, by construction, indistinguishable
+    from a genuine stage-only or known-airport-staged SourceAssertion - this
+    predicate identifies the SHAPE those two persistence paths produce, not
+    an arbitrary "everything else" catch-all.
+    """
+    return (
+        SourceAssertion.identity_guard_decision.is_(None),
+        SourceAssertion.intelligence_review_decision.is_(None),
+        SourceAssertion.promotion_policy_decision.is_(None),
+        SourceAssertion.evidence_quality == "unverified_candidate",
+        SourceAssertion.review_state == "unreviewed",
+        SourceAssertion.signal_id.is_(None),
+        SourceAssertion.unknown_airport_candidate_id.is_(None),
+    )
+
+
+def _to_staged_item(assertion: SourceAssertion) -> StagedEvidenceItem:
+    airport = assertion.airport
+    source = assertion.source
+    return StagedEvidenceItem(
+        source_assertion_id=assertion.id,
+        airport_id=assertion.airport_id,
+        airport_name=airport.name if airport else None,
+        airport_code=_airport_code(airport),
+        source_id=assertion.source_id,
+        source_type=source.source_type if source else None,
+        source_title=source.title if source else None,
+        source_publisher=source.publisher if source else None,
+        source_url=source.url if source else None,
+        source_document_reference=source.document_reference if source else None,
+        source_reliability_level_raw=source.reliability_level if source else None,
+        source_published_date=source.published_date if source else None,
+        artifact_identity=assertion.artifact_identity,
+        source_locator=assertion.source_locator,
+        raw_fragment_hash=assertion.raw_fragment_hash,
+        raw_relevant_text=assertion.raw_relevant_text,
+        parser_identifier=assertion.parser_identifier,
+        assertion_type=assertion.assertion_type,
+        evidence_quality=assertion.evidence_quality,
+        review_state=assertion.review_state,
+        identity_guard_decision=assertion.identity_guard_decision,
+        intelligence_review_decision=assertion.intelligence_review_decision,
+        promotion_policy_decision=assertion.promotion_policy_decision,
+        linked_signal_id=assertion.signal_id,
+    )
+
+
+def list_staged_evidence_items(session: Session, *, limit: "int | None" = None) -> "tuple[StagedEvidenceItem, ...]":
+    """Read-only: SELECT only, never add/flush/commit/delete/update. Never
+    touches ReviewerAction, never creates a Signal, never mutates any
+    SourceAssertion field. Ordered by `created_at` descending, `id`
+    descending tiebreak - identical convention to
+    list_review_workflow_items(). `limit`, if given, bounds the query
+    directly in SQL - unlike list_human_review_items()'s own post-filter
+    limiting, this predicate is fully expressible in SQL with no further
+    Python-side filtering needed afterward, so a direct SQL LIMIT is
+    correctness-preserving here."""
+    stmt = (
+        select(SourceAssertion)
+        .where(*_staged_evidence_predicate())
+        .options(selectinload(SourceAssertion.airport), selectinload(SourceAssertion.source))
+        .order_by(SourceAssertion.created_at.desc(), SourceAssertion.id.desc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    rows = session.scalars(stmt).all()
+    return tuple(_to_staged_item(row) for row in rows)
