@@ -94,7 +94,7 @@ source_publisher already are.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional, Sequence
 
@@ -103,6 +103,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import SourceAssertion
 from app.models.reviewer_action import ReviewerAction
+from app.services.known_airport_funding_lightweight_path_guard import funding_namespace_for
 from app.services.promotion_policy_evaluation import PromotionPolicyOutcome
 from app.services.signal_candidate_evaluation import SignalCandidateOutcome
 
@@ -113,7 +114,9 @@ __all__ = [
     "list_review_workflow_items",
     "StagedEvidenceItem",
     "GOVERNANCE_STAGE_STAGED_UNREVIEWED",
+    "STAGED_ATTENTION_WORKFLOW_STATE_VALUES",
     "list_staged_evidence_items",
+    "list_staged_evidence_needing_attention_items",
 ]
 
 _EXPECTED_IDENTITY_DECISION = "ATTACH_CONFIRMED"
@@ -445,7 +448,38 @@ class StagedEvidenceItem:
     a caller/renderer states "not evaluated" from a real field rather than
     inventing that text from nothing. `governance_stage` is always
     GOVERNANCE_STAGE_STAGED_UNREVIEWED - see that constant's own docstring
-    for why it is not a ReviewWorkflowState member."""
+    for why it is not a ReviewWorkflowState member.
+
+    RWI HQ "Staged Evidence Attention States" additions (all read-time
+    derived, never persisted, never affecting which rows this module's
+    own structural predicate returns):
+
+    `review_workflow_state` reuses ReviewWorkflowState's own existing,
+    unmodified vocabulary and derive_workflow_state() function - the SAME
+    engine the heavy governed queue already uses - computed from
+    (latest_reviewer_action, signal_id) exactly like that queue's own
+    HumanReviewItem.review_workflow_state. This answers "what is the
+    Commander's current attention state for this staged row," entirely
+    separate from `governance_stage` (which only ever answers "did this
+    row pass through the heavy identity/intelligence/promotion pipeline" -
+    always No, for this whole population, by design).
+
+    `latest_reviewer_action*` fields mirror HumanReviewItem's own
+    `latest_reviewer_action` field, extended with the reviewer/reason/
+    created_at a Commander needs to see WITHOUT a second lookup - the
+    append-only ReviewerAction history itself is never summarized or
+    altered; a superseded action remains in the database, simply not
+    reflected here (this module's own "latest wins" convention, unchanged).
+
+    `funding_provenance` is a pure namespace LOOKUP
+    (app.services.known_airport_funding_lightweight_path_guard.funding_namespace_for) -
+    "faa_aip"/"usaspending" if recognized, else None - NEVER an
+    eligibility decision. A None value here does not mean "ineligible for
+    a reason this module determined" - it means only "this Source's
+    external_id does not carry a namespace this module recognizes";
+    app.services.known_airport_funding_lightweight_path_guard.check_lightweight_funding_path_eligibility()
+    remains the one and only eligibility authority anywhere in this
+    pipeline."""
 
     source_assertion_id: int
     airport_id: "int | None"
@@ -477,6 +511,14 @@ class StagedEvidenceItem:
     linked_signal_id: "int | None"
 
     governance_stage: str = GOVERNANCE_STAGE_STAGED_UNREVIEWED
+
+    review_workflow_state: str = ReviewWorkflowState.ACTIVE_REVIEW.value
+    funding_provenance: "str | None" = None
+    latest_reviewer_action_id: "int | None" = None
+    latest_reviewer_action: "str | None" = None
+    latest_reviewer_action_reason: "str | None" = None
+    latest_reviewer_action_reviewer: "str | None" = None
+    latest_reviewer_action_created_at: "datetime | None" = None
 
 
 def _staged_evidence_predicate():
@@ -526,9 +568,10 @@ def _staged_evidence_predicate():
     )
 
 
-def _to_staged_item(assertion: SourceAssertion) -> StagedEvidenceItem:
+def _to_staged_item(assertion: SourceAssertion, latest_action: "Optional[ReviewerAction]") -> StagedEvidenceItem:
     airport = assertion.airport
     source = assertion.source
+    workflow_state = derive_workflow_state(latest_action, assertion.signal_id)
     return StagedEvidenceItem(
         source_assertion_id=assertion.id,
         airport_id=assertion.airport_id,
@@ -554,19 +597,33 @@ def _to_staged_item(assertion: SourceAssertion) -> StagedEvidenceItem:
         intelligence_review_decision=assertion.intelligence_review_decision,
         promotion_policy_decision=assertion.promotion_policy_decision,
         linked_signal_id=assertion.signal_id,
+        review_workflow_state=workflow_state.value,
+        funding_provenance=funding_namespace_for(source.external_id if source else None),
+        latest_reviewer_action_id=latest_action.id if latest_action else None,
+        latest_reviewer_action=latest_action.action if latest_action else None,
+        latest_reviewer_action_reason=latest_action.reason if latest_action else None,
+        latest_reviewer_action_reviewer=latest_action.reviewer if latest_action else None,
+        latest_reviewer_action_created_at=latest_action.created_at if latest_action else None,
     )
 
 
 def list_staged_evidence_items(session: Session, *, limit: "int | None" = None) -> "tuple[StagedEvidenceItem, ...]":
     """Read-only: SELECT only, never add/flush/commit/delete/update. Never
-    touches ReviewerAction, never creates a Signal, never mutates any
-    SourceAssertion field. Ordered by `created_at` descending, `id`
+    mutates any SourceAssertion field, never creates a Signal. DOES read
+    ReviewerAction, as of RWI HQ "Staged Evidence Attention States" -
+    solely to compute the read-time-derived `review_workflow_state`/
+    `latest_reviewer_action*` fields; nothing about which rows this
+    function RETURNS changes because of this (the structural predicate,
+    `_staged_evidence_predicate()`, is completely unmodified - a row with
+    ReviewerAction history is neither added nor removed from this result
+    by that history alone). Ordered by `created_at` descending, `id`
     descending tiebreak - identical convention to
     list_review_workflow_items(). `limit`, if given, bounds the query
-    directly in SQL - unlike list_human_review_items()'s own post-filter
-    limiting, this predicate is fully expressible in SQL with no further
-    Python-side filtering needed afterward, so a direct SQL LIMIT is
-    correctness-preserving here."""
+    directly in SQL - the structural predicate itself is still fully
+    expressible in SQL with no further Python-side FILTERING needed
+    afterward (the ReviewerAction batch-lookup below only enriches rows
+    already selected, it never excludes one), so a direct SQL LIMIT
+    remains correctness-preserving here."""
     stmt = (
         select(SourceAssertion)
         .where(*_staged_evidence_predicate())
@@ -576,4 +633,45 @@ def list_staged_evidence_items(session: Session, *, limit: "int | None" = None) 
     if limit is not None:
         stmt = stmt.limit(limit)
     rows = session.scalars(stmt).all()
-    return tuple(_to_staged_item(row) for row in rows)
+    latest_by_id = _latest_actions_by_assertion(session, [row.id for row in rows])
+    return tuple(_to_staged_item(row, latest_by_id.get(row.id)) for row in rows)
+
+
+# The Commander-attention subset of the staged population (RWI HQ "Staged
+# Evidence Attention States", Question 2 - "what staged evidence needs
+# Commander attention now" - as distinct from list_staged_evidence_items()'s
+# own Question 1, "what evidence is still structurally staged"). Reuses
+# ReviewWorkflowState's own existing vocabulary verbatim - RESOLVED_REJECTED
+# and RESOLVED_DUPLICATE are deliberately excluded: a human has already
+# acted and no further Commander decision is currently expected, though the
+# evidence itself remains fully visible under list_staged_evidence_items()
+# (Question 1) - never hidden. DEFERRED/RESOLVED_SIGNAL_CREATED are not
+# reachable for this population today (DEFER is outside
+# LIGHTWEIGHT_FUNDING_REVIEWER_ACTIONS; a signal_id-set row is already
+# excluded by _staged_evidence_predicate() itself) but are excluded here
+# too, for the same reason they would be excluded if they ever did occur.
+_STAGED_ATTENTION_STATES = (
+    ReviewWorkflowState.ACTIVE_REVIEW,
+    ReviewWorkflowState.NEEDS_MORE_EVIDENCE,
+    ReviewWorkflowState.APPROVED_PENDING_SIGNAL,
+)
+STAGED_ATTENTION_WORKFLOW_STATE_VALUES = frozenset(state.value for state in _STAGED_ATTENTION_STATES)
+
+
+def list_staged_evidence_needing_attention_items(
+    session: Session, *, limit: "int | None" = None,
+) -> "tuple[StagedEvidenceItem, ...]":
+    """Question 2: staged evidence whose CURRENT derived
+    `review_workflow_state` is one of STAGED_ATTENTION_WORKFLOW_STATE_VALUES.
+    Mirrors list_human_review_items()'s own "fetch everything, filter by
+    derived state, then limit in Python" discipline exactly (never applying
+    `limit` to the raw SQL query first) - the same review-checkpoint fix
+    that function's own docstring documents applies identically here: an
+    SQL-level limit could otherwise consume only non-attention rows and
+    leave zero for this filter to find, even when attention rows exist
+    further down. Read-only; never mutates anything."""
+    items = list_staged_evidence_items(session)
+    attention = tuple(item for item in items if item.review_workflow_state in STAGED_ATTENTION_WORKFLOW_STATE_VALUES)
+    if limit is not None:
+        attention = attention[:limit]
+    return attention

@@ -22,7 +22,7 @@ from app import models  # noqa: F401 - registers all metadata
 from app.acquisition.mac_granicus_claims import extract_mac_claims
 from app.acquisition.mac_granicus_extractor import extract_candidate_fragment
 from app.database import Base
-from app.models import Airport, Signal, Source, SourceAssertion
+from app.models import Airport, ReviewerAction, Signal, Source, SourceAssertion
 from app.services import human_review_claim_enrichment as hrce
 from app.services import human_review_queue as hrq
 from app.services.discovery_evidence_persistence import DiscoverySourceMetadata, persist_discovery_fragment
@@ -31,11 +31,13 @@ from app.services.governed_signal_creation import link_source_assertion_to_dupli
 from app.services.human_review_claim_enrichment import enrich_claims
 from app.services.human_review_queue import (
     GOVERNANCE_STAGE_STAGED_UNREVIEWED,
+    STAGED_ATTENTION_WORKFLOW_STATE_VALUES,
     ReviewWorkflowState,
     derive_workflow_state,
     list_human_review_items,
     list_review_workflow_items,
     list_staged_evidence_items,
+    list_staged_evidence_needing_attention_items,
 )
 from app.services.intelligence_review_persistence import persist_intelligence_review
 from app.services.promotion_policy_evaluation import PromotionPolicyContext, SourceAuthorityTier
@@ -149,7 +151,7 @@ def _staged_assertion(
     review_state: str = "unreviewed", created_at: "datetime | None" = None,
     source_locator: str = "page:1;chars:0-10", artifact_identity: str = "staged-artifact-1",
     raw_fragment_hash: str = "staged-hash-1", raw_relevant_text: str = "staged evidence text",
-    source_type: str = "web_discovery",
+    source_type: str = "web_discovery", source_external_id: "str | None" = None,
 ) -> SourceAssertion:
     """Builds a SourceAssertion in EXACTLY the shape
     app.services.stage_only_evidence_persistence (airport_id=None) and
@@ -157,7 +159,7 @@ def _staged_assertion(
     actually produce - identity_guard_decision/intelligence_review_decision/
     promotion_policy_decision all None, matching those modules' own real
     persistence code verbatim, not a guess."""
-    source = Source(title="Staged Test Source", source_type=source_type, reliability_level="unverified")
+    source = Source(title="Staged Test Source", source_type=source_type, reliability_level="unverified", external_id=source_external_id)
     session.add(source)
     session.flush()
     assertion = SourceAssertion(
@@ -1307,3 +1309,332 @@ class TestCLIStagedState:
         # "staged" must not raise ValueError the way an invalid state would.
         report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
         assert report.blockers == ()
+
+
+# --- 41-60. Staged Evidence Attention States (RWI HQ "Staged Evidence Attention States") ---
+
+
+def _lightweight_reviewer_action(
+    session: Session, assertion: SourceAssertion, *, action: str, reason: str = "x", reviewer: str = "human:t",
+    duplicate_of_signal_id=None, supersedes_action_id=None, created_at=None,
+) -> ReviewerAction:
+    """Constructs a real ReviewerAction row directly (never through a
+    service-level gate) - a legitimate test fixture technique: these tests
+    exercise derive_workflow_state()/list_staged_evidence_items()'s own
+    READ-side behavior, which only cares that a real row with this shape
+    exists, never how it was written."""
+    record = ReviewerAction(
+        source_assertion_id=assertion.id, action=action, reason=reason, reviewer=reviewer,
+        duplicate_of_signal_id=duplicate_of_signal_id, supersedes_action_id=supersedes_action_id,
+        reconciliation_fingerprint=None,
+    )
+    if created_at is not None:
+        record.created_at = created_at
+    session.add(record)
+    session.commit()
+    return record
+
+
+class TestStagedEvidenceAttentionStates:
+    """41-53. list_staged_evidence_items()/list_staged_evidence_needing_attention_items()
+    enrich the unchanged structural staged population with a read-time-derived
+    review_workflow_state, reusing derive_workflow_state() verbatim."""
+
+    def test_structural_staged_exact_set_unchanged_by_enrichment(self, session):
+        """Regression pin: adding ReviewerAction history to a staged row
+        must never add or remove it from list_staged_evidence_items()'s own
+        result set - only new fields are populated."""
+        a = _staged_assertion(session, airport_id=45)
+        b = _staged_assertion(session, airport_id=None, source_locator="loc-b", artifact_identity="artifact-b", raw_fragment_hash="hash-b")
+        session.commit()
+        before_ids = {item.source_assertion_id for item in list_staged_evidence_items(session)}
+
+        _lightweight_reviewer_action(session, a, action="NEEDS_MORE_EVIDENCE")
+        _lightweight_reviewer_action(session, b, action="REJECT_SIGNAL")
+
+        after_ids = {item.source_assertion_id for item in list_staged_evidence_items(session)}
+        assert before_ids == after_ids == {a.id, b.id}
+
+    def test_never_reviewed_staged_row_derives_active_review(self, session):
+        a = _staged_assertion(session, airport_id=45)
+        session.commit()
+        item = list_staged_evidence_items(session)[0]
+        assert item.review_workflow_state == "ACTIVE_REVIEW"
+        assert item.latest_reviewer_action_id is None
+        assert item.latest_reviewer_action is None
+
+    def test_needs_more_evidence_row_derives_correct_state(self, session):
+        """The real, evidenced SA255 case."""
+        a = _staged_assertion(session, airport_id=45)
+        action = _lightweight_reviewer_action(session, a, action="NEEDS_MORE_EVIDENCE", reason="more evidence needed", reviewer="human:commander")
+        item = list_staged_evidence_items(session)[0]
+        assert item.review_workflow_state == "NEEDS_MORE_EVIDENCE"
+        assert item.latest_reviewer_action_id == action.id
+        assert item.latest_reviewer_action == "NEEDS_MORE_EVIDENCE"
+        assert item.latest_reviewer_action_reason == "more evidence needed"
+        assert item.latest_reviewer_action_reviewer == "human:commander"
+        assert item.latest_reviewer_action_created_at is not None
+
+    def test_reject_signal_row_derives_resolved_rejected(self, session):
+        a = _staged_assertion(session, airport_id=45)
+        _lightweight_reviewer_action(session, a, action="REJECT_SIGNAL")
+        item = list_staged_evidence_items(session)[0]
+        assert item.review_workflow_state == "RESOLVED_REJECTED"
+
+    def test_mark_duplicate_row_derives_resolved_duplicate(self, session):
+        a = _staged_assertion(session, airport_id=45)
+        target = _existing_signal(session)
+        session.commit()
+        _lightweight_reviewer_action(session, a, action="MARK_DUPLICATE", duplicate_of_signal_id=target.id)
+        item = list_staged_evidence_items(session)[0]
+        assert item.review_workflow_state == "RESOLVED_DUPLICATE"
+
+    def test_approve_signal_with_signal_id_still_null_derives_approved_pending_signal(self, session):
+        """The narrow edge case: a ReviewerAction recorded directly,
+        without the atomic Signal-creation step
+        scripts/review_staged_funding_evidence.py always pairs it with."""
+        a = _staged_assertion(session, airport_id=45)
+        _lightweight_reviewer_action(session, a, action="APPROVE_SIGNAL")
+        item = list_staged_evidence_items(session)[0]
+        assert item.review_workflow_state == "APPROVED_PENDING_SIGNAL"
+
+    def test_promoted_signal_id_row_remains_excluded_structurally(self, session):
+        """Case F: signal_id non-NULL is already excluded by the existing,
+        unmodified predicate - a regression pin, not new behavior."""
+        a = _staged_assertion(session, airport_id=45)
+        target = _existing_signal(session)
+        session.commit()
+        _lightweight_reviewer_action(session, a, action="APPROVE_SIGNAL")
+        a.signal_id = target.id
+        session.commit()
+        assert list_staged_evidence_items(session) == ()
+
+    def test_latest_action_selection_is_deterministic(self, session):
+        a = _staged_assertion(session, airport_id=45)
+        older = _lightweight_reviewer_action(session, a, action="NEEDS_MORE_EVIDENCE", created_at=datetime(2024, 1, 1, tzinfo=UTC))
+        newer = _lightweight_reviewer_action(session, a, action="REJECT_SIGNAL", created_at=datetime(2024, 6, 1, tzinfo=UTC))
+        item = list_staged_evidence_items(session)[0]
+        assert item.latest_reviewer_action_id == newer.id
+        assert item.review_workflow_state == "RESOLVED_REJECTED"
+
+    def test_superseded_older_action_preserved_in_history(self, session):
+        """G: an older action superseded by a newer one - the older row
+        must remain queryable (append-only), even though only the newer
+        one drives the derived state."""
+        a = _staged_assertion(session, airport_id=45)
+        older = _lightweight_reviewer_action(session, a, action="NEEDS_MORE_EVIDENCE")
+        newer = _lightweight_reviewer_action(session, a, action="APPROVE_SIGNAL", supersedes_action_id=older.id)
+        item = list_staged_evidence_items(session)[0]
+        assert item.review_workflow_state == "APPROVED_PENDING_SIGNAL"
+        all_actions = session.scalars(select(ReviewerAction).where(ReviewerAction.source_assertion_id == a.id)).all()
+        assert {row.id for row in all_actions} == {older.id, newer.id}
+        assert session.get(ReviewerAction, older.id).action == "NEEDS_MORE_EVIDENCE"  # never rewritten
+
+    def test_staged_active_includes_active_needs_evidence_pending_signal(self, session):
+        a = _staged_assertion(session, airport_id=45, source_locator="loc-a", artifact_identity="artifact-a", raw_fragment_hash="hash-a")
+        b = _staged_assertion(session, airport_id=46, source_locator="loc-b", artifact_identity="artifact-b", raw_fragment_hash="hash-b")
+        c = _staged_assertion(session, airport_id=47, source_locator="loc-c", artifact_identity="artifact-c", raw_fragment_hash="hash-c")
+        _lightweight_reviewer_action(session, b, action="NEEDS_MORE_EVIDENCE")
+        _lightweight_reviewer_action(session, c, action="APPROVE_SIGNAL")
+        ids = {item.source_assertion_id for item in list_staged_evidence_needing_attention_items(session)}
+        assert ids == {a.id, b.id, c.id}
+
+    def test_staged_active_excludes_resolved_rejected_and_duplicate(self, session):
+        a = _staged_assertion(session, airport_id=45, source_locator="loc-a", artifact_identity="artifact-a", raw_fragment_hash="hash-a")
+        b = _staged_assertion(session, airport_id=46, source_locator="loc-b", artifact_identity="artifact-b", raw_fragment_hash="hash-b")
+        target = _existing_signal(session)
+        session.commit()
+        _lightweight_reviewer_action(session, a, action="REJECT_SIGNAL")
+        _lightweight_reviewer_action(session, b, action="MARK_DUPLICATE", duplicate_of_signal_id=target.id)
+        assert list_staged_evidence_needing_attention_items(session) == ()
+        # but both remain fully visible under the structural inventory
+        assert {i.source_assertion_id for i in list_staged_evidence_items(session)} == {a.id, b.id}
+
+    def test_sa255_shaped_fixture_visible_in_both_staged_and_staged_active(self, session):
+        a = _staged_assertion(session, airport_id=45)
+        _lightweight_reviewer_action(session, a, action="NEEDS_MORE_EVIDENCE")
+        assert a.id in {i.source_assertion_id for i in list_staged_evidence_items(session)}
+        assert a.id in {i.source_assertion_id for i in list_staged_evidence_needing_attention_items(session)}
+
+    def test_no_governance_decisions_synthesized_by_enrichment(self, session):
+        a = _staged_assertion(session, airport_id=45)
+        _lightweight_reviewer_action(session, a, action="APPROVE_SIGNAL")
+        item = list_staged_evidence_items(session)[0]
+        assert item.identity_guard_decision is None
+        assert item.intelligence_review_decision is None
+        assert item.promotion_policy_decision is None
+
+    def test_no_db_mutation_from_enriched_staged_query(self, session):
+        a = _staged_assertion(session, airport_id=45)
+        _lightweight_reviewer_action(session, a, action="NEEDS_MORE_EVIDENCE")
+        before_sa = [(x.id, x.signal_id) for x in session.scalars(select(SourceAssertion)).all()]
+        before_ra = len(session.scalars(select(ReviewerAction)).all())
+        list_staged_evidence_items(session)
+        list_staged_evidence_needing_attention_items(session)
+        after_sa = [(x.id, x.signal_id) for x in session.scalars(select(SourceAssertion)).all()]
+        after_ra = len(session.scalars(select(ReviewerAction)).all())
+        assert before_sa == after_sa
+        assert before_ra == after_ra
+
+    def test_deterministic_ordering_preserved_with_enrichment(self, session):
+        older = _staged_assertion(
+            session, airport_id=None, created_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="loc-a", artifact_identity="artifact-a", raw_fragment_hash="hash-a",
+        )
+        newer = _staged_assertion(
+            session, airport_id=None, created_at=datetime(2024, 6, 1, tzinfo=UTC),
+            source_locator="loc-b", artifact_identity="artifact-b", raw_fragment_hash="hash-b",
+        )
+        session.commit()
+        items = list_staged_evidence_items(session)
+        assert [i.source_assertion_id for i in items] == [newer.id, older.id]
+
+    def test_funding_provenance_derived_for_faa_aip_and_discovery(self, session):
+        faa = _staged_assertion(
+            session, airport_id=45, source_type="aip_grant",
+            source_external_id="faa_aip:https://faa.gov/x.pdf#ZZZ#deadbeef",
+        )
+        discovery = _staged_assertion(
+            session, airport_id=None, source_type="web_discovery",
+            source_locator="loc-d", artifact_identity="artifact-d", raw_fragment_hash="hash-d",
+            source_external_id="discovery:generic_web:deadbeef",
+        )
+        items = {i.source_assertion_id: i for i in list_staged_evidence_items(session)}
+        assert items[faa.id].funding_provenance == "faa_aip"
+        assert items[discovery.id].funding_provenance is None
+
+
+class TestCLIStagedActiveState:
+    """54-64. CLI --state staged-active: distinct filtering, labels,
+    next-action text, truthful empty message, read-only."""
+
+    def test_staged_active_excludes_resolved_rows_via_cli(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            active = _staged_assertion(s, airport_id=45, source_locator="loc-a", artifact_identity="artifact-a", raw_fragment_hash="hash-a")
+            rejected = _staged_assertion(s, airport_id=46, source_locator="loc-b", artifact_identity="artifact-b", raw_fragment_hash="hash-b")
+            _lightweight_reviewer_action(s, rejected, action="REJECT_SIGNAL")
+            active_id, rejected_id = active.id, rejected.id  # captured before the session closes
+        engine.dispose()
+
+        staged_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        active_report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged-active"))
+        assert {i.source_assertion_id for i in staged_report.items} == {active_id, rejected_id}
+        assert {i.source_assertion_id for i in active_report.items} == {active_id}
+
+    def test_staged_active_empty_message_is_distinct(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            rejected = _staged_assertion(s, airport_id=45)
+            _lightweight_reviewer_action(s, rejected, action="REJECT_SIGNAL")
+        engine.dispose()
+
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged-active"))
+        rendered = cli.render_report(report, state="staged-active")
+        assert "No staged evidence currently needs Commander attention." in rendered
+        assert "STAGED EVIDENCE — COMMANDER ATTENTION VIEW" not in rendered  # banner only prints with items
+
+    def test_staged_active_read_only(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            _staged_assertion(s, airport_id=45)
+            s.commit()
+        engine.dispose()
+
+        sha_before = _file_sha(db)
+        cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged-active"))
+        sha_after = _file_sha(db)
+        assert sha_before == sha_after
+
+    def test_staged_active_valid_state_choice(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged-active"))
+        assert report.blockers == ()
+
+    def test_sa255_shaped_row_shows_needs_more_evidence_label_and_next_action(self, tmp_path, capsys):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            a = _staged_assertion(
+                s, airport_id=45, source_type="aip_grant",
+                source_external_id="faa_aip:https://faa.gov/x.pdf#MHT#deadbeef",
+            )
+            _lightweight_reviewer_action(s, a, action="NEEDS_MORE_EVIDENCE", reason="not enough evidence yet", reviewer="human:commander")
+        engine.dispose()
+
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        rendered = cli.render_report(report, state="staged")
+        assert "[STAGED — NEEDS MORE EVIDENCE]" in rendered
+        assert "review_workflow_state=NEEDS_MORE_EVIDENCE" in rendered
+        assert "latest_reviewer_action=#" in rendered and "NEEDS_MORE_EVIDENCE" in rendered
+        assert "reason: not enough evidence yet" in rendered
+        assert "re-review via scripts/review_staged_funding_evidence.py" in rendered
+        assert "Research does not automatically advance governance." in rendered
+        assert "Requires Commander evidence review" not in rendered  # the old, now-stale wording must be gone
+
+    def test_sa258_shaped_discovery_fixture_never_gets_funding_review_next_action(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            _staged_assertion(
+                s, airport_id=40, source_type="web_discovery",
+                source_external_id="discovery:generic_web:deadbeef",
+            )
+            s.commit()
+        engine.dispose()
+
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        rendered = cli.render_report(report, state="staged")
+        assert "review_staged_funding_evidence.py" not in rendered
+        assert "Not eligible for the lightweight funding review path" in rendered
+        assert "funding_provenance=(not a recognized funding namespace)" in rendered
+
+    def test_staged_summary_counts_exact(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            unreviewed = _staged_assertion(s, airport_id=45, source_locator="loc-a", artifact_identity="artifact-a", raw_fragment_hash="hash-a")
+            needs_evidence = _staged_assertion(s, airport_id=46, source_locator="loc-b", artifact_identity="artifact-b", raw_fragment_hash="hash-b")
+            rejected = _staged_assertion(s, airport_id=47, source_locator="loc-c", artifact_identity="artifact-c", raw_fragment_hash="hash-c")
+            _lightweight_reviewer_action(s, needs_evidence, action="NEEDS_MORE_EVIDENCE")
+            _lightweight_reviewer_action(s, rejected, action="REJECT_SIGNAL")
+        engine.dispose()
+
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        rendered = cli.render_report(report, state="staged")
+        assert "3 staged total - 1 unreviewed, 1 needs more evidence, 0 awaiting Signal, 1 reviewed/no further action" in rendered
+
+    def test_resolved_staged_row_remains_visible_never_hidden(self, tmp_path):
+        """The mission's own explicit constraint: a single human review must
+        never remove evidence from the structural staged inventory."""
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            a = _staged_assertion(s, airport_id=45)
+            _lightweight_reviewer_action(s, a, action="REJECT_SIGNAL")
+        engine.dispose()
+
+        report = cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged"))
+        assert len(report.items) == 1
+        rendered = cli.render_report(report, state="staged")
+        assert "[STAGED — REVIEWED, NO FURTHER ACTION]" in rendered
+        assert "No further Commander action expected. Evidence remains preserved for audit." in rendered
+
+    def test_no_reviewer_action_or_signal_created_by_staged_active(self, tmp_path):
+        db = _full_schema_database(tmp_path)
+        engine = create_engine(f"sqlite:///{db}")
+        with Session(engine) as s:
+            _staged_assertion(s, airport_id=45)
+            s.commit()
+            before_ra = len(s.scalars(select(ReviewerAction)).all())
+            before_sig = len(s.scalars(select(Signal)).all())
+        engine.dispose()
+
+        cli.run_review_queue(cli.ReviewQueueConfig(database=db, state="staged-active"))
+
+        with Session(engine) as s:
+            assert len(s.scalars(select(ReviewerAction)).all()) == before_ra
+            assert len(s.scalars(select(Signal)).all()) == before_sig

@@ -91,6 +91,7 @@ __all__ = [
     "NotLightweightFundingAssertionError",
     "check_lightweight_funding_path_eligibility",
     "FUNDING_SOURCE_NAMESPACE_PREFIXES",
+    "funding_namespace_for",
 ]
 
 # The one assertion_type this lightweight path ever admits. Extending this
@@ -111,6 +112,27 @@ LIGHTWEIGHT_FUNDING_ASSERTION_TYPE = "project_construction"
 # same kind of real, evidenced justification these two already have - never
 # inferred or broadened speculatively.
 FUNDING_SOURCE_NAMESPACE_PREFIXES = ("faa_aip:", "usaspending:")
+
+
+def funding_namespace_for(source_external_id: "str | None") -> "str | None":
+    """Pure, presentation-safe namespace LOOKUP only - "which recognized
+    funding namespace, if any, does this external_id belong to" (e.g.
+    "faa_aip" for a "faa_aip:..." value, prefix's own trailing colon
+    stripped). This is NEVER an eligibility decision - a caller wanting to
+    know "is this SourceAssertion actually admissible to the lightweight
+    path" must still call check_lightweight_funding_path_eligibility()
+    itself; this helper only answers the narrower, purely informational
+    "what does this Source's own external_id namespace look like," so
+    presentation code (RWI HQ "Staged Evidence Attention States") never
+    needs, and must never build, a second, parallel eligibility authority
+    of its own. Returns None for a missing/empty/unrecognized value -
+    never guesses, never partially matches."""
+    if not source_external_id:
+        return None
+    for prefix in FUNDING_SOURCE_NAMESPACE_PREFIXES:
+        if source_external_id.startswith(prefix):
+            return prefix.rstrip(":")
+    return None
 
 # The exact evidence_quality/review_state values
 # app.services.known_airport_evidence_persistence.apply_known_airport_evidence_persistence()

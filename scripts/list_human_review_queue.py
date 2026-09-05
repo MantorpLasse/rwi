@@ -6,6 +6,7 @@
     python -m scripts.list_human_review_queue --state all
     python -m scripts.list_human_review_queue --state resolved
     python -m scripts.list_human_review_queue --state staged
+    python -m scripts.list_human_review_queue --state staged-active
     python -m scripts.list_human_review_queue --state reconciliation
 
 Default (`--state active`): prints only SourceAssertion rows that still need
@@ -84,12 +85,14 @@ from sqlalchemy.orm import Session
 from app.services.human_review_claim_enrichment import enrich_claims
 from app.services.human_review_queue import (
     GOVERNANCE_STAGE_STAGED_UNREVIEWED,
+    STAGED_ATTENTION_WORKFLOW_STATE_VALUES,
     HumanReviewItem,
     ReviewWorkflowState,
     StagedEvidenceItem,
     list_human_review_items,
     list_review_workflow_items,
     list_staged_evidence_items,
+    list_staged_evidence_needing_attention_items,
 )
 from app.services.human_review_reconciliation import (
     ReconciliationReviewItem,
@@ -185,7 +188,7 @@ def check_schema_readiness(database: Path) -> dict:
     }
 
 
-_VALID_STATE_FILTERS = ("active", "all", "resolved", "reconciliation", "staged")
+_VALID_STATE_FILTERS = ("active", "all", "resolved", "reconciliation", "staged", "staged-active")
 
 # The reconciliation-aware states that actually mean "a human has something
 # new to look at" - CLEAR_TO_CREATE items list_reconciliation_review_items()
@@ -227,7 +230,17 @@ def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
     promotion-review workflow at all. A COMPLETELY SEPARATE population from
     every state above - never merged with, and never widening,
     the promotion_policy_decision == HUMAN_REVIEW_REQUIRED predicate the
-    other states all share.
+    other states all share. Answers Question 1 ("what evidence is still
+    structurally staged") - EVERY row remains visible here no matter its
+    ReviewerAction history (RWI HQ "Staged Evidence Attention States");
+    "staged-active" - app.services.human_review_queue.
+    list_staged_evidence_needing_attention_items() - answers Question 2
+    ("what staged evidence needs Commander attention now"), the SAME
+    population filtered to ACTIVE_REVIEW/NEEDS_MORE_EVIDENCE/
+    APPROVED_PENDING_SIGNAL only. A row a human already resolved
+    (RESOLVED_REJECTED/RESOLVED_DUPLICATE) drops out of "staged-active" but
+    is never hidden from "staged" - reviewing evidence once is never a
+    reason to make it harder to find again.
 
     REVIEW-CHECKPOINT FIX: "resolved" must NOT pass `config.limit` into the
     inner list_review_workflow_items() call - that function's own `limit`
@@ -270,14 +283,27 @@ def run_review_queue(config: ReviewQueueConfig) -> ReviewQueueReport:
                     if entry.reconciliation_review_state in _RECONCILIATION_ATTENTION_STATES
                 )
                 items = attention[: config.limit] if config.limit is not None else attention
-            else:  # "staged" (RWI HQ "Commander Review Queue - Staged Evidence Lane")
+            elif config.state == "staged":
                 # A SEPARATE population from every state above: preserved
                 # candidate evidence that was never routed through IdentityGuard/
                 # intelligence review/promotion policy at all - never the
                 # governed-review predicate widened, never merged with it. See
                 # app.services.human_review_queue's own module section for the
-                # exact predicate and why it is intentionally narrow.
+                # exact predicate and why it is intentionally narrow. The
+                # FULL structural inventory - Question 1, "what evidence is
+                # still structurally staged" - every row a human has ever
+                # acted on remains visible here too (RWI HQ "Staged Evidence
+                # Attention States"), enriched with its own derived
+                # review_workflow_state; never filtered by that state.
                 items = list_staged_evidence_items(session, limit=config.limit)
+            else:  # "staged-active" (RWI HQ "Staged Evidence Attention States")
+                # Question 2: "what staged evidence needs Commander attention
+                # NOW" - the same structural population as "staged" above,
+                # filtered to ACTIVE_REVIEW/NEEDS_MORE_EVIDENCE/
+                # APPROVED_PENDING_SIGNAL only. RESOLVED_REJECTED/
+                # RESOLVED_DUPLICATE rows are excluded from THIS view only -
+                # they remain fully visible under "staged", never hidden.
+                items = list_staged_evidence_needing_attention_items(session, limit=config.limit)
             session.rollback()  # defensive - this session never adds/flushes anything
     finally:
         engine.dispose()
@@ -355,24 +381,82 @@ def _render_reconciliation_section(entry: ReconciliationReviewItem) -> "list[str
 
 _NOT_EVALUATED = "not evaluated (this evidence class is not routed through IdentityGuard/intelligence review/promotion policy)"
 
-_STAGED_NEXT_ACTION = (
-    "Requires Commander evidence review; no unified CLI action exists yet. "
-    "Further Research Loop (scripts/research_airport_clue.py) or Fetch/preserve "
-    "(scripts/fetch_discovered_url.py) may add more preserved evidence, but neither "
-    "advances governance automatically."
+# RWI HQ "Staged Evidence Attention States": one human-readable label and
+# one truthful next-action sentence per ReviewWorkflowState value this
+# staged population can (or, for completeness, theoretically could) show -
+# never a new vocabulary, only presentation text keyed on the EXISTING,
+# unmodified ReviewWorkflowState members. `{funding_hint}` is filled in by
+# _staged_next_action() below only for ACTIVE_REVIEW, since that is the
+# one state whose truthful next step genuinely depends on whether this row
+# is funding-provenance evidence at all.
+_STAGED_LABEL_BY_STATE = {
+    "ACTIVE_REVIEW": "STAGED — UNREVIEWED",
+    "NEEDS_MORE_EVIDENCE": "STAGED — NEEDS MORE EVIDENCE",
+    "APPROVED_PENDING_SIGNAL": "STAGED — AWAITING SIGNAL CREATION",
+    "RESOLVED_REJECTED": "STAGED — REVIEWED, NO FURTHER ACTION",
+    "RESOLVED_DUPLICATE": "STAGED — REVIEWED, NO FURTHER ACTION",
+}
+_STAGED_LABEL_FALLBACK = "STAGED — OTHER"
+
+_STAGED_NEXT_ACTION_FUNDING_ELIGIBLE = (
+    "Run scripts/review_staged_funding_evidence.py to record a Commander review action "
+    "(APPROVE_SIGNAL, MARK_DUPLICATE, NEEDS_MORE_EVIDENCE, or REJECT_SIGNAL)."
 )
+_STAGED_NEXT_ACTION_NOT_FUNDING_ELIGIBLE = (
+    "Not eligible for the lightweight funding review path (this Source's own external_id "
+    "does not carry a recognized funding provenance namespace - e.g. Research Loop / "
+    "Discovery evidence). No unified staged-evidence governance CLI exists yet for this "
+    "evidence class; continue appropriate Research/Discovery handling (e.g. "
+    "scripts/research_airport_clue.py, scripts/fetch_discovered_url.py)."
+)
+_STAGED_NEXT_ACTION_BY_STATE = {
+    "NEEDS_MORE_EVIDENCE": (
+        "Gather additional preserved evidence (e.g. scripts/research_airport_clue.py, "
+        "scripts/fetch_discovered_url.py / scripts/fetch_research_candidate.py), then "
+        "re-review via scripts/review_staged_funding_evidence.py. Research does not "
+        "automatically advance governance."
+    ),
+    "APPROVED_PENDING_SIGNAL": (
+        "Signal creation remains owed for the latest APPROVE_SIGNAL ReviewerAction - "
+        "re-run scripts/review_staged_funding_evidence.py with --action APPROVE_SIGNAL "
+        "to complete it. Commander intervention required."
+    ),
+    "RESOLVED_REJECTED": "No further Commander action expected. Evidence remains preserved for audit.",
+    "RESOLVED_DUPLICATE": (
+        "No further Commander action expected. Evidence remains preserved and linked by "
+        "review history (see the latest ReviewerAction's duplicate_of_signal_id)."
+    ),
+}
+_STAGED_NEXT_ACTION_FALLBACK = "No standard next-action guidance defined for this derived state - review manually."
+
+
+def _staged_next_action(item: StagedEvidenceItem) -> str:
+    """Pure presentation lookup, keyed on the item's own already-derived
+    `review_workflow_state`/`funding_provenance` fields - never a second
+    eligibility authority (that remains
+    app.services.known_airport_funding_lightweight_path_guard.check_lightweight_funding_path_eligibility()
+    alone). ACTIVE_REVIEW is the one state whose truthful next step
+    depends on funding_provenance; every other state's guidance is fixed."""
+    if item.review_workflow_state == "ACTIVE_REVIEW":
+        return _STAGED_NEXT_ACTION_FUNDING_ELIGIBLE if item.funding_provenance else _STAGED_NEXT_ACTION_NOT_FUNDING_ELIGIBLE
+    return _STAGED_NEXT_ACTION_BY_STATE.get(item.review_workflow_state, _STAGED_NEXT_ACTION_FALLBACK)
 
 
 def _render_staged_item_report(item: StagedEvidenceItem) -> str:
-    """Text formatting only - every value already exists on `item`, nothing
-    computed here. Deliberately does NOT reuse render_item_report()'s own
-    HumanReviewItem-shaped layout (no Identity/Intelligence/Promotion
-    review sections implying evaluation occurred) - see module docstring
-    "staged" state description for why this is a structurally separate
-    population, not merely a filtered view of the same one."""
+    """Text formatting only - every value already exists on `item`
+    (computed by app.services.human_review_queue itself), except the
+    label/next-action TEXT, which is a pure, deterministic lookup on the
+    item's own already-derived fields (see _staged_next_action() above) -
+    nothing about eligibility or workflow state is decided here. Does NOT
+    reuse render_item_report()'s own HumanReviewItem-shaped layout (no
+    Identity/Intelligence/Promotion review sections implying heavy-pipeline
+    evaluation occurred) - see module docstring "staged" state description
+    for why this is a structurally separate population, not merely a
+    filtered view of the same one."""
+    label = _STAGED_LABEL_BY_STATE.get(item.review_workflow_state, _STAGED_LABEL_FALLBACK)
     lines: "list[str]" = []
     lines.append("=" * 78)
-    lines.append(f"SourceAssertion #{item.source_assertion_id}  [STAGED_UNREVIEWED]")
+    lines.append(f"SourceAssertion #{item.source_assertion_id}  [{label}]")
     lines.append("=" * 78)
 
     lines.append("")
@@ -388,6 +472,7 @@ def _render_staged_item_report(item: StagedEvidenceItem) -> str:
         f"  reliability_level (existing coarse field, NOT a PromotionPolicy "
         f"SourceAuthorityTier)={item.source_reliability_level_raw!r}"
     )
+    lines.append(f"  funding_provenance={item.funding_provenance or '(not a recognized funding namespace)'}")
 
     lines.append("")
     lines.append("Evidence")
@@ -411,8 +496,20 @@ def _render_staged_item_report(item: StagedEvidenceItem) -> str:
     lines.append(f"  linked_signal_id={item.linked_signal_id}")
 
     lines.append("")
+    lines.append("Commander attention (RWI HQ \"Staged Evidence Attention States\", derived read-time - never persisted)")
+    lines.append(f"  review_workflow_state={item.review_workflow_state}")
+    if item.latest_reviewer_action_id is not None:
+        lines.append(
+            f"  latest_reviewer_action=#{item.latest_reviewer_action_id} {item.latest_reviewer_action} "
+            f"(reviewer={item.latest_reviewer_action_reviewer!r}, created_at={item.latest_reviewer_action_created_at})"
+        )
+        lines.append(f"    reason: {item.latest_reviewer_action_reason}")
+    else:
+        lines.append("  latest_reviewer_action=(none - never reviewed)")
+
+    lines.append("")
     lines.append("Next legitimate action")
-    lines.append(f"  {_STAGED_NEXT_ACTION}")
+    lines.append(f"  {_staged_next_action(item)}")
 
     return "\n".join(lines)
 
@@ -533,6 +630,11 @@ _EMPTY_MESSAGE_BY_STATE = {
     # place, so an empty result here must not read as if the same kind of
     # decision-readiness was checked and found clear.
     "staged": "No staged evidence is currently awaiting Commander attention.",
+    # Distinct from "staged"'s own empty message on purpose - this state can
+    # be empty while "staged" itself is not (every remaining row already
+    # resolved), and that is a genuinely different, better outcome than an
+    # empty structural inventory would be.
+    "staged-active": "No staged evidence currently needs Commander attention.",
 }
 
 # Printed once, above the item list, only for states where the population's
@@ -540,7 +642,28 @@ _EMPTY_MESSAGE_BY_STATE = {
 # (every pre-existing state's own output is unchanged).
 _STATE_BANNER = {
     "staged": "STAGED EVIDENCE — NOT YET GOVERNANCE-REVIEWED",
+    "staged-active": "STAGED EVIDENCE — COMMANDER ATTENTION VIEW",
 }
+
+
+def _staged_summary_counts(items: "tuple[StagedEvidenceItem, ...]") -> "dict[str, int]":
+    """SELECT-only, derived-only summary - no persisted counter anywhere.
+    Grouped by the exact same review_workflow_state values render_report()
+    itself displays per-item, so the two can never disagree."""
+    counts = {"total": len(items), "unreviewed": 0, "needs_more_evidence": 0, "awaiting_signal": 0, "reviewed_no_further_action": 0, "other": 0}
+    for item in items:
+        state = item.review_workflow_state
+        if state == "ACTIVE_REVIEW":
+            counts["unreviewed"] += 1
+        elif state == "NEEDS_MORE_EVIDENCE":
+            counts["needs_more_evidence"] += 1
+        elif state == "APPROVED_PENDING_SIGNAL":
+            counts["awaiting_signal"] += 1
+        elif state in ("RESOLVED_REJECTED", "RESOLVED_DUPLICATE"):
+            counts["reviewed_no_further_action"] += 1
+        else:
+            counts["other"] += 1
+    return counts
 
 
 def render_report(report: ReviewQueueReport, *, state: str = DEFAULT_STATE_FILTER) -> str:
@@ -559,6 +682,15 @@ def render_report(report: ReviewQueueReport, *, state: str = DEFAULT_STATE_FILTE
     if banner:
         header += f"{banner}\n"
     header += f"{len(report.items)} item(s) in the '{state}' human review view:\n"
+    if state == "staged":
+        counts = _staged_summary_counts(report.items)
+        header += (
+            f"  {counts['total']} staged total - {counts['unreviewed']} unreviewed, "
+            f"{counts['needs_more_evidence']} needs more evidence, {counts['awaiting_signal']} awaiting Signal, "
+            f"{counts['reviewed_no_further_action']} reviewed/no further action"
+            + (f", {counts['other']} other" if counts["other"] else "")
+            + "\n"
+        )
     parts = [header]
     for item in report.items:
         parts.append(render_item_report(item))
@@ -575,8 +707,10 @@ def _parser() -> argparse.ArgumentParser:
         help="active (default): needs a human decision now. all: every HUMAN_REVIEW_REQUIRED row, any state. "
         "resolved: only rejected/duplicate/signal-created items. reconciliation (R4D): governed rows where "
         "fresh reconciliation currently requires attention (blocked or a stale distinct confirmation). "
-        "staged: preserved candidate evidence never routed through governance review at all - a separate "
-        "population, never merged with the governed states above.",
+        "staged: ALL preserved candidate evidence never routed through governance review at all - a separate "
+        "population, never merged with the governed states above; every row remains visible here regardless of "
+        "ReviewerAction history, enriched with its own derived review_workflow_state. staged-active: the same "
+        "staged population, filtered to rows still needing Commander attention now.",
     )
     return parser
 

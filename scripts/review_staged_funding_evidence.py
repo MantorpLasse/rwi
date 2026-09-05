@@ -91,9 +91,9 @@ from app.services.existing_signal_reconciliation_candidates import (
 )
 from app.services.governed_signal_creation import ExistingSignalPossibleMatchError
 from app.services.known_airport_funding_lightweight_path_guard import (
-    FUNDING_SOURCE_NAMESPACE_PREFIXES,
     NotLightweightFundingAssertionError,
     check_lightweight_funding_path_eligibility,
+    funding_namespace_for,
 )
 from app.services.known_airport_funding_reviewer_action import (
     LIGHTWEIGHT_FUNDING_REVIEWER_ACTIONS,
@@ -183,17 +183,6 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _funding_namespace(source_external_id: "str | None") -> "str | None":
-    """For display only - "faa_aip" or "usaspending" (namespace, prefix
-    stripped of its trailing colon) if recognized, else None. Never used
-    for any eligibility decision - check_lightweight_funding_path_eligibility()
-    remains the single source of truth for that."""
-    if not source_external_id:
-        return None
-    for prefix in FUNDING_SOURCE_NAMESPACE_PREFIXES:
-        if source_external_id.startswith(prefix):
-            return prefix.rstrip(":")
-    return None
 
 
 def _validate_approve_signal_fields(args: argparse.Namespace) -> None:
@@ -228,7 +217,7 @@ def _resolve_reference_year_preview(args: argparse.Namespace) -> "Optional[int]"
 def _print_header(session: Session, assertion: SourceAssertion, args: argparse.Namespace) -> None:
     airport = session.get(Airport, assertion.airport_id) if assertion.airport_id is not None else None
     source = session.get(Source, assertion.source_id)
-    namespace = _funding_namespace(source.external_id if source else None)
+    namespace = funding_namespace_for(source.external_id if source else None)
 
     print(_DISCLAIMER)
     print()
