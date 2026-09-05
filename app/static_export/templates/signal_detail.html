@@ -103,10 +103,13 @@
     <div class="card">
       <div class="card-header">Ekonomi</div>
       <div class="card-body">
-        <div style="color:var(--text-dim); font-size:0.85rem">Total projektbudget</div>
-        <div class="money" style="font-size:1.3rem; margin-bottom:14px">
+        <div style="color:var(--text-dim); font-size:0.85rem">{% if signal.funding_caveat %}Bidragsbelopp{% else %}Total projektbudget{% endif %}</div>
+        <div class="money" style="font-size:1.3rem; margin-bottom:{% if signal.funding_caveat %}4px{% else %}14px{% endif %}">
           {% if signal.estimated_total_value_usd %}${{ "{:,.0f}".format(signal.estimated_total_value_usd) }}{% else %}–{% endif %}
         </div>
+        {% if signal.funding_caveat %}
+        <div style="color:var(--text-dim); font-size:0.78rem; margin-bottom:14px">{{ signal.funding_caveat }}</div>
+        {% endif %}
         <div style="color:var(--text-dim); font-size:0.85rem">Bedömd EMAS-del</div>
         <div class="money" style="font-size:1.3rem">
           {% if signal.estimated_emas_value_usd %}${{ "{:,.0f}".format(signal.estimated_emas_value_usd) }}{% else %}–{% endif %}

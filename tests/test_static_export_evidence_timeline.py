@@ -263,6 +263,101 @@ def test_funding_event_shows_total_grant_value_with_non_emas_contract_caveat(tmp
     assert "anger inte automatiskt ett EMAS-kontraktsvärde" in history
 
 
+# ---------------------------------------------------------------------------
+# RWI HQ "Signal Detail Funding-Caveat Parity" mission: Signal Detail's own
+# "Ekonomi" card gets the SAME funding-source classification and the SAME
+# _FUNDING_CAVEAT text Airport Detail's timeline already uses above - never
+# a second, independently-worded caveat, never a BGM/Signal-id special case.
+# Reuses `_seed_bos_rich`'s existing funding_signal (usaspending_grant,
+# $9,000,000.00) and old_incident_signal (non-funding) fixtures verbatim.
+# ---------------------------------------------------------------------------
+
+
+def _signal_html(tmp_path, signal_id):
+    return (tmp_path / "site" / "signals" / f"{signal_id}.html").read_text(encoding="utf-8")
+
+
+def test_signal_detail_funding_signal_shows_bidragsbelopp_label_and_caveat(tmp_path):
+    engine = _engine()
+    with Session(engine) as session:
+        _airport, _di, _ui, funding_signal, _old = _seed_bos_rich(session)
+        build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
+        funding_signal_id = funding_signal.id
+    html = _signal_html(tmp_path, funding_signal_id)
+    assert "Bidragsbelopp" in html
+    assert "Total projektbudget" not in html
+    assert "anger inte automatiskt ett EMAS-kontraktsvärde" in html
+    # Amount formatting itself is untouched by the label/caveat change.
+    assert "$9,000,000" in html
+
+
+def test_signal_detail_non_funding_signal_keeps_total_projektbudget_unchanged(tmp_path):
+    engine = _engine()
+    with Session(engine) as session:
+        _airport, _di, _ui, _funding, old_incident_signal = _seed_bos_rich(session)
+        build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
+        old_incident_signal_id = old_incident_signal.id
+    html = _signal_html(tmp_path, old_incident_signal_id)
+    assert "Total projektbudget" in html
+    assert "Bidragsbelopp" not in html
+    assert "anger inte automatiskt ett EMAS-kontraktsvärde" not in html
+
+
+def test_signal_detail_funding_signal_other_fields_unaffected(tmp_path):
+    """Score/confidence/status/source metadata/source_notes are untouched
+    by this presentation-only change - only the "Ekonomi" card's own label
+    and caveat changed."""
+    engine = _engine()
+    with Session(engine) as session:
+        _airport, _di, _ui, funding_signal, _old = _seed_bos_rich(session)
+        build_site(tmp_path / "site", session=session, today=date(2026, 8, 30))
+        funding_signal_id = funding_signal.id
+    html = _signal_html(tmp_path, funding_signal_id)
+    assert "Hög" in html  # confidence_label for confidence="high" - unaffected
+    assert "USAspending grant" in html  # source_type_label - unaffected
+    # estimated_emas_value_usd was never set on this fixture - still renders
+    # the existing empty-value dash, untouched by this mission.
+    assert "–" in html
+
+
+def test_signal_view_funding_caveat_reuses_the_same_predicate_and_text_as_timeline(tmp_path):
+    """Code-level proof (not just rendered HTML) that _signal_view() never
+    grew a second, independently-maintained funding classification or a
+    second, independently-worded caveat - and applies to no BGM/Signal-id
+    special case, only the shared source_type predicate."""
+    from app.static_export import build as build_module
+
+    engine = _engine()
+    with Session(engine) as session:
+        airport = _seed_bos_shaped(session)
+        grant_source = Source(
+            title="Test grant", source_type="usaspending_grant", reliability_level="official",
+            url="https://usaspending.example.test/award/TEST2",
+        )
+        non_grant_source = Source(
+            title="Test non-grant", source_type="faa_fact_sheet", reliability_level="official",
+            url="https://faa.example.test/other",
+        )
+        session.add_all([grant_source, non_grant_source]); session.commit()
+        grant_signal = Signal(
+            airport_id=airport.id, source_id=grant_source.id, title="Grant signal",
+            category="new_installation", confidence="high", status="identified", published=True,
+        )
+        non_grant_signal = Signal(
+            airport_id=airport.id, source_id=non_grant_source.id, title="Non-grant signal",
+            category="new_installation", confidence="high", status="identified", published=True,
+        )
+        session.add_all([grant_signal, non_grant_signal]); session.commit()
+
+        grant_view = build_module._signal_view(grant_signal, today=date(2026, 8, 30))
+        non_grant_view = build_module._signal_view(non_grant_signal, today=date(2026, 8, 30))
+
+        assert grant_signal.source.source_type in build_module._GRANT_SOURCE_TYPES_TIMELINE
+        assert grant_view.funding_caveat == build_module._FUNDING_CAVEAT
+        assert non_grant_signal.source.source_type not in build_module._GRANT_SOURCE_TYPES_TIMELINE
+        assert non_grant_view.funding_caveat is None
+
+
 def test_bos_rich_page_has_no_internal_governance_leakage(tmp_path):
     engine = _engine()
     with Session(engine) as session:

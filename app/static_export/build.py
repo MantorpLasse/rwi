@@ -287,6 +287,13 @@ def _attention_reason_view(
 
 def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
     source = signal.source
+    # RWI HQ "Signal Detail Funding-Caveat Parity" mission: the SAME
+    # funding-source predicate _build_timeline_events() already uses for
+    # Airport Detail's "Bidrag" caveat (_GRANT_SOURCE_TYPES_TIMELINE) -
+    # never a second, independently-maintained classification. `None` when
+    # not funding-sourced, so the template's existing "Total projektbudget"
+    # presentation is untouched for every non-funding Signal.
+    is_funding_signal = source is not None and source.source_type in _GRANT_SOURCE_TYPES_TIMELINE
     category_label, category_class = _category_view(signal.category)
     confidence_level = _confidence_level(signal.confidence)
     source_type_label, source_type_anchor, source_type_tooltip = _source_type_view(
@@ -345,6 +352,12 @@ def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
         supplier_reason=signal.supplier_reason,
         estimated_total_value_usd=signal.estimated_total_value_usd,
         estimated_emas_value_usd=signal.estimated_emas_value_usd,
+        # RWI HQ "Signal Detail Funding-Caveat Parity" mission: reuses the
+        # existing _FUNDING_CAVEAT verbatim (never a second, independently-
+        # worded caveat) - None for a non-funding Signal, so
+        # signal_detail.html's existing "Total projektbudget" label/layout
+        # is completely unaffected for every Signal this field doesn't apply to.
+        funding_caveat=(_FUNDING_CAVEAT if is_funding_signal else None),
         airport_id=signal.airport_id,
         airport_name=signal.airport.name,
         airport_code=signal.airport.iata_code or signal.airport.icao_code or "–",
@@ -734,6 +747,12 @@ def _is_public_signal(signal: Signal) -> bool:
 #   underlying Source itself has a real published_date but the Signal's own
 #   event-year fields do not (the record is dated, just not for THIS
 #   event), or "no_date" when neither exists. Never an invented date.
+#
+# RWI HQ "Signal Detail Funding-Caveat Parity" mission: also reused by
+# _signal_view() below (Signal Detail's own "Ekonomi" card) - the SAME
+# predicate, never a second, independently-maintained source-type
+# vocabulary. No longer timeline-exclusive despite the name (kept
+# unchanged to minimize diff - both call sites are documented here).
 _GRANT_SOURCE_TYPES_TIMELINE = frozenset({"usaspending_grant", "aip_grant", "iija_grant"})
 
 _FUNDING_CAVEAT = (
