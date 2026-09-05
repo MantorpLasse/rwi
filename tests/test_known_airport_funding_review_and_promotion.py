@@ -25,6 +25,7 @@ from app.services.governed_signal_creation import (
     link_source_assertion_to_duplicate_signal,
 )
 from app.services.known_airport_funding_lightweight_path_guard import (
+    FUNDING_SOURCE_NAMESPACE_PREFIXES,
     NotLightweightFundingAssertionError,
     check_lightweight_funding_path_eligibility,
 )
@@ -54,8 +55,23 @@ def _airport(session, name="Test Airport", code="ZZZ") -> Airport:
     return airport
 
 
-def _source(session, title="USAspending grant: Test Recipient") -> Source:
-    source = Source(title=title, source_type="usaspending_grant")
+_source_counter = iter(range(1_000_000))
+
+
+_NO_DEFAULT = object()
+
+
+def _source(session, title="USAspending grant: Test Recipient", external_id=_NO_DEFAULT) -> Source:
+    """Defaults to a real "usaspending:" namespace external_id (RWI HQ
+    "Lightweight Funding Eligibility Hardening") - every existing call site
+    in this file represents evidence that SHOULD be eligible for the
+    lightweight path, matching this helper's own pre-existing
+    USAspending-shaped default title. Pass `external_id=None` (missing),
+    `external_id=""` (empty), or a "discovery:"-prefixed string explicitly
+    to build a fixture the namespace check must reject."""
+    if external_id is _NO_DEFAULT:
+        external_id = f"usaspending:test-fixture-{next(_source_counter)}"
+    source = Source(title=title, source_type="usaspending_grant", external_id=external_id)
     session.add(source)
     session.commit()
     return source
@@ -242,7 +258,7 @@ def test_heavy_pipeline_shaped_row_cannot_enter_lightweight_path():
     )
 
     with pytest.raises(NotLightweightFundingAssertionError) as excinfo:
-        check_lightweight_funding_path_eligibility(assertion)
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)
     assert excinfo.value.field == "identity_guard_decision"
 
     with pytest.raises(NotLightweightFundingAssertionError):
@@ -271,7 +287,7 @@ def test_noncanonical_evidence_quality_fails_closed():
     assertion = _lightweight_assertion(session, source, airport, evidence_quality="direct_strong")
 
     with pytest.raises(NotLightweightFundingAssertionError) as excinfo:
-        check_lightweight_funding_path_eligibility(assertion)
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)
     assert excinfo.value.field == "evidence_quality"
     session.close(); engine.dispose()
 
@@ -283,7 +299,7 @@ def test_wrong_assertion_type_fails_closed():
     assertion = _lightweight_assertion(session, source, airport, assertion_type="airport_inventory")
 
     with pytest.raises(NotLightweightFundingAssertionError) as excinfo:
-        check_lightweight_funding_path_eligibility(assertion)
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)
     assert excinfo.value.field == "assertion_type"
     session.close(); engine.dispose()
 
@@ -466,3 +482,192 @@ def test_append_only_history_and_supersession_intact():
         session.flush()
     session.rollback()
     session.close(); engine.dispose()
+
+
+# --- 16-27. Funding-provenance namespace hardening (RWI HQ "Lightweight ----
+# Funding Eligibility Hardening") ---------------------------------------
+
+
+def test_faa_aip_namespace_accepted():
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session, external_id="faa_aip:https://www.faa.gov/x.pdf#ZZZ#deadbeef")
+    assertion = _lightweight_assertion(session, source, airport)
+    check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)  # does not raise
+    session.close(); engine.dispose()
+
+
+def test_usaspending_namespace_accepted():
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session, external_id="usaspending:CONT_AWD_TEST_1")
+    assertion = _lightweight_assertion(session, source, airport)
+    check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)  # does not raise
+    session.close(); engine.dispose()
+
+
+def test_discovery_namespace_rejected():
+    """The real, confirmed SA258 defect this hardening fixes: Research
+    Loop / Selection-KEEP-derived evidence uses the "discovery:" namespace
+    and must never be admitted to the funding review path."""
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session, external_id="discovery:generic_web:deadbeef:cafef00d")
+    assertion = _lightweight_assertion(session, source, airport)
+
+    with pytest.raises(NotLightweightFundingAssertionError) as excinfo:
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)
+    assert excinfo.value.field == "source.external_id"
+    session.close(); engine.dispose()
+
+
+def test_arbitrary_unknown_namespace_rejected():
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session, external_id="some_other_namespace:12345")
+    assertion = _lightweight_assertion(session, source, airport)
+
+    with pytest.raises(NotLightweightFundingAssertionError) as excinfo:
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)
+    assert excinfo.value.field == "source.external_id"
+    session.close(); engine.dispose()
+
+
+def test_missing_source_external_id_rejected():
+    """Passed explicitly as None - e.g. a Source row that was never given
+    an external_id at all."""
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session, external_id=None)
+    assertion = _lightweight_assertion(session, source, airport)
+
+    with pytest.raises(NotLightweightFundingAssertionError) as excinfo:
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=None)
+    assert excinfo.value.field == "source.external_id"
+    session.close(); engine.dispose()
+
+
+def test_empty_string_external_id_rejected():
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session, external_id="")
+    assertion = _lightweight_assertion(session, source, airport)
+
+    with pytest.raises(NotLightweightFundingAssertionError) as excinfo:
+        check_lightweight_funding_path_eligibility(assertion, source_external_id="")
+    assert excinfo.value.field == "source.external_id"
+    session.close(); engine.dispose()
+
+
+def test_missing_source_object_rejected_via_none():
+    """A caller resolving `source_assertion.source` and finding None (a
+    theoretically-orphaned assertion) must pass None through, not fabricate
+    a value - and None is rejected identically to an empty string."""
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session)
+    assertion = _lightweight_assertion(session, source, airport)
+
+    with pytest.raises(NotLightweightFundingAssertionError):
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=None)
+    session.close(); engine.dispose()
+
+
+def test_all_existing_assertion_shape_checks_still_enforced_alongside_namespace():
+    """The namespace check is ADDITIVE - a row with a valid funding
+    namespace but a violated assertion-shape field must still fail, on
+    that field, not silently pass because the namespace happened to be
+    valid."""
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session)  # valid usaspending: namespace
+    assertion = _lightweight_assertion(session, source, airport, evidence_quality="direct_strong")
+
+    with pytest.raises(NotLightweightFundingAssertionError) as excinfo:
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)
+    assert excinfo.value.field == "evidence_quality"
+    session.close(); engine.dispose()
+
+
+def test_sa258_shaped_fixture_rejected_end_to_end():
+    """Reproduces the real, confirmed production defect exactly: a
+    known-airport-staged, assertion_type='project_construction' row from
+    the "discovery:" namespace (Selection/KEEP -> persist_selected_fragments
+    --known-airport-id shape) must be refused by BOTH lightweight services,
+    not merely by the bare guard function."""
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session, title="Discovered web page", external_id="discovery:generic_web:abc:def")
+    assertion = _lightweight_assertion(session, source, airport)
+
+    with pytest.raises(NotLightweightFundingAssertionError):
+        record_lightweight_funding_reviewer_action(
+            session, assertion, action="APPROVE_SIGNAL", reason="x", reviewer="human:reviewer@example.test",
+        )
+    with pytest.raises(NotLightweightFundingAssertionError):
+        create_signal_from_lightweight_funding_review(session, assertion, **_BASE_FIELDS)
+    assert session.query(ReviewerAction).count() == 0
+    assert session.query(Signal).count() == 0
+    session.close(); engine.dispose()
+
+
+def test_sa255_sa256_sa257_shaped_fixtures_accepted():
+    """FAA-AIP-namespaced, known-airport-staged funding evidence (the real
+    SA255/256/257 shape) remains fully accepted through both services."""
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session, title="AIP grant: test", external_id="faa_aip:https://www.faa.gov/x.pdf#ZZZ#deadbeef")
+    assertion = _lightweight_assertion(session, source, airport)
+
+    action = _approve(session, assertion)
+    assert action.action == "APPROVE_SIGNAL"
+
+    result = create_signal_from_lightweight_funding_review(session, assertion, **_BASE_FIELDS)
+    session.commit()
+    assert result.created is True
+    assert result.signal.published is False
+    session.close(); engine.dispose()
+
+
+def test_both_services_use_the_same_hardened_gate_no_bypass():
+    """AST-level: both callers must import check_lightweight_funding_path_eligibility
+    from the SAME guard module - never a second, parallel eligibility
+    implementation that could silently omit the namespace check."""
+    import ast
+    import inspect
+
+    from app.services import known_airport_funding_reviewer_action as reviewer_module
+    from app.services import known_airport_funding_signal_creation as signal_module
+
+    for module in (reviewer_module, signal_module):
+        tree = ast.parse(inspect.getsource(module))
+        imports = [
+            alias.name
+            for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module == "app.services.known_airport_funding_lightweight_path_guard"
+            for alias in node.names
+        ]
+        assert "check_lightweight_funding_path_eligibility" in imports
+
+
+def test_no_db_mutation_during_eligibility_check():
+    engine, session = make_session()
+    airport = _airport(session)
+    source = _source(session)
+    assertion = _lightweight_assertion(session, source, airport)
+
+    before_sa = (assertion.id, assertion.signal_id, assertion.review_state)
+    before_counts = (session.query(Source).count(), session.query(SourceAssertion).count(), session.query(Signal).count(), session.query(ReviewerAction).count())
+
+    with pytest.raises(NotLightweightFundingAssertionError):
+        check_lightweight_funding_path_eligibility(assertion, source_external_id="discovery:x")
+    check_lightweight_funding_path_eligibility(assertion, source_external_id=source.external_id)
+
+    after_sa = (assertion.id, assertion.signal_id, assertion.review_state)
+    after_counts = (session.query(Source).count(), session.query(SourceAssertion).count(), session.query(Signal).count(), session.query(ReviewerAction).count())
+    assert before_sa == after_sa
+    assert before_counts == after_counts
+    session.close(); engine.dispose()
+
+
+def test_namespace_prefixes_are_exactly_the_two_evidenced_values():
+    assert FUNDING_SOURCE_NAMESPACE_PREFIXES == ("faa_aip:", "usaspending:")

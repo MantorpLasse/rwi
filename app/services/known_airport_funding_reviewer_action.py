@@ -36,6 +36,12 @@ identity check itself is never invoked here - the lightweight guard's own
 field-shape check (airport_id already resolved by the known-Airport staging
 seam's own governed construction, per that module's docstring) IS this
 path's identity-sufficiency proxy, exactly as the recon mission concluded.
+As of RWI HQ "Lightweight Funding Eligibility Hardening", that same gate
+also requires the SourceAssertion's own Source.external_id to carry a real
+funding-provenance namespace (see the guard module's own
+FUNDING_SOURCE_NAMESPACE_PREFIXES) - this function resolves
+`source_assertion.source` itself (a normal relationship access, not a new
+query pattern for this module) and passes the value through explicitly.
 
 MARK_DUPLICATE keeps every existing requirement from the DB CHECK constraints
 on `reviewer_actions` unchanged: `duplicate_of_signal_id` is required and
@@ -127,8 +133,15 @@ def record_lightweight_funding_reviewer_action(
         raise ValueError("referenced SourceAssertion does not exist")
 
     # The lightweight-path gate - see module docstring "GATE". Applied
-    # uniformly to all four supported actions.
-    check_lightweight_funding_path_eligibility(source_assertion)
+    # uniformly to all four supported actions. source_external_id is
+    # resolved here (a normal relationship access on an already-live,
+    # already-validated ORM object) and passed explicitly - the guard
+    # function itself never touches the relationship (RWI HQ "Lightweight
+    # Funding Eligibility Hardening").
+    source = source_assertion.source
+    check_lightweight_funding_path_eligibility(
+        source_assertion, source_external_id=source.external_id if source is not None else None,
+    )
 
     if action == "MARK_DUPLICATE":
         if duplicate_of_signal_id is None:

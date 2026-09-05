@@ -186,7 +186,13 @@ def _check_lightweight_governance_gates(session: Session, source_assertion: Sour
     the latest ReviewerAction. Raises ValueError (or
     NotLightweightFundingAssertionError, a ValueError subclass) for any
     unmet precondition."""
-    check_lightweight_funding_path_eligibility(source_assertion)
+    # source_external_id resolved here, exactly like the ReviewerAction
+    # sibling module - the guard function itself never touches the
+    # relationship (RWI HQ "Lightweight Funding Eligibility Hardening").
+    source = source_assertion.source
+    check_lightweight_funding_path_eligibility(
+        source_assertion, source_external_id=source.external_id if source is not None else None,
+    )
 
     if source_assertion.airport_id is None:
         raise ValueError("source_assertion.airport_id is required for lightweight funding Signal creation")

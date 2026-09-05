@@ -355,7 +355,7 @@ def test_lightweight_funding_guard_accepts_the_staged_resolved_assertion(session
 
     with session_factory() as session:
         assertion = session.scalar(select(SourceAssertion))
-        check_lightweight_funding_path_eligibility(assertion)  # must not raise
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=assertion.source.external_id)  # must not raise
 
 
 def test_import_all_fails_closed_and_preserves_evidence_for_beneficiary_only_match(session_factory):

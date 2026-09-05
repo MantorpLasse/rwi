@@ -371,7 +371,7 @@ def test_import_year_stages_evidence_for_tracked_airport_creates_no_signal(sessi
         assert "Construct Engineered Material Arresting System Safety Area" in assertion.raw_relevant_text
         assert assertion.evidence_quality == "unverified_candidate"
         assert assertion.review_state == "unreviewed"
-        check_lightweight_funding_path_eligibility(assertion)  # Slice B guard compatibility
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=assertion.source.external_id)  # Slice B guard compatibility
 
 
 def test_import_year_never_creates_signal_even_on_emas_keyword_match(session_factory):
@@ -602,7 +602,7 @@ def test_sdf_synthetic_acceptance_case(session_factory):
         assert "None" not in assertion.raw_relevant_text
 
         # Slice B guard compatibility
-        check_lightweight_funding_path_eligibility(assertion)
+        check_lightweight_funding_path_eligibility(assertion, source_external_id=assertion.source.external_id)
 
     # replay is idempotent
     def fake_parse_2(pdf_bytes, *, source_pdf_url):
