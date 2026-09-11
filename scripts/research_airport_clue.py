@@ -150,6 +150,17 @@ def _parser() -> argparse.ArgumentParser:
         "airport yet, this flag is a no-op and the existing search plan runs unchanged. "
         "Without this flag, behavior is byte-for-behavior identical to before this mission.",
     )
+    parser.add_argument(
+        "--follow-up-official-hubs", action="store_true",
+        help="RWI HQ 'Bounded Official-Hub Follow-Up Discovery' mission. Opt-in, default OFF. "
+        "Requires --use-official-domain-discovery to have resolved a governed official domain - "
+        "with no such domain, this flag is a documented no-op and the existing search plan runs "
+        "unchanged. When both hold, at most 2 already-discovered official hub/navigation pages "
+        "(app.services.official_hub_followup - board/meeting/minutes/agenda/documents/resources/"
+        "capital/projects/bids/proposals-shaped URLs on the selected domain) are fetched "
+        "read-only and their own same-domain document links (at most 20 per hub) are folded back "
+        "into discovery as ordinary candidates - never as evidence, never recursively.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text.")
     return parser
 
@@ -200,7 +211,7 @@ def _candidates_for(report: ResearchLoopReport, dimension: ResearchDimension):
 def _print_human(
     report: ResearchLoopReport, *, network_used: bool, use_literal_anchors: bool,
     official_domain_discovery_enabled: bool = False, known_official_hostnames: "tuple[str, ...]" = (),
-    official_domain_reason: "str | None" = None,
+    official_domain_reason: "str | None" = None, follow_up_official_hubs_enabled: bool = False,
 ) -> None:
     print(_DISCLAIMER)
 
@@ -237,6 +248,9 @@ def _print_human(
                 "Known official hostname(s) for this airport: none found - running the "
                 "existing search plan unchanged."
             )
+    print(f"Official-hub follow-up: {'ENABLED' if follow_up_official_hubs_enabled else 'disabled'}")
+    if follow_up_official_hubs_enabled and not report.official_domain:
+        print("Official-hub follow-up: no governed official domain resolved - no-op, existing plan unchanged.")
     print("\nSearch candidates are not evidence and do not resolve the research question.")
 
     for q in report.questions:
@@ -278,6 +292,23 @@ def _print_human(
         for qo in report.official_domain_query_outcomes:
             print(f"  [{qo.outcome.status.value}] {qo.search_query.rendered} ({len(qo.outcome.results)} results)")
 
+    if report.hub_follow_up_outcomes:
+        print(f"\nOFFICIAL-HUB FOLLOW-UP (eligible hubs attempted: {len(report.hub_follow_up_outcomes)})")
+        for hub_outcome in report.hub_follow_up_outcomes:
+            status = "fetched" if hub_outcome.fetched else "skipped"
+            print(f"  [{status}] {hub_outcome.hub_url} -> {hub_outcome.candidate_count} candidate(s)" + (f" ({hub_outcome.reason})" if hub_outcome.reason else ""))
+        follow_up_urls = {
+            c.triaged.deduped.result.url for c in report.triaged_candidates
+            if c.triaged.deduped.result.provider == "official_hub_followup"
+        }
+        if follow_up_urls:
+            print("  Follow-up candidate URLs:")
+            for c in report.triaged_candidates:
+                if c.triaged.deduped.result.provider != "official_hub_followup":
+                    continue
+                origin = c.triaged.deduped.result.query.identity_value
+                print(f"    {c.triaged.deduped.result.url}  (origin hub: {origin})")
+
     outcomes = [qo.outcome for qo in report.query_outcomes] + [
         qo.outcome for qo in report.official_domain_query_outcomes
     ]
@@ -303,7 +334,7 @@ def _print_human(
 def _print_json(
     report: ResearchLoopReport, *, network_used: bool, use_literal_anchors: bool,
     official_domain_discovery_enabled: bool = False, known_official_hostnames: "tuple[str, ...]" = (),
-    official_domain_reason: "str | None" = None,
+    official_domain_reason: "str | None" = None, follow_up_official_hubs_enabled: bool = False,
 ) -> None:
     context = report.clue.airport_context
     anchors = extract_literal_anchors(report.clue.evidence_text, airport_context=context) if use_literal_anchors else ()
@@ -330,6 +361,23 @@ def _print_json(
                 "error": qo.outcome.error, "result_count": len(qo.outcome.results),
             }
             for qo in report.official_domain_query_outcomes
+        ],
+        "follow_up_official_hubs_enabled": follow_up_official_hubs_enabled,
+        "hub_follow_up_outcomes": [
+            {
+                "hub_url": o.hub_url, "fetched": o.fetched,
+                "candidate_count": o.candidate_count, "reason": o.reason,
+            }
+            for o in report.hub_follow_up_outcomes
+        ],
+        "hub_follow_up_candidates": [
+            {
+                "url": c.triaged.deduped.result.url, "title": c.triaged.deduped.result.title,
+                "origin_hub": c.triaged.deduped.result.query.identity_value,
+                "priority_band": c.triaged.band.value,
+            }
+            for c in report.triaged_candidates
+            if c.triaged.deduped.result.provider == "official_hub_followup"
         ],
         "questions": [
             {
@@ -428,6 +476,7 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     provider: "SearchProvider | None" = PROVIDER_REGISTRY["brave"] if args.allow_live_network else None
     report = run_research_loop(
         clue, provider=provider, use_literal_anchors=args.use_literal_anchors, official_domain=official_domain,
+        follow_up_official_hubs=args.follow_up_official_hubs,
     )
 
     if args.json:
@@ -435,12 +484,14 @@ def main(argv: "Sequence[str] | None" = None) -> int:
             report, network_used=args.allow_live_network, use_literal_anchors=args.use_literal_anchors,
             official_domain_discovery_enabled=args.use_official_domain_discovery,
             known_official_hostnames=known_official_hostnames, official_domain_reason=official_domain_reason,
+            follow_up_official_hubs_enabled=args.follow_up_official_hubs,
         )
     else:
         _print_human(
             report, network_used=args.allow_live_network, use_literal_anchors=args.use_literal_anchors,
             official_domain_discovery_enabled=args.use_official_domain_discovery,
             known_official_hostnames=known_official_hostnames, official_domain_reason=official_domain_reason,
+            follow_up_official_hubs_enabled=args.follow_up_official_hubs,
         )
     return 0
 

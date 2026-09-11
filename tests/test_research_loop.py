@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import httpx
+import pytest
+
 from app.discovery.query import SearchQuery
 from app.discovery.search import SearchOutcome, SearchOutcomeStatus, SearchResult
 from app.discovery.triage import PriorityBand
@@ -34,6 +37,25 @@ ALL_FIVE_DIMENSIONS = (
 
 # RUNWAY_END=1 + INSTALLATION_TYPE=2 + PROJECT_PHASE=2 + TIMING=1 + SUPPLIER=1
 TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE = 7
+
+
+@pytest.fixture(autouse=True)
+def _no_real_dns(monkeypatch):
+    """RWI HQ "Bounded Official-Hub Follow-Up Discovery" mission's own
+    explicit "NO live network dependency in unit tests" requirement: the
+    hub-follow-up tests below exercise real validate_fetch_target() calls
+    against "flylouisville.com" through the injected fake client - this
+    guarantees that never becomes a real DNS lookup, regardless of this
+    test-running machine's own internet access (matching
+    tests/test_generic_web_provider.py's own established convention).
+    Inert for every other test in this file, which never touches a real
+    socket at all."""
+    import socket
+
+    def fake_getaddrinfo(host, port):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
 SDF_EVIDENCE_TEXT = (
     "Reconstruct Taxiway,Construct Engineered Material Arresting System Safety Area,"
@@ -625,3 +647,147 @@ def test_official_domain_query_never_attributed_a_dimension():
     report = run_research_loop(clue, provider=_FakeProvider(canned), official_domain="flylouisville.com")
     candidate = next(t for t in report.triaged_candidates if "only-domain-hit" in t.triaged.deduped.result.url)
     assert candidate.dimensions == ()
+
+
+# --- Bounded official-hub follow-up (RWI HQ "Bounded Official-Hub
+# Follow-Up Discovery" mission) - wired through run_research_loop() -----------
+
+
+class _FakeHubStreamResponse:
+    def __init__(self, status_code=200, *, headers=None, content=b"", url="https://flylouisville.com/hub"):
+        self.status_code = status_code
+        self.headers = httpx.Headers(headers or {})
+        self._content = content
+        self.url = httpx.URL(url)
+
+    @property
+    def is_redirect(self):
+        return False
+
+    def iter_bytes(self):
+        yield self._content
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _FakeHubGetResponse:
+    status_code = 404
+    text = ""
+
+
+class _FakeHubFetchClient:
+    """Supports both .stream() (the hub-page fetch) and .get() (the
+    robots.txt check) - independent copy of
+    tests/test_official_hub_followup.py's own _FakeHubClient, matching
+    this repo's own established per-test-file convention."""
+
+    def __init__(self, html_by_url):
+        self._html_by_url = html_by_url
+        self.stream_calls = []
+
+    def stream(self, method, url, **kwargs):
+        self.stream_calls.append(url)
+        html = self._html_by_url.get(url, "<html><body></body></html>")
+        return _FakeHubStreamResponse(headers={"content-type": "text/html"}, content=html.encode("utf-8"), url=url)
+
+    def get(self, url, **kwargs):
+        return _FakeHubGetResponse()
+
+    def close(self):
+        pass
+
+
+_HUB_HTML = '<html><body><a href="/wp-content/uploads/2026/02/board-minutes-feb-2026.pdf">Feb 2026 minutes</a></body></html>'
+
+
+def test_follow_up_default_false_leaves_behavior_unchanged():
+    clue = _sdf_clue()
+    without = run_research_loop(clue, provider=_FakeProvider({}), official_domain="flylouisville.com")
+    explicit_false = run_research_loop(clue, provider=_FakeProvider({}), official_domain="flylouisville.com", follow_up_official_hubs=False)
+    assert without == explicit_false
+    assert without.hub_follow_up_outcomes == ()
+
+
+def test_follow_up_enabled_without_official_domain_is_documented_noop():
+    clue = _sdf_clue()
+    report = run_research_loop(clue, provider=_FakeProvider({}), follow_up_official_hubs=True)
+    assert report.official_domain is None
+    assert report.hub_follow_up_outcomes == ()
+
+
+def test_follow_up_enabled_fetches_hub_and_merges_extracted_candidate():
+    clue = _sdf_clue()
+    domain_plan = run_research_loop(clue, provider=None, official_domain="flylouisville.com").official_domain_queries
+    hub_url = "https://flylouisville.com/corporate/lraa-board-meeting-minutes/"
+    canned = {
+        domain_plan[0].rendered: SearchOutcome(
+            query=domain_plan[0], status=SearchOutcomeStatus.OK,
+            results=(_result(domain_plan[0], hub_url, title="LRAA Board Meeting Minutes"),),
+        )
+    }
+    hub_client = _FakeHubFetchClient({hub_url: _HUB_HTML})
+
+    report = run_research_loop(
+        clue, provider=_FakeProvider(canned), official_domain="flylouisville.com",
+        follow_up_official_hubs=True, hub_fetch_client=hub_client,
+    )
+
+    assert len(report.hub_follow_up_outcomes) == 1
+    assert report.hub_follow_up_outcomes[0].hub_url == hub_url
+    assert report.hub_follow_up_outcomes[0].fetched is True
+    extracted_urls = {t.triaged.deduped.result.url for t in report.triaged_candidates}
+    assert "https://flylouisville.com/wp-content/uploads/2026/02/board-minutes-feb-2026.pdf" in extracted_urls
+    extracted = next(t for t in report.triaged_candidates if t.triaged.deduped.result.url.endswith("board-minutes-feb-2026.pdf"))
+    assert extracted.triaged.deduped.result.provider == "official_hub_followup"
+
+
+def test_follow_up_dedupes_extracted_link_against_an_independently_found_hit():
+    clue = _sdf_clue()
+    domain_plan = run_research_loop(clue, provider=None, official_domain="flylouisville.com").official_domain_queries
+    hub_url = "https://flylouisville.com/corporate/lraa-board-meeting-minutes/"
+    pdf_url = "https://flylouisville.com/wp-content/uploads/2026/02/board-minutes-feb-2026.pdf"
+    canned = {
+        domain_plan[0].rendered: SearchOutcome(
+            query=domain_plan[0], status=SearchOutcomeStatus.OK,
+            results=(
+                _result(domain_plan[0], hub_url, title="LRAA Board Meeting Minutes"),
+                _result(domain_plan[0], pdf_url, title="Feb 2026 minutes PDF", snippet=""),
+            ),
+        )
+    }
+    hub_client = _FakeHubFetchClient({hub_url: _HUB_HTML})
+
+    report = run_research_loop(
+        clue, provider=_FakeProvider(canned), official_domain="flylouisville.com",
+        follow_up_official_hubs=True, hub_fetch_client=hub_client,
+    )
+
+    matching = [t for t in report.triaged_candidates if t.triaged.deduped.result.url == pdf_url]
+    assert len(matching) == 1  # deduplicated, not duplicated
+    assert len(matching[0].triaged.deduped.found_by) == 2  # both the real query AND the follow-up link
+
+
+def test_follow_up_never_fetches_more_than_max_hub_fetches():
+    from app.services.official_hub_followup import MAX_HUB_FETCHES
+
+    clue = _sdf_clue()
+    domain_plan = run_research_loop(clue, provider=None, official_domain="flylouisville.com").official_domain_queries
+    hub_urls = [f"https://flylouisville.com/corporate/board-meeting-{i}/" for i in range(5)]
+    canned = {
+        domain_plan[0].rendered: SearchOutcome(
+            query=domain_plan[0], status=SearchOutcomeStatus.OK,
+            results=tuple(_result(domain_plan[0], u, title=f"Board meeting {i}") for i, u in enumerate(hub_urls)),
+        )
+    }
+    hub_client = _FakeHubFetchClient({u: "<html><body></body></html>" for u in hub_urls})
+
+    report = run_research_loop(
+        clue, provider=_FakeProvider(canned), official_domain="flylouisville.com",
+        follow_up_official_hubs=True, hub_fetch_client=hub_client,
+    )
+    assert len(report.hub_follow_up_outcomes) == MAX_HUB_FETCHES == 2
+    assert len(hub_client.stream_calls) == 2

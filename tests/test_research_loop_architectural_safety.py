@@ -101,6 +101,16 @@ def test_imports_only_authorized_runtime_types():
         # separately and passes it in as a plain str, preserving this
         # module's own zero-database-access guarantee unchanged.
         "app.discovery.query",
+        # RWI HQ "Bounded Official-Hub Follow-Up Discovery" mission: the
+        # explicit, default-False opt-in seam for the bounded second-hop
+        # hub-page follow-up (at most 2 pages, depth 1 - see
+        # app.services.official_hub_followup's own docstring for the
+        # full contract, and for why THAT module, not this one, is the
+        # one allowed to import app.acquisition.generic_web/
+        # app.services.generic_web_fetch/httpx directly - this module
+        # still never imports any of those itself, it only calls the
+        # one function this module exposes).
+        "app.services.official_hub_followup",
     }
 
 

@@ -109,6 +109,7 @@ from app.discovery.identity import AirportIdentity
 from app.discovery.query import SearchQuery, plan_official_domain_document_queries
 from app.discovery.search import SearchOutcome, SearchOutcomeStatus, SearchProvider
 from app.discovery.triage import TriagedResult, triage_results
+from app.services.official_hub_followup import HubFollowUpOutcome, discover_official_hub_followups
 from app.services.research_literal_anchors import plan_research_search_queries_with_anchors
 from app.services.research_question_planning import (
     PlannedResearchQuery,
@@ -217,7 +218,19 @@ class ResearchLoopReport:
     SearchOutcome, exactly like `query_outcomes` does for the dimension
     plan - kept as a SEPARATE tuple rather than merged into
     `query_outcomes` because these queries answer no ResearchDimension
-    (see OfficialDomainQueryOutcome's own docstring)."""
+    (see OfficialDomainQueryOutcome's own docstring).
+
+    `hub_follow_up_outcomes` (RWI HQ "Bounded Official-Hub Follow-Up
+    Discovery" mission) defaults to () - every existing caller that never
+    passes `follow_up_official_hubs=True` gets this field at its empty
+    default, byte-for-behavior identical to before this mission. When
+    populated, one HubFollowUpOutcome per hub page this run attempted to
+    follow (diagnostic-only, see that type's own docstring) - the
+    SearchResult candidates it extracted are NOT carried separately here;
+    they are already folded into `triaged_candidates` above, via the SAME
+    dedup/triage pass every other candidate goes through (see
+    run_research_loop()'s own docstring for the exact combine-then-
+    re-triage order)."""
 
     clue: ResearchClue
     questions: "tuple[ResearchQuestion, ...]"
@@ -227,6 +240,7 @@ class ResearchLoopReport:
     official_domain: "str | None" = None
     official_domain_queries: "tuple[SearchQuery, ...]" = ()
     official_domain_query_outcomes: "tuple[OfficialDomainQueryOutcome, ...]" = ()
+    hub_follow_up_outcomes: "tuple[HubFollowUpOutcome, ...]" = ()
 
 
 def _dimensions_for(
@@ -280,6 +294,8 @@ def run_research_loop(
     provider: "SearchProvider | None" = None,
     use_literal_anchors: bool = False,
     official_domain: "str | None" = None,
+    follow_up_official_hubs: bool = False,
+    hub_fetch_client: "httpx.Client | None" = None,
 ) -> ResearchLoopReport:
     """Pure orchestration (aside from the one injected provider.search()
     call per planned query) - no database, no file, no persistence of any
@@ -329,6 +345,30 @@ def run_research_loop(
     populated (even in provider=None plan-only mode) so a caller can
     inspect exactly what would run before spending network budget,
     exactly like `planned_queries` already does for the dimension plan.
+
+    `follow_up_official_hubs` (RWI HQ "Bounded Official-Hub Follow-Up
+    Discovery" mission, default False - existing callers/behavior are
+    completely unaffected unless this is explicitly passed True): only
+    has any effect when a live `provider` was supplied AND `official_domain`
+    resolved to a real value - a follow-up pass with no known official
+    domain has nothing to scope itself to, and is a documented no-op, not
+    an error. When both conditions hold, EXACTLY ONE extra round happens,
+    never a recursive one: the FIRST triage pass's own results are handed
+    to app.services.official_hub_followup.discover_official_hub_followups()
+    (that module's own docstring has the full eligibility/fetch/extract
+    contract - at most 2 hub pages fetched, at most 20 links kept per
+    hub, same official domain only, depth exactly 1), any extracted
+    SearchResult candidates are appended to `all_results`, and
+    deduplicate_results()/triage_results() are RE-RUN once, over the
+    combined set - so a link independently also found by a real query is
+    deduplicated to one candidate with both provenances preserved,
+    exactly like the official-domain-query/dimension-query overlap case
+    above. `hub_fetch_client` is an optional injected httpx.Client,
+    exposed purely so tests can supply a fake one (matching every other
+    optional `client` parameter already threaded through this
+    repository's fetch code) - production callers should leave it None.
+    `hub_follow_up_outcomes` on the returned report lists every hub this
+    run attempted, diagnostic-only.
     """
     questions = plan_research_questions(clue)
     planned_queries = (
@@ -346,6 +386,7 @@ def run_research_loop(
             official_domain=official_domain,
             official_domain_queries=official_domain_queries,
             official_domain_query_outcomes=(),
+            hub_follow_up_outcomes=(),
         )
 
     query_outcomes: list[QueryOutcome] = []
@@ -370,6 +411,22 @@ def run_research_loop(
     official_domains = frozenset({official_domain}) if official_domain else None
     triaged = triage_results(deduped, identity=identity, official_domains=official_domains)
 
+    # RWI HQ "Bounded Official-Hub Follow-Up Discovery" mission: ONE extra,
+    # non-recursive round, only when both explicitly opted in AND a real
+    # official domain is known - see this function's own docstring for the
+    # exact contract. Re-triaging the COMBINED set (never just the extras
+    # alone) is what lets a link independently also found by a real query
+    # dedup to one candidate with both provenances preserved.
+    hub_follow_up_outcomes: "tuple[HubFollowUpOutcome, ...]" = ()
+    if follow_up_official_hubs and official_domain:
+        extra_results, hub_follow_up_outcomes = discover_official_hub_followups(
+            triaged, official_domain, client=hub_fetch_client,
+        )
+        if extra_results:
+            all_results = all_results + extra_results
+            deduped = deduplicate_results(all_results)
+            triaged = triage_results(deduped, identity=identity, official_domains=official_domains)
+
     rendered_to_query = {p.search_query.rendered: p for p in planned_queries}
     triaged_candidates = tuple(
         TriagedCandidate(triaged=t, dimensions=_dimensions_for(t, rendered_to_query))
@@ -385,4 +442,5 @@ def run_research_loop(
         official_domain=official_domain,
         official_domain_queries=official_domain_queries,
         official_domain_query_outcomes=tuple(official_domain_query_outcomes),
+        hub_follow_up_outcomes=hub_follow_up_outcomes,
     )

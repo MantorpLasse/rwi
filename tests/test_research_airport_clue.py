@@ -570,3 +570,64 @@ def test_smarter_selection_prefers_signal_backed_domain_over_alphabetically_earl
     assert "source domain used by published Signal(s)" in out
     assert "site:zzz-operator.example.com EMAS" in out
     assert "site:aaa-regulator.example.gov" not in out
+
+
+# --- Bounded official-hub follow-up CLI opt-in (RWI HQ "Bounded
+# Official-Hub Follow-Up Discovery" mission) --------------------------------
+
+
+def test_hub_followup_flag_omitted_reports_disabled(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+    exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Official-hub follow-up: disabled" in out
+
+
+def test_hub_followup_flag_without_official_domain_is_documented_noop(tmp_path, capsys):
+    """--follow-up-official-hubs without --use-official-domain-discovery
+    (or with it but nothing governed) resolves no official_domain - a
+    safe, explained no-op, never a crash."""
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)  # no airport_id, no official domain possible
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--follow-up-official-hubs",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Official-hub follow-up: ENABLED" in out
+    assert "no governed official domain resolved - no-op" in out
+
+
+def test_hub_followup_flag_with_domain_but_no_eligible_hub_makes_no_network_call(tmp_path, capsys, monkeypatch):
+    """A resolved official domain with zero hub-shaped/high-enough-band
+    candidates in the discovered set never triggers a real fetch -
+    deterministic, no network."""
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path, official_url="https://www.flylouisville.com/x.pdf")
+    monkeypatch.setitem(cli.PROVIDER_REGISTRY, "brave", _FakeProvider({}))  # no results at all -> nothing hub-eligible
+
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS,
+        "--use-official-domain-discovery", "--follow-up-official-hubs", "--allow-live-network", "--json",
+    ])
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["follow_up_official_hubs_enabled"] is True
+    assert payload["official_domain_selected"] == "flylouisville.com"
+    assert payload["hub_follow_up_outcomes"] == []
+    assert payload["hub_follow_up_candidates"] == []
+
+
+def test_hub_followup_flag_never_writes_to_database(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path, official_url="https://www.flylouisville.com/x.pdf")
+    before = open(db_path, "rb").read()
+    cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS,
+        "--use-official-domain-discovery", "--follow-up-official-hubs",
+    ])
+    after = open(db_path, "rb").read()
+    assert before == after
