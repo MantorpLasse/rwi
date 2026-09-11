@@ -74,7 +74,7 @@ from app.discovery.brave_search_provider import BraveSearchProvider
 from app.discovery.search import SearchOutcomeStatus, SearchProvider
 from app.models import SourceAssertion
 from app.services.discovery_temporal_followup import AirportSearchContext, AirportSearchContextError
-from app.services.official_domain_discovery import get_known_official_hostnames
+from app.services.official_domain_discovery import rank_official_hostnames
 from app.services.research_literal_anchors import extract_literal_anchors
 from app.services.research_loop import ResearchLoopReport, compute_dimension_search_status, run_research_loop
 from app.services.research_question_planning import ResearchClue, ResearchClueError, ResearchDimension
@@ -137,17 +137,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--use-official-domain-discovery", action="store_true",
-        help="RWI HQ 'Official-Domain Document Discovery Pass' mission. Opt-in, default OFF. "
-        "When given, derives this SourceAssertion's airport's known official hostname(s) "
-        "read-only (app.services.official_domain_discovery - only Source rows already "
-        "governed with reliability_level=='official' and already connected to the airport "
-        "via an existing SourceAssertion/Signal row), and, if at least one is found, adds a "
-        "fixed, hard-capped 4-query site-restricted document pass for exactly ONE of them "
-        "(the alphabetically-first, for determinism - never all of them, to avoid an "
-        "unbounded per-domain query multiplication). If no governed official domain exists "
-        "for this airport yet, this flag is a no-op and the existing search plan runs "
-        "unchanged. Without this flag, behavior is byte-for-behavior identical to before "
-        "this mission.",
+        help="RWI HQ 'Official-Domain Document Discovery Pass' / 'Smarter Domain Selection' "
+        "missions. Opt-in, default OFF. When given, derives this SourceAssertion's airport's "
+        "known official hostname(s) read-only (app.services.official_domain_discovery - only "
+        "Source rows already governed with reliability_level=='official' and already "
+        "connected to the airport via an existing SourceAssertion/Signal row), ranks them by "
+        "governed relevance (published Signal > any Signal > reviewed SourceAssertion > "
+        "official-Source count > alphabetical tiebreak - see rank_official_hostnames()'s own "
+        "docstring), and adds a fixed, hard-capped 4-query site-restricted document pass for "
+        "exactly the single top-ranked one - never all of them, to avoid an unbounded "
+        "per-domain query multiplication. If no governed official domain exists for this "
+        "airport yet, this flag is a no-op and the existing search plan runs unchanged. "
+        "Without this flag, behavior is byte-for-behavior identical to before this mission.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text.")
     return parser
@@ -199,6 +200,7 @@ def _candidates_for(report: ResearchLoopReport, dimension: ResearchDimension):
 def _print_human(
     report: ResearchLoopReport, *, network_used: bool, use_literal_anchors: bool,
     official_domain_discovery_enabled: bool = False, known_official_hostnames: "tuple[str, ...]" = (),
+    official_domain_reason: "str | None" = None,
 ) -> None:
     print(_DISCLAIMER)
 
@@ -220,10 +222,13 @@ def _print_human(
     print(f"Official-domain discovery: {'ENABLED' if official_domain_discovery_enabled else 'disabled'}")
     if official_domain_discovery_enabled:
         if known_official_hostnames:
-            print(f"Known official hostname(s) for this airport: {', '.join(known_official_hostnames)}")
-            print(
-                f"Selected for the bounded document pass (max 1 per invocation): {report.official_domain}"
-            )
+            print("Known official domains:")
+            for h in known_official_hostnames:
+                print(f"  {h}")
+            print("Selected (max 1 per invocation):")
+            print(f"  {report.official_domain}")
+            print("Reason:")
+            print(f"  {official_domain_reason}")
             print("Official-domain document queries:")
             for q in report.official_domain_queries:
                 print(f"  {q.rendered}")
@@ -298,6 +303,7 @@ def _print_human(
 def _print_json(
     report: ResearchLoopReport, *, network_used: bool, use_literal_anchors: bool,
     official_domain_discovery_enabled: bool = False, known_official_hostnames: "tuple[str, ...]" = (),
+    official_domain_reason: "str | None" = None,
 ) -> None:
     context = report.clue.airport_context
     anchors = extract_literal_anchors(report.clue.evidence_text, airport_context=context) if use_literal_anchors else ()
@@ -316,6 +322,7 @@ def _print_json(
         "official_domain_discovery_enabled": official_domain_discovery_enabled,
         "known_official_hostnames": list(known_official_hostnames),
         "official_domain_selected": report.official_domain,
+        "official_domain_selection_reason": official_domain_reason,
         "official_domain_queries": [q.rendered for q in report.official_domain_queries],
         "official_domain_query_outcomes": [
             {
@@ -379,6 +386,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
         return 2
 
     known_official_hostnames: "tuple[str, ...]" = ()
+    official_domain: "str | None" = None
+    official_domain_reason: "str | None" = None
     engine = create_engine(f"sqlite:///{args.database}")
     with Session(engine) as session:
         try:
@@ -386,20 +395,28 @@ def main(argv: "Sequence[str] | None" = None) -> int:
             if args.use_official_domain_discovery:
                 airport_id = load_source_assertion_airport_id(session, args.source_assertion_id)
                 if airport_id is not None:
-                    known_official_hostnames = get_known_official_hostnames(session, airport_id)
+                    # Deterministic cap (RWI HQ "Official-Domain Document
+                    # Discovery Pass" / "Smarter Domain Selection"
+                    # missions, Part CLI): at most ONE official domain per
+                    # invocation, even when more than one is governed for
+                    # this airport - the single top-ranked hostname by
+                    # governed relevance (see
+                    # app.services.official_domain_discovery.rank_official_hostnames()'s
+                    # own docstring for the exact priority order), never
+                    # all of them (that would silently multiply the query
+                    # budget per domain). No governed domain simply means
+                    # official_domain stays None, and the existing search
+                    # plan runs completely unchanged - this flag is then a
+                    # documented no-op.
+                    rankings = rank_official_hostnames(session, airport_id)
+                    known_official_hostnames = tuple(r.hostname for r in rankings)
+                    if rankings:
+                        official_domain = rankings[0].hostname
+                        official_domain_reason = rankings[0].reason
         except ValueError as exc:
             print(f"Refused: {exc}", file=sys.stderr)
             return 2
     # Session closed here - no database access happens below this point.
-
-    # Deterministic cap (RWI HQ "Official-Domain Document Discovery Pass"
-    # mission, Part CLI): at most ONE official domain per invocation, even
-    # when more than one is governed for this airport - the
-    # alphabetically-first, never all of them (that would silently
-    # multiply the query budget per domain). No governed domain simply
-    # means official_domain stays None, and the existing search plan runs
-    # completely unchanged - this flag is then a documented no-op.
-    official_domain = known_official_hostnames[0] if known_official_hostnames else None
 
     dimensions = tuple(ResearchDimension(d.upper()) for d in args.dimensions)
     try:
@@ -417,13 +434,13 @@ def main(argv: "Sequence[str] | None" = None) -> int:
         _print_json(
             report, network_used=args.allow_live_network, use_literal_anchors=args.use_literal_anchors,
             official_domain_discovery_enabled=args.use_official_domain_discovery,
-            known_official_hostnames=known_official_hostnames,
+            known_official_hostnames=known_official_hostnames, official_domain_reason=official_domain_reason,
         )
     else:
         _print_human(
             report, network_used=args.allow_live_network, use_literal_anchors=args.use_literal_anchors,
             official_domain_discovery_enabled=args.use_official_domain_discovery,
-            known_official_hostnames=known_official_hostnames,
+            known_official_hostnames=known_official_hostnames, official_domain_reason=official_domain_reason,
         )
     return 0
 

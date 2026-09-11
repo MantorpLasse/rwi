@@ -15,7 +15,7 @@ import scripts.research_airport_clue as cli
 from app.database import Base
 from app.discovery.query import SearchQuery
 from app.discovery.search import SearchOutcome, SearchOutcomeStatus, SearchResult
-from app.models import Airport, Source, SourceAssertion
+from app.models import Airport, Signal, Source, SourceAssertion
 
 _NOW = datetime(2026, 9, 4, tzinfo=timezone.utc)
 
@@ -364,8 +364,10 @@ def test_flag_with_known_official_domain_reports_it_and_adds_four_queries(tmp_pa
     out = capsys.readouterr().out
     assert exit_code == 0
     assert "Official-domain discovery: ENABLED" in out
-    assert "Known official hostname(s) for this airport: flylouisville.com" in out
-    assert "Selected for the bounded document pass (max 1 per invocation): flylouisville.com" in out
+    assert "Known official domains:" in out
+    assert "  flylouisville.com" in out
+    assert "Selected (max 1 per invocation):" in out
+    assert "Reason:" in out
     assert "site:flylouisville.com EMAS" in out
     assert "site:flylouisville.com EMAS presentation" in out
     assert "site:flylouisville.com EMAS capital program" in out
@@ -424,6 +426,9 @@ def test_json_official_domain_fields_present_and_correct(tmp_path, capsys, monke
     assert payload["official_domain_discovery_enabled"] is True
     assert payload["known_official_hostnames"] == ["flylouisville.com"]
     assert payload["official_domain_selected"] == "flylouisville.com"
+    assert payload["official_domain_selection_reason"] == (
+        "alphabetical tiebreak (no distinguishing governed Signal/review found)"
+    )
     assert payload["official_domain_queries"] == [
         "site:flylouisville.com EMAS",
         "site:flylouisville.com EMAS presentation",
@@ -445,6 +450,7 @@ def test_json_official_domain_fields_empty_when_flag_omitted(tmp_path, capsys):
     assert payload["official_domain_discovery_enabled"] is False
     assert payload["known_official_hostnames"] == []
     assert payload["official_domain_selected"] is None
+    assert payload["official_domain_selection_reason"] is None
     assert payload["official_domain_queries"] == []
 
 
@@ -493,6 +499,74 @@ def test_multiple_known_domains_deterministically_picks_alphabetically_first(tmp
     ])
     out = capsys.readouterr().out
     assert exit_code == 0
-    assert "flylouisville.com, zzz-later-domain.com" in out  # both reported...
-    assert "Selected for the bounded document pass (max 1 per invocation): flylouisville.com" in out  # ...only one used
+    assert "  flylouisville.com" in out  # both reported...
+    assert "  zzz-later-domain.com" in out
+    assert "Selected (max 1 per invocation):" in out
+    assert "  flylouisville.com" in out  # ...only one used - alphabetical tiebreak (no Signal/review distinction here)
     assert out.count("site:") == 4  # exactly one domain's 4 queries, never 8
+
+
+# --- Smarter selection (RWI HQ "Official-Domain Discovery - Smarter Domain
+# Selection" mission): the CLI must use governed-relevance ranking, not
+# plain alphabetical order, when the two disagree. -------------------------
+
+
+def test_smarter_selection_prefers_signal_backed_domain_over_alphabetically_earlier_one(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Louisville Muhammad Ali International Airport", iata_code="SDF", country="USA")
+        session.add(airport)
+        session.flush()
+
+        clue_source = Source(title="Clue", source_type="aip_grant", reliability_level="official", external_id="faa_aip:test:9")
+        session.add(clue_source)
+        session.flush()
+        clue_sa = SourceAssertion(
+            source_id=clue_source.id, airport_id=airport.id, assertion_type="project_construction",
+            raw_relevant_text=SDF_TEXT, source_locator="page:1;chars:0-100",
+            raw_fragment_hash="deadbeef", artifact_identity="artifact:test-smarter",
+            evidence_quality="unverified_candidate", review_state="unreviewed",
+        )
+        session.add(clue_sa)
+        session.flush()
+        aid = clue_sa.id
+
+        # "aaa..." is alphabetically first but backs only an unreviewed
+        # SourceAssertion - the naive old behavior would have picked this.
+        earlier_alpha = Source(
+            title="Earlier alpha", source_type="Authority", reliability_level="official",
+            url="https://aaa-regulator.example.gov/x.pdf",
+        )
+        session.add(earlier_alpha)
+        session.flush()
+        session.add(SourceAssertion(
+            source_id=earlier_alpha.id, airport_id=airport.id, assertion_type="project_construction",
+            raw_relevant_text="x", source_locator="page:1;chars:0-10",
+            raw_fragment_hash="hasha", artifact_identity="artifact:test-smarter-a",
+            evidence_quality="unverified_candidate", review_state="unreviewed",
+        ))
+
+        # "zzz..." is alphabetically last but backs a real, published Signal.
+        later_alpha = Source(
+            title="Later alpha", source_type="Authority", reliability_level="official",
+            url="https://zzz-operator.example.com/x.pdf",
+        )
+        session.add(later_alpha)
+        session.flush()
+        session.add(Signal(
+            airport_id=airport.id, source_id=later_alpha.id, title="Governed signal",
+            category="new_installation", confidence="high", status="identified", published=True,
+        ))
+        session.commit()
+
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--use-official-domain-discovery",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Selected (max 1 per invocation):\n  zzz-operator.example.com" in out
+    assert "source domain used by published Signal(s)" in out
+    assert "site:zzz-operator.example.com EMAS" in out
+    assert "site:aaa-regulator.example.gov" not in out
