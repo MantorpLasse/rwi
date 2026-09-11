@@ -91,6 +91,16 @@ def test_imports_only_authorized_runtime_types():
         # planning (Slice 5E). Reused unmodified - see
         # run_research_loop's own docstring for the exact contract.
         "app.services.research_literal_anchors",
+        # RWI HQ "Official-Domain Document Discovery Pass" mission: the
+        # explicit, default-None opt-in seam for the fixed 4-query
+        # official-domain document pass (SearchQuery type + the pure
+        # plan_official_domain_document_queries() planner). Note this
+        # module still never imports app.services.official_domain_discovery
+        # itself (that module touches the database) - the caller (e.g.
+        # scripts/research_airport_clue.py) derives the domain string
+        # separately and passes it in as a plain str, preserving this
+        # module's own zero-database-access guarantee unchanged.
+        "app.discovery.query",
     }
 
 

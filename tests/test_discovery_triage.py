@@ -544,3 +544,119 @@ def test_10b1_non_triage_cli_output_unaffected_by_vocabulary_split(capsys):
     assert exit_code == 0
     assert "Generated 12 deterministic queries" in out
     assert "NO SEARCH PROVIDER CONFIGURED" in out
+
+
+# --- 16-20: Official-domain bonus (RWI HQ "Official-Domain Document
+# Discovery Pass" mission - SDF/flylouisville.com benchmark) -----------------
+
+_SDF_IDENTITY = AirportIdentity(name="Louisville Muhammad Ali International Airport", iata_code="SDF", icao_code="KSDF")
+_FLYLOUISVILLE = frozenset({"flylouisville.com"})
+
+
+# 16 (Part 8.A). A flylouisville.com PDF with a strong concept term in the
+# title ranks above unrelated same-keyword noise (Denver's own,
+# structurally identical 17L/35R runway project - a real false-positive
+# risk this mission's own recon found live).
+def test_official_domain_pdf_with_emas_title_outranks_denver_17l35r_noise():
+    official = _result(
+        title="East Runway Engineered Materials Arresting System (EMAS) - flylouisville.com",
+        url="https://www.flylouisville.com/wp-content/uploads/2025/02/SDF-2024-Year-End-Briefing.pdf",
+    )
+    denver_noise = _result(
+        title="Runway 17L-35R Pavement Rehabilitation and Electrical Upgrades",
+        url="https://projects.constructconnect.com/details/6119033-runway-17l-35r-pavement-rehabilitation",
+    )
+    triaged = triage_results(
+        [_deduped(official), _deduped(denver_noise)], identity=_SDF_IDENTITY, official_domains=_FLYLOUISVILLE,
+    )
+    bands = {t.deduped.result.url: t.band for t in triaged}
+    assert bands[official.url] == PriorityBand.HIGH
+    assert "Known official domain" in next(t.reasons for t in triaged if t.deduped.result.url == official.url)
+    assert bands[denver_noise.url] != PriorityBand.HIGH
+    # Explicit rank check, not just band: the official result sorts first.
+    assert [t.deduped.result.url for t in triaged][0] == official.url
+
+
+# 17 (Part 8.B). Unrelated "Louisville, Ohio" / "EMA Construction"
+# noise (a real name-collision this mission's own recon found live) stays
+# below the official SDF result and never reaches HIGH.
+def test_louisville_ohio_ema_construction_noise_stays_below_official_result():
+    official = _result(
+        title="East Runway Engineered Materials Arresting System (EMAS) - flylouisville.com",
+        url="https://www.flylouisville.com/wp-content/uploads/2025/02/SDF-2024-Year-End-Briefing.pdf",
+    )
+    ohio_noise = _result(
+        title="EMA Construction - Siding Contractor, Liberty Township, OH",
+        url="https://www.emasiding.com/contact/",
+    )
+    triaged = triage_results(
+        [_deduped(official), _deduped(ohio_noise)], identity=_SDF_IDENTITY, official_domains=_FLYLOUISVILLE,
+    )
+    bands = {t.deduped.result.url: t.band for t in triaged}
+    # "Construction" is a WEAK concept term (STRONG_CONCEPT_TERMS/
+    # WEAK_CONCEPT_TERMS split, unchanged by this mission) - it alone
+    # still produces a MEDIUM band, never HIGH and never a tie with an
+    # official-domain HIGH result. The invariant under test is that this
+    # unrelated, differently-named-city noise never outranks the real
+    # official SDF result, not that it necessarily bottoms out at LOW.
+    assert bands[ohio_noise.url] != PriorityBand.HIGH
+    assert bands[official.url] == PriorityBand.HIGH
+    assert [t.deduped.result.url for t in triaged][0] == official.url
+
+
+# 18 (Part 8.C). Official-domain match WITHOUT a strong concept term in
+# the title remains MEDIUM at most - the critical invariant this mission
+# requires explicitly.
+def test_official_domain_alone_without_strong_title_term_is_medium_at_most():
+    r = _result(
+        title="Louisville Muhammad Ali International Airport (SDF)",
+        url="https://www.flylouisville.com/corporate/bids-proposals/",
+    )
+    triaged = triage_results([_deduped(r)], identity=_SDF_IDENTITY, official_domains=_FLYLOUISVILLE)
+    assert triaged[0].band != PriorityBand.HIGH
+    assert "Known official domain" in triaged[0].reasons
+
+
+def test_official_domain_alone_no_identity_no_concept_is_medium_at_most():
+    """Even without airport identity in the title at all, a bare official-
+    domain match alone can still never reach HIGH."""
+    r = _result(title="Bids & Proposals", url="https://www.flylouisville.com/corporate/bids-proposals/")
+    triaged = triage_results([_deduped(r)], official_domains=_FLYLOUISVILLE)
+    assert triaged[0].band != PriorityBand.HIGH
+
+
+# 19 (Part 8.D). The official-domain bonus is a ranking signal only - it
+# never changes what type of object a triaged candidate is (SearchResult/
+# TriagedResult remain the same non-evidence runtime types; no new field
+# implying acceptance/evidence status is introduced).
+def test_official_domain_bonus_does_not_promote_to_evidence():
+    r = _result(
+        title="East Runway Engineered Materials Arresting System (EMAS)",
+        url="https://www.flylouisville.com/wp-content/uploads/2025/02/SDF-2024-Year-End-Briefing.pdf",
+    )
+    triaged = triage_results([_deduped(r)], identity=_SDF_IDENTITY, official_domains=_FLYLOUISVILLE)
+    result = triaged[0]
+    assert not hasattr(result, "evidence")
+    assert not hasattr(result, "accepted")
+    assert not hasattr(result, "confidence")
+    assert "score" not in vars(result)
+    assert "points" not in vars(result)
+    # Still exactly the same reused runtime types - no new evidence class.
+    from app.discovery.dedup import DedupedResult
+    from app.discovery.triage import TriagedResult
+
+    assert isinstance(result, TriagedResult)
+    assert isinstance(result.deduped, DedupedResult)
+
+
+# 20 (Part 8.E). When no official domain is supplied (the default, every
+# existing caller), triage behavior is byte-for-behavior unchanged.
+def test_no_official_domain_supplied_leaves_existing_behavior_unchanged():
+    r = _result(
+        title="London City Airport EMAS ACP",
+        url="https://airspacechange.caa.co.uk/documents/download/5487",
+    )
+    with_default = triage_results([_deduped(r)], identity=_LCY_IDENTITY)
+    with_explicit_none = triage_results([_deduped(r)], identity=_LCY_IDENTITY, official_domains=None)
+    assert with_default == with_explicit_none
+    assert "Known official domain" not in with_default[0].reasons

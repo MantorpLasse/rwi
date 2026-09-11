@@ -498,3 +498,130 @@ def test_opt_in_with_live_provider_executes_the_extra_anchor_queries():
     executed_rendered = {qo.outcome.query.rendered for qo in report.query_outcomes}
     for aq in anchor_queries:
         assert aq.search_query.rendered in executed_rendered
+
+
+# --- Official-domain document pass (RWI HQ "Official-Domain Document
+# Discovery Pass" mission - SDF/flylouisville.com benchmark) -----------------
+
+
+def test_official_domain_none_leaves_baseline_completely_unchanged():
+    """Part J/Success-criteria #1: existing generic behavior preserved -
+    omitting `official_domain` produces byte-for-behavior identical plan/
+    report shape to before this mission."""
+    clue = _sdf_clue()
+    without = run_research_loop(clue, provider=None)
+    explicit_none = run_research_loop(clue, provider=None, official_domain=None)
+    assert without == explicit_none
+    assert without.official_domain is None
+    assert without.official_domain_queries == ()
+    assert without.official_domain_query_outcomes == ()
+    assert len(without.planned_queries) == TOTAL_PLANNED_QUERIES_FOR_ALL_FIVE
+
+
+def test_official_domain_plan_only_mode_shows_the_four_queries_with_zero_network():
+    clue = _sdf_clue()
+    report = run_research_loop(clue, provider=None, official_domain="flylouisville.com")
+    assert report.official_domain == "flylouisville.com"
+    assert [q.rendered for q in report.official_domain_queries] == [
+        "site:flylouisville.com EMAS",
+        "site:flylouisville.com EMAS presentation",
+        "site:flylouisville.com EMAS capital program",
+        "site:flylouisville.com EMAS board",
+    ]
+    # planner-only mode - zero execution regardless of official_domain.
+    assert report.official_domain_query_outcomes == ()
+    assert report.query_outcomes == ()
+    # baseline dimension plan is an unmodified prefix, exactly as with
+    # use_literal_anchors - the official-domain pass never touches it.
+    assert report.planned_queries == plan_research_search_queries(clue)
+
+
+def test_official_domain_pass_adds_exactly_four_queries_to_the_budget():
+    """Part 9: query-budget cap - the pass adds AT MOST +4 queries, flat,
+    never multiplied by the 5 requested dimensions."""
+    clue = _sdf_clue()
+    baseline_count = len(run_research_loop(clue, provider=None).planned_queries)
+    report = run_research_loop(clue, provider=_FakeProvider({}), official_domain="flylouisville.com")
+    assert len(report.official_domain_queries) == 4
+    assert len(report.official_domain_query_outcomes) == 4
+    assert len(report.query_outcomes) == baseline_count  # dimension plan itself untouched
+
+
+def test_official_domain_queries_actually_execute_through_the_provider():
+    clue = _sdf_clue()
+    plan = run_research_loop(clue, provider=None, official_domain="flylouisville.com").official_domain_queries
+    hit_query = plan[0]
+    canned = {
+        hit_query.rendered: SearchOutcome(
+            query=hit_query, status=SearchOutcomeStatus.OK,
+            results=(_result(hit_query, "https://www.flylouisville.com/wp-content/uploads/x.pdf", title="SDF EMAS presentation"),),
+        )
+    }
+    report = run_research_loop(clue, provider=_FakeProvider(canned), official_domain="flylouisville.com")
+    executed = {qo.search_query.rendered for qo in report.official_domain_query_outcomes}
+    assert hit_query.rendered in executed
+    urls = {t.triaged.deduped.result.url for t in report.triaged_candidates}
+    assert "https://www.flylouisville.com/wp-content/uploads/x.pdf" in urls
+
+
+def test_official_domain_hit_is_deduplicated_with_a_dimension_query_hit():
+    """A URL surfaced by BOTH a dimension query and an official-domain
+    query is deduplicated to exactly one candidate, with both queries
+    preserved in its found_by provenance - the existing cross-query dedup
+    principle, now extended to include the official-domain pass."""
+    clue = _sdf_clue()
+    dimension_plan = plan_research_search_queries(clue)
+    domain_plan = run_research_loop(clue, provider=None, official_domain="flylouisville.com").official_domain_queries
+    shared_url = "https://www.flylouisville.com/wp-content/uploads/shared.pdf"
+
+    canned = {dimension_plan[0].search_query.rendered: SearchOutcome(
+        query=dimension_plan[0].search_query, status=SearchOutcomeStatus.OK,
+        results=(_result(dimension_plan[0].search_query, shared_url, title="SDF EMAS document"),),
+    )}
+    canned[domain_plan[0].rendered] = SearchOutcome(
+        query=domain_plan[0], status=SearchOutcomeStatus.OK,
+        results=(_result(domain_plan[0], shared_url, title="SDF EMAS document"),),
+    )
+    report = run_research_loop(clue, provider=_FakeProvider(canned), official_domain="flylouisville.com")
+
+    matching = [t for t in report.triaged_candidates if t.triaged.deduped.result.url == shared_url]
+    assert len(matching) == 1
+    assert len(matching[0].triaged.deduped.found_by) == 2
+
+
+def test_official_domain_triage_bonus_reflected_in_report():
+    clue = _sdf_clue()
+    domain_plan = run_research_loop(clue, provider=None, official_domain="flylouisville.com").official_domain_queries
+    canned = {
+        domain_plan[0].rendered: SearchOutcome(
+            query=domain_plan[0], status=SearchOutcomeStatus.OK,
+            results=(
+                _result(
+                    domain_plan[0],
+                    "https://www.flylouisville.com/wp-content/uploads/x.pdf",
+                    title="East Runway Engineered Materials Arresting System (EMAS)",
+                ),
+            ),
+        )
+    }
+    report = run_research_loop(clue, provider=_FakeProvider(canned), official_domain="flylouisville.com")
+    candidate = next(t for t in report.triaged_candidates if "flylouisville.com" in t.triaged.deduped.result.url)
+    assert "Known official domain" in candidate.triaged.reasons
+    assert candidate.triaged.band == PriorityBand.HIGH
+
+
+def test_official_domain_query_never_attributed_a_dimension():
+    """A candidate found ONLY via an official-domain query (no dimension
+    query also found it) correctly reports an empty dimensions tuple -
+    these queries answer no ResearchDimension question."""
+    clue = _sdf_clue()
+    domain_plan = run_research_loop(clue, provider=None, official_domain="flylouisville.com").official_domain_queries
+    canned = {
+        domain_plan[0].rendered: SearchOutcome(
+            query=domain_plan[0], status=SearchOutcomeStatus.OK,
+            results=(_result(domain_plan[0], "https://www.flylouisville.com/only-domain-hit.pdf"),),
+        )
+    }
+    report = run_research_loop(clue, provider=_FakeProvider(canned), official_domain="flylouisville.com")
+    candidate = next(t for t in report.triaged_candidates if "only-domain-hit" in t.triaged.deduped.result.url)
+    assert candidate.dimensions == ()

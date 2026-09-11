@@ -1,7 +1,9 @@
 """RWI Mission #9D Part K - deterministic Search Plan tests."""
 
+import pytest
+
 from app.discovery.identity import AirportIdentity
-from app.discovery.query import build_search_plan
+from app.discovery.query import build_search_plan, plan_official_domain_document_queries
 
 
 def test_name_only_identity_produces_only_name_field_queries():
@@ -91,3 +93,64 @@ def test_query_provenance_is_fully_reconstructable():
     query = next(q for q in plan if q.template_id == "resa" and q.identity_field == "iata_code")
     assert query.identity_value == "LCY"
     assert query.rendered == "LCY RESA"
+
+
+# --- Official-domain document queries (RWI HQ "Official-Domain Document
+# Discovery Pass" mission - SDF/flylouisville.com benchmark) --------------
+
+
+def test_official_domain_document_queries_exact_sdf_benchmark():
+    """The SDF/flylouisville.com benchmark case: given the exact
+    already-governed official domain the design recon found (SDF's own
+    LRAA board minutes source), the planner must emit exactly these 4
+    queries, in this fixed order - never more, never fewer, never
+    reordered."""
+    plan = plan_official_domain_document_queries("flylouisville.com")
+    assert [q.rendered for q in plan] == [
+        "site:flylouisville.com EMAS",
+        "site:flylouisville.com EMAS presentation",
+        "site:flylouisville.com EMAS capital program",
+        "site:flylouisville.com EMAS board",
+    ]
+
+
+def test_official_domain_document_queries_hard_cap_is_four():
+    plan = plan_official_domain_document_queries("flylouisville.com")
+    assert len(plan) == 4
+
+
+def test_official_domain_document_queries_deterministic_across_calls():
+    first = [q.rendered for q in plan_official_domain_document_queries("flylouisville.com")]
+    second = [q.rendered for q in plan_official_domain_document_queries("flylouisville.com")]
+    assert first == second
+
+
+def test_official_domain_document_queries_normalizes_case_and_whitespace():
+    plan = plan_official_domain_document_queries("  FlyLouisville.COM  ")
+    assert plan[0].rendered == "site:flylouisville.com EMAS"
+
+
+def test_official_domain_document_queries_provenance_reconstructable():
+    plan = plan_official_domain_document_queries("flylouisville.com")
+    for query in plan:
+        assert query.identity_field == "official_domain"
+        assert query.identity_value == "flylouisville.com"
+        assert query.template_id.startswith("official_domain_document_")
+
+
+def test_official_domain_document_queries_rejects_blank_domain():
+    with pytest.raises(ValueError):
+        plan_official_domain_document_queries("")
+    with pytest.raises(ValueError):
+        plan_official_domain_document_queries("   ")
+
+
+def test_official_domain_document_queries_never_multiplies_per_dimension_or_anchor():
+    """No dimension/anchor concept appears anywhere in this planner's
+    output - it is a fixed, dimension-independent set (module docstring's
+    own "no dimension multiplication" instruction)."""
+    plan = plan_official_domain_document_queries("flylouisville.com")
+    for query in plan:
+        assert "runway" not in query.rendered.lower()
+        assert "phase" not in query.rendered.lower()
+        assert "supplier" not in query.rendered.lower()

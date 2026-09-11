@@ -122,6 +122,23 @@ def classify_domain(url: str) -> DomainCategory:
     return DomainCategory.UNKNOWN
 
 
+def _matches_known_official_domain(url: str, official_domains: "frozenset[str] | None") -> bool:
+    """RWI HQ "Official-Domain Document Discovery Pass" mission: unlike
+    REGULATOR_DOMAINS/VENDOR_CONTRACTOR_DOMAINS above (a small, hand-
+    curated, version-controlled constant), `official_domains` is supplied
+    PER-CALL by the caller (see triage_results()'s own new parameter) -
+    already-governed, already-derived hostnames for the one airport this
+    triage run concerns (app.services.official_domain_discovery), never a
+    guessed or persisted registry. Same host-or-subdomain matching
+    discipline as classify_domain() above, kept as an independent, tiny
+    helper rather than folded into DomainCategory - an official domain is
+    a per-airport, per-call fact, not a global domain classification."""
+    if not official_domains:
+        return False
+    host = urlsplit(url).netloc.lower().split(":")[0]
+    return any(host == entry or host.endswith("." + entry) for entry in official_domains)
+
+
 # --- Concept vocabulary (Mission #10B Part G, split by Mission #10B.1 Part B) -
 #
 # Reuses app.discovery.query's real V1 concept phrases (EMAS, RESA,
@@ -219,7 +236,9 @@ class TriagedResult:
 
 
 def _score_one(
-    deduped: DedupedResult, identity: AirportIdentity | None
+    deduped: DedupedResult,
+    identity: AirportIdentity | None,
+    official_domains: "frozenset[str] | None" = None,
 ) -> tuple[int, PriorityBand, tuple[str, ...], DomainCategory]:
     result = deduped.result
     reasons: list[str] = []
@@ -231,6 +250,22 @@ def _score_one(
         points += 3
     elif domain_category is DomainCategory.VENDOR_CONTRACTOR:
         reasons.append("Vendor/contractor domain")
+        points += 2
+
+    # RWI HQ "Official-Domain Document Discovery Pass" mission: a small
+    # bonus, comparable to VENDOR_CONTRACTOR's existing weight above,
+    # when this result's host matches an already-governed official domain
+    # the caller supplied for this specific airport. Deliberately kept
+    # OUT of DomainCategory/classify_domain (that stays a small, static,
+    # hand-curated, version-controlled global lookup - this is dynamic,
+    # per-call, per-airport data) but participates in the SAME HIGH-band
+    # "domain OR identity" clause below, exactly like REGULATOR/
+    # VENDOR_CONTRACTOR already do - never on its own (see the HIGH-band
+    # condition further down: it still requires strong_concept_title_matched
+    # regardless of official_domain_matched).
+    official_domain_matched = _matches_known_official_domain(result.url, official_domains)
+    if official_domain_matched:
+        reasons.append("Known official domain")
         points += 2
 
     identity_matched = False
@@ -288,11 +323,18 @@ def _score_one(
         points += 1
 
     # HIGH-band safety invariant (Mission #10A/#10B Part I, tightened by
-    # #10B.1 Part D): domain authority alone, a bare concept match alone,
-    # or airport identity + only a WEAK/generic concept term, is never
-    # enough - HIGH requires a STRONG concept-in-title match plus at
-    # least one of {curated domain, airport identity}.
-    if strong_concept_title_matched and (domain_category is not DomainCategory.UNKNOWN or identity_matched):
+    # #10B.1 Part D, extended by "Official-Domain Document Discovery
+    # Pass"): domain authority alone, a known-official-domain match
+    # alone, a bare concept match alone, or airport identity + only a
+    # WEAK/generic concept term, is never enough - HIGH requires a STRONG
+    # concept-in-title match plus at least one of {curated domain,
+    # airport identity, known official domain}. A known official domain
+    # with NO strong concept term in the title therefore still falls
+    # through to MEDIUM at most, exactly like curated-domain-alone or
+    # identity-alone already do.
+    if strong_concept_title_matched and (
+        domain_category is not DomainCategory.UNKNOWN or identity_matched or official_domain_matched
+    ):
         band = PriorityBand.HIGH
     elif reasons:
         band = PriorityBand.MEDIUM
@@ -306,6 +348,7 @@ def triage_results(
     deduped_results: list[DedupedResult],
     *,
     identity: AirportIdentity | None = None,
+    official_domains: "frozenset[str] | None" = None,
 ) -> list[TriagedResult]:
     """Pure, deterministic: list[DedupedResult] -> ordered list[TriagedResult].
 
@@ -315,8 +358,17 @@ def triage_results(
     produces the same output in the same order - internal ordering uses
     (band, -points, provider rank, url) as a fully deterministic tiebreak
     chain; `points` itself is never attached to the returned objects.
+
+    `official_domains` (RWI HQ "Official-Domain Document Discovery Pass"
+    mission) is also optional and defaults to None, so every existing
+    caller that does not pass it gets byte-for-behavior identical output
+    to before this parameter existed. When supplied, it must already be a
+    normalized (lowercase, no "www.") set of hostnames the caller already
+    knows are governed/official for the airport in question - see
+    app.services.official_domain_discovery.get_known_official_hostnames().
+    This function never derives, validates, or persists that set itself.
     """
-    scored = [(*_score_one(d, identity), d) for d in deduped_results]
+    scored = [(*_score_one(d, identity, official_domains), d) for d in deduped_results]
     scored.sort(
         key=lambda item: (
             _BAND_SORT_ORDER[item[1]],

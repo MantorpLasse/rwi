@@ -15,7 +15,7 @@ import scripts.research_airport_clue as cli
 from app.database import Base
 from app.discovery.query import SearchQuery
 from app.discovery.search import SearchOutcome, SearchOutcomeStatus, SearchResult
-from app.models import Source, SourceAssertion
+from app.models import Airport, Source, SourceAssertion
 
 _NOW = datetime(2026, 9, 4, tzinfo=timezone.utc)
 
@@ -295,3 +295,204 @@ def test_json_installation_type_and_project_phase_have_two_queries(tmp_path, cap
     assert len(by_dimension["RUNWAY_END"]) == 1
     assert len(by_dimension["TIMING"]) == 1
     assert len(by_dimension["SUPPLIER"]) == 1
+
+
+# --- Official-domain discovery CLI opt-in (RWI HQ "Official-Domain Document
+# Discovery Pass" mission - SDF/flylouisville.com benchmark) -----------------
+
+
+def _seed_source_assertion_with_airport(db_path: str, *, text: str = SDF_TEXT, official_url: "str | None" = None) -> int:
+    """Like _seed_source_assertion(), but also sets airport_id, and
+    optionally links an additional official-reliability Source to that
+    same airport via a second SourceAssertion (so airport-level official-
+    domain derivation has something real to find)."""
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Louisville Muhammad Ali International Airport", iata_code="SDF", country="USA")
+        session.add(airport)
+        session.flush()
+
+        source = Source(title="Test Source", source_type="aip_grant", reliability_level="official", external_id="faa_aip:test:1")
+        session.add(source)
+        session.flush()
+        assertion = SourceAssertion(
+            source_id=source.id, airport_id=airport.id, assertion_type="project_construction",
+            raw_relevant_text=text, source_locator="page:1;chars:0-100",
+            raw_fragment_hash="deadbeef", artifact_identity="artifact:test-1",
+            evidence_quality="unverified_candidate", review_state="unreviewed",
+        )
+        session.add(assertion)
+        session.flush()
+
+        if official_url:
+            official_source = Source(
+                title="LRAA board minutes", source_type="Authority", reliability_level="official", url=official_url,
+            )
+            session.add(official_source)
+            session.flush()
+            official_sa = SourceAssertion(
+                source_id=official_source.id, airport_id=airport.id, assertion_type="project_construction",
+                raw_relevant_text="official board minutes text", source_locator="page:1;chars:0-50",
+                raw_fragment_hash="feedface", artifact_identity="artifact:test-2",
+                evidence_quality="unverified_candidate", review_state="unreviewed",
+            )
+            session.add(official_sa)
+
+        session.commit()
+        return assertion.id
+
+
+def test_flag_omitted_never_derives_or_reports_a_domain(tmp_path, capsys):
+    """Existing behavior preserved when the flag is not given, even for a
+    SourceAssertion whose airport DOES have a governed official domain."""
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path, official_url="https://www.flylouisville.com/x.pdf")
+    exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Official-domain discovery: disabled" in out
+    assert "flylouisville.com" not in out
+
+
+def test_flag_with_known_official_domain_reports_it_and_adds_four_queries(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path, official_url="https://www.flylouisville.com/x.pdf")
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--use-official-domain-discovery",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Official-domain discovery: ENABLED" in out
+    assert "Known official hostname(s) for this airport: flylouisville.com" in out
+    assert "Selected for the bounded document pass (max 1 per invocation): flylouisville.com" in out
+    assert "site:flylouisville.com EMAS" in out
+    assert "site:flylouisville.com EMAS presentation" in out
+    assert "site:flylouisville.com EMAS capital program" in out
+    assert "site:flylouisville.com EMAS board" in out
+
+
+def test_flag_with_no_known_official_domain_is_a_documented_noop(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path)  # no official_url -> nothing governed yet
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--use-official-domain-discovery",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Official-domain discovery: ENABLED" in out
+    assert "none found - running the existing search plan unchanged" in out
+    assert "site:" not in out
+
+
+def test_flag_with_null_airport_id_is_a_documented_noop(tmp_path, capsys):
+    """A SourceAssertion with no airport_id at all (a genuinely nullable
+    column - e.g. an unresolved-identity candidate) must not crash; it is
+    treated exactly like "no official domain known"."""
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)  # airport_id left None
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--use-official-domain-discovery",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "none found - running the existing search plan unchanged" in out
+
+
+def test_official_domain_flag_never_writes_to_database(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path, official_url="https://www.flylouisville.com/x.pdf")
+    before = open(db_path, "rb").read()
+    cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--use-official-domain-discovery",
+    ])
+    after = open(db_path, "rb").read()
+    assert before == after
+
+
+def test_json_official_domain_fields_present_and_correct(tmp_path, capsys, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path, official_url="https://www.flylouisville.com/x.pdf")
+    monkeypatch.setitem(cli.PROVIDER_REGISTRY, "brave", _FakeProvider({}))
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS,
+        "--use-official-domain-discovery", "--allow-live-network", "--json",
+    ])
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["official_domain_discovery_enabled"] is True
+    assert payload["known_official_hostnames"] == ["flylouisville.com"]
+    assert payload["official_domain_selected"] == "flylouisville.com"
+    assert payload["official_domain_queries"] == [
+        "site:flylouisville.com EMAS",
+        "site:flylouisville.com EMAS presentation",
+        "site:flylouisville.com EMAS capital program",
+        "site:flylouisville.com EMAS board",
+    ]
+    assert len(payload["official_domain_query_outcomes"]) == 4
+    # baseline dimension query_outcomes count is completely unaffected.
+    assert len(payload["query_outcomes"]) == 7
+
+
+def test_json_official_domain_fields_empty_when_flag_omitted(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path, official_url="https://www.flylouisville.com/x.pdf")
+    exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--json"])
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["official_domain_discovery_enabled"] is False
+    assert payload["known_official_hostnames"] == []
+    assert payload["official_domain_selected"] is None
+    assert payload["official_domain_queries"] == []
+
+
+def test_multiple_known_domains_deterministically_picks_alphabetically_first(tmp_path, capsys):
+    """Part CLI's own deterministic-cap requirement: with more than one
+    governed official hostname, exactly one (alphabetically first) is
+    selected - never both, never an unbounded per-domain multiplication."""
+    db_path = str(tmp_path / "test.db")
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        airport = Airport(name="Louisville Muhammad Ali International Airport", iata_code="SDF", country="USA")
+        session.add(airport)
+        session.flush()
+        source1 = Source(title="A", source_type="aip_grant", reliability_level="official", external_id="faa_aip:test:2")
+        session.add(source1)
+        session.flush()
+        assertion = SourceAssertion(
+            source_id=source1.id, airport_id=airport.id, assertion_type="project_construction",
+            raw_relevant_text=SDF_TEXT, source_locator="page:1;chars:0-100",
+            raw_fragment_hash="deadbeef", artifact_identity="artifact:test-3",
+            evidence_quality="unverified_candidate", review_state="unreviewed",
+        )
+        session.add(assertion)
+        session.flush()
+        aid = assertion.id
+
+        for i, url in enumerate((
+            "https://www.zzz-later-domain.com/a.pdf",
+            "https://www.flylouisville.com/b.pdf",
+        )):
+            official = Source(title=f"Official {i}", source_type="Authority", reliability_level="official", url=url)
+            session.add(official)
+            session.flush()
+            sa = SourceAssertion(
+                source_id=official.id, airport_id=airport.id, assertion_type="project_construction",
+                raw_relevant_text="x", source_locator=f"page:1;chars:{i}-{i+1}",
+                raw_fragment_hash=f"hash{i}", artifact_identity=f"artifact:test-multi-{i}",
+                evidence_quality="unverified_candidate", review_state="unreviewed",
+            )
+            session.add(sa)
+        session.commit()
+
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--use-official-domain-discovery",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "flylouisville.com, zzz-later-domain.com" in out  # both reported...
+    assert "Selected for the bounded document pass (max 1 per invocation): flylouisville.com" in out  # ...only one used
+    assert out.count("site:") == 4  # exactly one domain's 4 queries, never 8

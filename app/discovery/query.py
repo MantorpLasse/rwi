@@ -32,7 +32,16 @@ class SearchQuery:
 
     rendered: str
     template_id: str
-    identity_field: str  # "name" | "iata_code" | "icao_code"
+    # Not an enforced enum - a plain str used as a self-documenting label.
+    # This module's own build_search_plan() only ever uses "name" |
+    # "iata_code" | "icao_code"; other callers elsewhere in Discovery
+    # reuse this same type for their own identity/context fields (a
+    # dimension-driven caller uses "name" for its own queries;
+    # plan_official_domain_document_queries() below uses
+    # "official_domain" for its already-governed domain input) - always
+    # the field this query's search text was rendered from, whatever that
+    # field happens to be.
+    identity_field: str
     identity_value: str
 
 
@@ -110,3 +119,61 @@ def _render(field_name: str, value: str, phrase: str) -> str:
     if field_name == "name" and " " in value:
         return f'"{value}" {phrase}'
     return f"{value} {phrase}"
+
+
+# RWI HQ "Official-Domain Document Discovery Pass" mission (following that
+# mission's own design recon, "Research Loop - Official-Domain / PDF
+# Discovery Improvement"): a small, fixed, deterministic document-genre
+# query set for a SINGLE, already-governed official domain - see
+# app.services.official_domain_discovery.get_known_official_hostnames(),
+# which derives such a domain read-only from existing evidence. This
+# function never derives, guesses, or validates a domain itself; it only
+# renders queries for one the caller already knows is governed and
+# official. Exactly 4 queries, fixed order, hard-capped - never
+# multiplied by dimension count, anchor count, or number of known
+# domains (the caller picks at most one domain per invocation - see
+# app.services.research_loop.run_research_loop's own `official_domain`
+# parameter and scripts/research_airport_clue.py's own
+# --use-official-domain-discovery flag).
+#
+# Targets the exact document-genre gap the SDF/flylouisville.com
+# benchmark exposed: the standard concept/dimension query vocabulary
+# above never emits a site-restricted query, and never targets
+# "presentation"/"capital program"/"board" document language - exactly
+# the genre of the official LRAA "2024: A Year in Review and a Look
+# Ahead" PDF the standard Research Loop missed.
+_OFFICIAL_DOMAIN_DOCUMENT_QUERIES: tuple[tuple[str, str], ...] = (
+    ("official_domain_document_emas", "EMAS"),
+    ("official_domain_document_presentation", "EMAS presentation"),
+    ("official_domain_document_capital_program", "EMAS capital program"),
+    ("official_domain_document_board", "EMAS board"),
+)
+
+
+def plan_official_domain_document_queries(official_domain: str) -> "tuple[SearchQuery, ...]":
+    """Pure, deterministic: the same `official_domain` always produces the
+    same ordered tuple of exactly 4 SearchQuery objects -
+
+        site:<domain> EMAS
+        site:<domain> EMAS presentation
+        site:<domain> EMAS capital program
+        site:<domain> EMAS board
+
+    `official_domain` is normalized to lowercase, stripped of surrounding
+    whitespace; raises ValueError for an empty/blank domain (fail closed -
+    matches AirportIdentity.__post_init__'s own "required field cannot be
+    blank" discipline) rather than silently emitting a meaningless
+    `site: EMAS` query. Never touches a network, database, or clock.
+    """
+    domain = (official_domain or "").strip().lower()
+    if not domain:
+        raise ValueError("official_domain must be a non-empty string")
+    return tuple(
+        SearchQuery(
+            rendered=f"site:{domain} {phrase}",
+            template_id=template_id,
+            identity_field="official_domain",
+            identity_value=domain,
+        )
+        for template_id, phrase in _OFFICIAL_DOMAIN_DOCUMENT_QUERIES
+    )

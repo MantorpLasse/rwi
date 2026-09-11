@@ -106,6 +106,7 @@ from enum import Enum
 
 from app.discovery.dedup import deduplicate_results
 from app.discovery.identity import AirportIdentity
+from app.discovery.query import SearchQuery, plan_official_domain_document_queries
 from app.discovery.search import SearchOutcome, SearchOutcomeStatus, SearchProvider
 from app.discovery.triage import TriagedResult, triage_results
 from app.services.research_literal_anchors import plan_research_search_queries_with_anchors
@@ -121,6 +122,7 @@ from app.services.research_question_planning import (
 __all__ = [
     "DimensionSearchStatus",
     "QueryOutcome",
+    "OfficialDomainQueryOutcome",
     "TriagedCandidate",
     "ResearchLoopReport",
     "run_research_loop",
@@ -154,6 +156,26 @@ class QueryOutcome:
 
 
 @dataclass(frozen=True)
+class OfficialDomainQueryOutcome:
+    """RWI HQ "Official-Domain Document Discovery Pass" mission: the
+    official-domain document-discovery pass's own parallel to
+    QueryOutcome above, kept as a SEPARATE type rather than reusing
+    QueryOutcome/PlannedResearchQuery - those four queries answer no
+    ResearchDimension question (module docstring's own "no dimension
+    multiplication" instruction; PlannedResearchQuery.dimension is a
+    required ResearchDimension, and inventing a placeholder/dummy
+    dimension for a query that isn't actually about any of the five
+    questions would be a dishonest label, not a genuine answer to one).
+    `search_query` is one of app.discovery.query.plan_official_domain_document_queries()'s
+    own fixed 4 outputs; `outcome` is the raw SearchOutcome executing it
+    produced - same "never hidden or collapsed" discipline as
+    QueryOutcome."""
+
+    search_query: SearchQuery
+    outcome: SearchOutcome
+
+
+@dataclass(frozen=True)
 class TriagedCandidate:
     """One existing, unmodified TriagedResult, annotated (report layer
     only - see module docstring "DIMENSION-LINEAGE PRESERVATION") with
@@ -179,13 +201,32 @@ class ResearchLoopReport:
     `questions` remains one human-readable ResearchQuestion per dimension
     (Slice 1, unchanged); `planned_queries` is the FULL executed query
     plan (Slice 3), which may contain more than one entry for the same
-    dimension."""
+    dimension.
+
+    `official_domain`/`official_domain_queries`/`official_domain_query_outcomes`
+    (RWI HQ "Official-Domain Document Discovery Pass" mission) default to
+    None/()/() - every existing caller that never passes
+    run_research_loop()'s new `official_domain` parameter gets these
+    fields populated with their empty defaults, byte-for-behavior
+    identical to before this mission for every other field.
+    `official_domain` is the exact domain string used for this run (or
+    None if none was supplied); `official_domain_queries` is the fixed 4
+    SearchQuery objects app.discovery.query.plan_official_domain_document_queries()
+    produced for it (empty when `official_domain` is None);
+    `official_domain_query_outcomes` pairs each with its own executed
+    SearchOutcome, exactly like `query_outcomes` does for the dimension
+    plan - kept as a SEPARATE tuple rather than merged into
+    `query_outcomes` because these queries answer no ResearchDimension
+    (see OfficialDomainQueryOutcome's own docstring)."""
 
     clue: ResearchClue
     questions: "tuple[ResearchQuestion, ...]"
     planned_queries: "tuple[PlannedResearchQuery, ...]"
     query_outcomes: "tuple[QueryOutcome, ...]"
     triaged_candidates: "tuple[TriagedCandidate, ...]"
+    official_domain: "str | None" = None
+    official_domain_queries: "tuple[SearchQuery, ...]" = ()
+    official_domain_query_outcomes: "tuple[OfficialDomainQueryOutcome, ...]" = ()
 
 
 def _dimensions_for(
@@ -234,7 +275,11 @@ def compute_dimension_search_status(
 
 
 def run_research_loop(
-    clue: ResearchClue, *, provider: "SearchProvider | None" = None, use_literal_anchors: bool = False,
+    clue: ResearchClue,
+    *,
+    provider: "SearchProvider | None" = None,
+    use_literal_anchors: bool = False,
+    official_domain: "str | None" = None,
 ) -> ResearchLoopReport:
     """Pure orchestration (aside from the one injected provider.search()
     call per planned query) - no database, no file, no persistence of any
@@ -257,17 +302,50 @@ def run_research_loop(
     member, no new ResearchQuestion/ResearchClue semantic, and no
     resolution of any kind - CANDIDATES_FOUND still means only "search
     returned candidates," exactly as before.
+
+    `official_domain` (RWI HQ "Official-Domain Document Discovery Pass"
+    mission, default None - existing callers/behavior are completely
+    unaffected unless this is explicitly passed a domain string): this
+    function NEVER derives or guesses a domain itself - the caller must
+    already know one is governed/official (see
+    app.services.official_domain_discovery.get_known_official_hostnames(),
+    a read-only DB helper this module deliberately does NOT import - see
+    tests/test_research_loop_architectural_safety.py's own forbidden-
+    import list - keeping this module's own zero-database-access
+    guarantee intact). When supplied, exactly
+    app.discovery.query.plan_official_domain_document_queries()'s own
+    fixed 4 queries are additionally executed (a hard, non-negotiable cap
+    - never multiplied by dimension count, anchor count, or by passing
+    more than one domain, since this parameter accepts only a single
+    str), their results are folded into the SAME cross-query dedup/triage
+    pass as the dimension plan (so a URL found by both a dimension query
+    and an official-domain query is deduplicated exactly once, with both
+    queries preserved in its own `found_by` provenance), and the matching
+    hostname is passed to triage_results() as a small, additive ranking
+    signal only (app.discovery.triage's own "Known official domain"
+    reason/bonus - never sufficient for HIGH on its own, see that
+    module's own HIGH-band safety invariant). `official_domain_queries`/
+    `official_domain_query_outcomes` on the returned report are always
+    populated (even in provider=None plan-only mode) so a caller can
+    inspect exactly what would run before spending network budget,
+    exactly like `planned_queries` already does for the dimension plan.
     """
     questions = plan_research_questions(clue)
     planned_queries = (
         plan_research_search_queries_with_anchors(clue) if use_literal_anchors
         else plan_research_search_queries(clue)
     )
+    official_domain_queries = (
+        plan_official_domain_document_queries(official_domain) if official_domain else ()
+    )
 
     if provider is None:
         return ResearchLoopReport(
             clue=clue, questions=questions, planned_queries=planned_queries,
             query_outcomes=(), triaged_candidates=(),
+            official_domain=official_domain,
+            official_domain_queries=official_domain_queries,
+            official_domain_query_outcomes=(),
         )
 
     query_outcomes: list[QueryOutcome] = []
@@ -277,13 +355,20 @@ def run_research_loop(
         query_outcomes.append(QueryOutcome(planned_query=planned, outcome=outcome))
         all_results.extend(outcome.results)
 
+    official_domain_query_outcomes: list[OfficialDomainQueryOutcome] = []
+    for search_query in official_domain_queries:
+        outcome = provider.search(search_query)
+        official_domain_query_outcomes.append(OfficialDomainQueryOutcome(search_query=search_query, outcome=outcome))
+        all_results.extend(outcome.results)
+
     deduped = deduplicate_results(all_results)
     identity = AirportIdentity(
         name=clue.airport_context.name,
         iata_code=clue.airport_context.iata_code,
         icao_code=clue.airport_context.icao_code,
     )
-    triaged = triage_results(deduped, identity=identity)
+    official_domains = frozenset({official_domain}) if official_domain else None
+    triaged = triage_results(deduped, identity=identity, official_domains=official_domains)
 
     rendered_to_query = {p.search_query.rendered: p for p in planned_queries}
     triaged_candidates = tuple(
@@ -297,4 +382,7 @@ def run_research_loop(
         planned_queries=planned_queries,
         query_outcomes=tuple(query_outcomes),
         triaged_candidates=triaged_candidates,
+        official_domain=official_domain,
+        official_domain_queries=official_domain_queries,
+        official_domain_query_outcomes=tuple(official_domain_query_outcomes),
     )
