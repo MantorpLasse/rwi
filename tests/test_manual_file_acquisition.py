@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine, select, func
@@ -35,6 +36,7 @@ from app.acquisition.manual_file import (
     ingest_local_file,
 )
 from app.extraction.dispatch import extract_document
+from app.services.generic_web_fetch import _acquisition_source_key_for_url
 from app.services.snapshot_extraction import load_snapshot_for_extraction
 from scripts import ingest_local_file as ingest_cli
 
@@ -64,7 +66,7 @@ def test_ingest_local_file_happy_path(tmp_path):
 
     engine = _engine()
     with Session(engine) as session:
-        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
 
         assert run.status == AcquisitionRunStatus.SUCCESS
         assert run.is_new_snapshot is True
@@ -85,7 +87,7 @@ def test_ingest_local_file_never_fabricates_http_provenance(tmp_path):
 
     engine = _engine()
     with Session(engine) as session:
-        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
 
     assert run.http_status is None
     assert run.response_headers == json.dumps({}, sort_keys=True, separators=(",", ":"))
@@ -101,7 +103,7 @@ def test_ingest_local_file_missing_file_fails_closed(tmp_path):
     engine = _engine()
     with Session(engine) as session:
         with pytest.raises(ManualFileAcquisitionError, match="No such file"):
-            ingest_local_file(session, url=_URL, local_path=missing, content_type="application/pdf")
+            ingest_local_file(session, url=_URL, local_path=missing, content_type="application/pdf", supplied_by="human:rwi-owner")
 
 
 # 4. DIRECTORY PATH
@@ -109,7 +111,7 @@ def test_ingest_local_file_directory_path_fails_closed(tmp_path):
     engine = _engine()
     with Session(engine) as session:
         with pytest.raises(ManualFileAcquisitionError, match="Not a regular file"):
-            ingest_local_file(session, url=_URL, local_path=tmp_path, content_type="application/pdf")
+            ingest_local_file(session, url=_URL, local_path=tmp_path, content_type="application/pdf", supplied_by="human:rwi-owner")
 
 
 # 5. EMPTY FILE
@@ -119,7 +121,7 @@ def test_ingest_local_file_empty_file_fails_closed(tmp_path):
     engine = _engine()
     with Session(engine) as session:
         with pytest.raises(ManualFileAcquisitionError, match="is empty"):
-            ingest_local_file(session, url=_URL, local_path=empty, content_type="application/pdf")
+            ingest_local_file(session, url=_URL, local_path=empty, content_type="application/pdf", supplied_by="human:rwi-owner")
 
 
 def test_provider_requires_content_type():
@@ -138,7 +140,7 @@ def test_content_type_is_passed_through_exactly_never_sniffed(tmp_path):
     local_file.write_bytes(b"pdf-shaped bytes")
     engine = _engine()
     with Session(engine) as session:
-        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
         assert run.snapshot.media_type == "application/pdf"
         assert run.content_type == "application/pdf"
 
@@ -151,9 +153,9 @@ def test_ingest_local_file_dedupes_identical_bytes(tmp_path):
 
     engine = _engine()
     with Session(engine) as session:
-        first = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        first = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
         first_snapshot_id = first.snapshot.id
-        second = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        second = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
 
         assert second.is_new_snapshot is False
         assert second.snapshot.id == first_snapshot_id
@@ -167,11 +169,11 @@ def test_ingest_local_file_different_bytes_creates_new_snapshot(tmp_path):
 
     engine = _engine()
     with Session(engine) as session:
-        first = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        first = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
         first_snapshot_id = first.snapshot.id
 
         local_file.write_bytes(b"version two of the file - genuinely different bytes")
-        second = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        second = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
 
         assert second.is_new_snapshot is True
         assert second.snapshot.id != first_snapshot_id
@@ -187,7 +189,7 @@ def test_ingest_local_file_writes_no_domain_governance_rows(tmp_path):
     engine = _engine()
     with Session(engine) as session:
         before = _domain_row_counts(session)
-        ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
         after = _domain_row_counts(session)
 
     assert before == after == {"Source": 0, "SourceAssertion": 0, "Signal": 0, "ReviewerAction": 0}
@@ -224,7 +226,8 @@ def test_cli_missing_file_fails_clearly():
 def test_cli_refuses_nonexistent_file(tmp_path, capsys):
     missing = tmp_path / "nope.pdf"
     exit_code = ingest_cli.main(
-        ["--database", str(tmp_path / "unused.db"), "--url", _URL, "--file", str(missing), "--content-type", "application/pdf"]
+        ["--database", str(tmp_path / "unused.db"), "--url", _URL, "--file", str(missing),
+         "--content-type", "application/pdf", "--supplied-by", "human:rwi-owner"]
     )
     assert exit_code == 2
     assert "no such file" in capsys.readouterr().err.lower()
@@ -240,7 +243,7 @@ def test_snapshot_payload_matches_file_bytes_read_independently(tmp_path):
 
     engine = _engine()
     with Session(engine) as session:
-        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
 
         assert run.snapshot.payload == independently_read
         assert run.snapshot.payload == content
@@ -253,7 +256,7 @@ def test_acquisition_source_canonical_url_matches_supplied_url_exactly(tmp_path)
 
     engine = _engine()
     with Session(engine) as session:
-        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
         source = session.get(AcquisitionSource, run.acquisition_source_id)
         assert source.canonical_url == _URL
         assert source.acquisition_type == "manual_file"
@@ -290,7 +293,7 @@ def test_manually_ingested_snapshot_extracts_with_zero_special_casing(tmp_path):
 
     engine = _engine()
     with Session(engine) as session:
-        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf")
+        run = ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by="human:rwi-owner")
         snapshot_id = run.snapshot.id
 
     with Session(engine) as session:
@@ -305,3 +308,114 @@ def test_manually_ingested_snapshot_extracts_with_zero_special_casing(tmp_path):
     # input - the assertion here is about the call succeeding cleanly,
     # not about the (irrelevant) parsed content of a fake PDF.
     assert document is not None
+
+
+# --- supplied_by (RWI HQ "Manual File Acquisition Provenance - supplied_by") ---
+
+
+# 13. supplied_by persists the exact value on the resulting AcquisitionRun.
+def test_supplied_by_persists_exact_value(tmp_path):
+    local_file = tmp_path / "manual.pdf"
+    local_file.write_bytes(b"bytes for supplied_by persistence test")
+
+    engine = _engine()
+    with Session(engine) as session:
+        run = ingest_local_file(
+            session, url=_URL, local_path=local_file, content_type="application/pdf",
+            supplied_by="human:rwi-owner",
+        )
+        assert run.supplied_by == "human:rwi-owner"
+
+        reloaded = session.get(AcquisitionRun, run.id)
+        assert reloaded.supplied_by == "human:rwi-owner"
+
+
+# 14. blank/whitespace-only supplied_by is rejected, fails closed, no writes.
+@pytest.mark.parametrize("bad_value", ["", "   ", "\t\n"])
+def test_ingest_local_file_rejects_blank_supplied_by(tmp_path, bad_value):
+    local_file = tmp_path / "manual.pdf"
+    local_file.write_bytes(b"bytes that should never be persisted")
+
+    engine = _engine()
+    with Session(engine) as session:
+        with pytest.raises(ManualFileAcquisitionError, match="supplied_by"):
+            ingest_local_file(session, url=_URL, local_path=local_file, content_type="application/pdf", supplied_by=bad_value)
+
+        before = _domain_row_counts(session)
+        assert session.scalar(select(func.count()).select_from(AcquisitionRun)) == 0
+        assert before == {"Source": 0, "SourceAssertion": 0, "Signal": 0, "ReviewerAction": 0}
+
+
+# 15. CLI refuses to even parse without --supplied-by (write mode always required).
+def test_cli_missing_supplied_by_fails_clearly():
+    with pytest.raises(SystemExit):
+        ingest_cli._parser().parse_args(
+            ["--database", "x.db", "--url", _URL, "--file", "x.pdf", "--content-type", "application/pdf"]
+        )
+
+
+# 16. CLI surfaces a blank --supplied-by as a clean ingest failure, not a crash.
+def test_cli_refuses_blank_supplied_by(tmp_path, capsys):
+    local_file = tmp_path / "manual.pdf"
+    local_file.write_bytes(b"bytes for CLI blank supplied_by test")
+    db_path = tmp_path / "test.db"
+
+    exit_code = ingest_cli.main(
+        ["--database", str(db_path), "--url", _URL, "--file", str(local_file),
+         "--content-type", "application/pdf", "--supplied-by", "   "]
+    )
+
+    assert exit_code == 1
+    assert "supplied_by" in capsys.readouterr().err.lower()
+
+
+# 17. A prior automated permission_failure run and a later manual success
+# coexist under the SAME AcquisitionSource - the failed run is never
+# touched, and only the manual run carries supplied_by. This is the exact
+# MSP benchmark shape (AcquisitionRun #47-style history preserved
+# alongside a later successful manual ingest of the same URL).
+def test_prior_permission_failure_and_later_manual_success_coexist(tmp_path):
+    local_file = tmp_path / "manual.pdf"
+    local_file.write_bytes(b"bytes for the later successful manual ingest")
+
+    engine = _engine()
+    with Session(engine) as session:
+        publisher = PublishingSource(name="metroairports.org", reliability_level="unverified")
+        session.add(publisher)
+        session.flush()
+        source = AcquisitionSource(
+            publishing_source=publisher, key=_acquisition_source_key_for_url(_URL),
+            display_name=_URL, acquisition_type="http", canonical_url=_URL, active=True,
+        )
+        session.add(source)
+        session.flush()
+        failed_run = AcquisitionRun(
+            source=source, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
+            status=AcquisitionRunStatus.PERMISSION_FAILURE, request_url=_URL,
+            provider_version="generic-web-http/1", duration_seconds=0.4,
+            error_category="HTTPStatusError", error_detail="403 Forbidden", is_new_snapshot=False,
+        )
+        session.add(failed_run)
+        session.commit()
+        failed_run_id = failed_run.id
+
+        manual_run = ingest_local_file(
+            session, url=_URL, local_path=local_file, content_type="application/pdf",
+            supplied_by="human:rwi-owner",
+        )
+
+        # Same AcquisitionSource reused - never a duplicate for the same URL.
+        assert manual_run.acquisition_source_id == source.id
+        assert session.query(AcquisitionSource).filter(AcquisitionSource.canonical_url == _URL).count() == 1
+
+        # The historical failed run is completely untouched.
+        reloaded_failed = session.get(AcquisitionRun, failed_run_id)
+        assert reloaded_failed.status == AcquisitionRunStatus.PERMISSION_FAILURE
+        assert reloaded_failed.supplied_by is None
+        assert reloaded_failed.snapshot_id is None
+        assert reloaded_failed.error_detail == "403 Forbidden"
+
+        # Only the manual run carries supplied_by.
+        assert manual_run.supplied_by == "human:rwi-owner"
+        assert manual_run.status == AcquisitionRunStatus.SUCCESS
+        assert manual_run.snapshot is not None

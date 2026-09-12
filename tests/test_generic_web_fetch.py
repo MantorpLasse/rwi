@@ -188,6 +188,20 @@ def test_fetch_discovered_url_writes_only_acquisition_side_rows():
         assert len(list(session.scalars(select(Snapshot)))) == 1
 
 
+def test_fetch_discovered_url_leaves_supplied_by_none():
+    """RWI HQ "Manual File Acquisition Provenance - supplied_by" mission:
+    every automated/network acquisition call site passes no `supplied_by`
+    argument to AcquisitionService.acquire(), so it must default to None -
+    this is the one, only distinguishing signal between an automated run
+    and a manual one (app.acquisition.manual_file.ingest_local_file() is
+    the sole caller that ever supplies a non-None value)."""
+    engine = _engine()
+    with Session(engine) as session:
+        client = _FakeClient(robots_response=_allow_all_robots(), fetch_responses=[_html_ok()])
+        run = fetch_discovered_url(session, "https://example.com/page", client=client)
+        assert run.supplied_by is None
+
+
 def test_fetch_discovered_url_blocked_by_robots_writes_nothing():
     engine = _engine()
     with Session(engine) as session:

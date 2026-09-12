@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 from datetime import UTC, datetime
+from typing import Optional
 
 import httpx
 from sqlalchemy import select
@@ -31,7 +32,16 @@ class AcquisitionService:
         self.session = session
         self.provider = provider
 
-    def acquire(self, source: AcquisitionSource) -> AcquisitionRun:
+    def acquire(self, source: AcquisitionSource, *, supplied_by: Optional[str] = None) -> AcquisitionRun:
+        """`supplied_by` (RWI HQ "Manual File Acquisition Provenance -
+        supplied_by" mission): an explicit, optional, provider-agnostic
+        attribution for who supplied this acquisition ATTEMPT - defaults to
+        None so every existing automated caller (FAA/Tableau/generic-HTTP)
+        requires zero code changes and continues to record None, exactly as
+        before. Passed straight through to whichever AcquisitionRun row
+        actually gets committed (the success/no-change row below, or the
+        failed_run row in the except branch) - never set by mutating an
+        already-constructed run afterward."""
         if not source.active:
             raise ValueError("AcquisitionSource is inactive")
         if source.canonical_url != self.provider.source_url:
@@ -45,6 +55,7 @@ class AcquisitionService:
             request_url=self.provider.source_url,
             provider_version=self.provider.version,
             duration_seconds=0.0,
+            supplied_by=supplied_by,
         )
         self.session.add(run)
         self.session.flush()
@@ -113,6 +124,7 @@ class AcquisitionService:
                 error_category=type(exc).__name__,
                 error_detail=str(exc),
                 is_new_snapshot=False,
+                supplied_by=supplied_by,
             )
             self.session.add(failed_run)
             self.session.commit()

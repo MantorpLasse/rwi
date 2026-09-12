@@ -60,6 +60,13 @@ provenance that did not actually happen inside RWI. Concretely:
     (no MIME-detection framework is introduced here) - it is always the
     caller's own explicit, human-supplied value (see
     scripts/ingest_local_file.py's required --content-type).
+  - `AcquisitionRun.supplied_by` = the human's own explicit identity string
+    (required, never blank - see `ingest_local_file()`'s own docstring),
+    answering exactly "who supplied these bytes to RWI" - never who
+    published the source, authored the document, or later reviews/approves
+    any evidence derived from it. NULL on every automated/network run,
+    by construction (see app.services.acquisition.AcquisitionService
+    .acquire()'s own `supplied_by=None` default).
 
 Exact bytes pass through completely unchanged: this provider never
 hashes (AcquisitionService.acquire() already owns SHA-256 hashing
@@ -208,7 +215,7 @@ def get_or_create_manual_acquisition_source(
 
 
 def ingest_local_file(
-    session: Session, *, url: str, local_path: "str | Path", content_type: str,
+    session: Session, *, url: str, local_path: "str | Path", content_type: str, supplied_by: str,
 ) -> AcquisitionRun:
     """The single entry point scripts/ingest_local_file.py calls. Mirrors
     app.services.generic_web_fetch.fetch_discovered_url()'s own shape for
@@ -218,12 +225,29 @@ def ingest_local_file(
     already documents), then delegate to the existing, unmodified
     AcquisitionService.acquire(). No SSRF/robots checks are performed -
     both are meaningless for a file a human already legitimately holds
-    locally, never fetched by RWI at all."""
+    locally, never fetched by RWI at all.
+
+    `supplied_by` (RWI HQ "Manual File Acquisition Provenance -
+    supplied_by" mission): REQUIRED - every call to this function performs
+    a write (there is no separate preview/apply split for manual ingest),
+    so the human-attribution gate applies unconditionally here, matching
+    every other named-human-attribution field in this codebase (no
+    identity registry - free text, e.g. "human:rwi-owner"). Validated
+    non-blank and passed straight through to AcquisitionService.acquire();
+    never written by mutating the resulting AcquisitionRun afterward, and
+    never placed on PublishingSource/AcquisitionSource/Snapshot - the human
+    supplied ONE acquisition attempt, not the publisher or URL identity
+    itself, which may be fetched or manually supplied again independently
+    in the future."""
     if not url or not url.strip():
         raise ManualFileAcquisitionError("url is required and cannot be blank")
     hostname = urlsplit(url).hostname
     if not hostname:
         raise ManualFileAcquisitionError(f"url has no hostname: {url!r}")
+    if not supplied_by or not supplied_by.strip():
+        raise ManualFileAcquisitionError(
+            "supplied_by is required and cannot be blank - manual ingest always records who supplied the artifact"
+        )
 
     publishing_source, _ = get_or_create_publishing_source_for_hostname(session, hostname)
     acquisition_source, _ = get_or_create_manual_acquisition_source(session, url, publishing_source)
@@ -231,4 +255,4 @@ def ingest_local_file(
 
     provider = ManualFileAcquisitionProvider(original_url=url, local_path=local_path, content_type=content_type)
     service = AcquisitionService(session, provider)
-    return service.acquire(acquisition_source)
+    return service.acquire(acquisition_source, supplied_by=supplied_by.strip())

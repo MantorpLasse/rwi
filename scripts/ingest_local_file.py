@@ -28,12 +28,20 @@ Invocation (matches this repository's existing script convention):
     python -m scripts.ingest_local_file --database data/runway_safe.db \\
         --url "https://www.flylouisville.com/wp-content/uploads/2026/03/LRAA-December-3-2025-Special-Meeting_Approved-UNSIGNED.pdf" \\
         --file "C:\\path\\to\\manually-downloaded-LRAA-meeting.pdf" \\
-        --content-type application/pdf
+        --content-type application/pdf \\
+        --supplied-by human:rwi-owner
 
 --url is the EXACT original official URL the file was downloaded from -
 never a mirror, cache, or reconstructed guess. --content-type is always
 required explicitly (never sniffed from the filename) - see
-ManualFileAcquisitionProvider's own docstring for why.
+ManualFileAcquisitionProvider's own docstring for why. --supplied-by is
+always required (RWI HQ "Manual File Acquisition Provenance - supplied_by"
+mission) - the human's own explicit identity string, recorded on the new
+AcquisitionRun as `supplied_by` - answers "who supplied these bytes to
+RWI," never who published/authored the source or who later reviews any
+evidence derived from it. No new identity registry - free text, same
+convention already used by ReviewerAction.reviewer/
+SignalAmendmentAction.reviewer.
 """
 
 from __future__ import annotations
@@ -68,6 +76,11 @@ def _parser() -> argparse.ArgumentParser:
         "--content-type", required=True,
         help='Exact media type of the file, e.g. "application/pdf". Never sniffed from the filename.',
     )
+    parser.add_argument(
+        "--supplied-by", required=True,
+        help='Who supplied this artifact to RWI, e.g. "human:rwi-owner". Free text, no identity registry - '
+        "required for every manual ingest (there is no preview-only mode for this script).",
+    )
     return parser
 
 
@@ -89,6 +102,7 @@ def main(argv: "Sequence[str] | None" = None) -> int:
         try:
             run = ingest_local_file(
                 session, url=args.url, local_path=args.file, content_type=args.content_type,
+                supplied_by=args.supplied_by,
             )
         except ManualFileAcquisitionError as exc:
             print(f"INGEST FAILED: {exc}", file=sys.stderr)
@@ -100,6 +114,7 @@ def main(argv: "Sequence[str] | None" = None) -> int:
         print(f"status: {run.status.value}")
         print(f"is_new_snapshot: {run.is_new_snapshot}")
         print(f"provider_version: {run.provider_version}")
+        print(f"supplied_by: {run.supplied_by}")
         print(f"canonical/original URL: {run.request_url}")
         if run.snapshot is not None:
             print(f"snapshot_id: {run.snapshot.id}")

@@ -109,6 +109,20 @@ class AcquisitionRun(Base):
     error_category: Mapped[Optional[str]] = mapped_column(String(100))
     error_detail: Mapped[Optional[str]] = mapped_column(Text)
     is_new_snapshot: Mapped[Optional[bool]] = mapped_column(Boolean)
+    # Additive (RWI HQ "Manual File Acquisition Provenance - supplied_by"
+    # mission). NULL for every automated/network acquisition run (FAA,
+    # Tableau, generic HTTP) - populated ONLY when a human explicitly
+    # supplies an artifact through the manual-file acquisition path
+    # (app.acquisition.manual_file.ingest_local_file). Answers exactly one
+    # question - "who supplied these bytes to RWI" - never who published
+    # the source, who reviewed/approved evidence, or who authored the
+    # document; those remain separate, existing concepts (Source.publisher,
+    # ReviewerAction.reviewer, SignalAmendmentAction.reviewer) untouched by
+    # this column. Free-text human identity, same convention already used
+    # by ReviewerAction.reviewer/SignalAmendmentAction.reviewer/
+    # ManualClaimEvidence.analyst (this codebase has no auth system to FK
+    # to) - no new identity registry introduced.
+    supplied_by: Mapped[Optional[str]] = mapped_column(String(100))
 
     source: Mapped["AcquisitionSource"] = relationship(
         back_populates="runs", foreign_keys=[acquisition_source_id]
