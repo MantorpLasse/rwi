@@ -1,4 +1,4 @@
-# RWI Update & Report V1 — Implementation Report
+# RWI Update & Report V1 / V1.1 — Implementation Report
 
 **Status:** IMPLEMENTED, NARROW SLICE. No schema migration, no production DB
 write, no autonomous Signal mutation, no autonomous publication, no FH-D4
@@ -131,7 +131,107 @@ separate invocation with its own explicit `--signal-id`/`--reviewer`/
 - `app/services/update_report_apply.py` — `apply_field_change_candidate()`.
 - `app/services/update_report_engine.py` — `UpdateReport`,
   `generate_update_report()`, `render_report_text()`.
+- `app/services/update_report_discovery_bridge.py` — V1.1, see below.
 - `scripts/run_update_report.py` — operator CLI.
 - `tests/test_update_report_watchset.py`,
   `tests/test_update_report_change_detection.py`,
-  `tests/test_update_report_apply_and_engine.py`.
+  `tests/test_update_report_apply_and_engine.py`,
+  `tests/test_update_report_discovery_bridge.py`.
+
+---
+
+## V1.1 — Watch → Discovery Bridge
+
+Connects V1's watch set to RWI's existing research/discovery loop, so a
+watch item can drive discovery instead of requiring an operator to already
+have a `SourceAssertion` id in hand:
+
+```
+WatchItem
+  -> app.services.update_report_discovery_bridge.build_watch_discovery_subject()
+     -> Airport identity (name/iata/icao), known official domain
+        (app.services.official_domain_discovery.select_preferred_official_hostname,
+        unmodified), and the watch item's own existing SourceAssertion
+        evidence text, where one already exists - nothing fabricated.
+
+  -> plan_watch_discovery_queries()
+     -> standard EMAS/RESA/... queries (app.discovery.query.build_search_plan)
+     -> + site:<official domain> queries, when a domain is already known
+        (app.discovery.query.plan_official_domain_document_queries)
+     -> + temporal follow-up queries, ONLY for NEEDS_MORE_EVIDENCE watch
+        items with existing evidence text
+        (app.services.discovery_temporal_followup, unmodified)
+     -> bounded to MAX_LIVE_QUERIES_PER_WATCH_ITEM (5) for LIVE execution -
+        the full plan is still shown in a plan-only run
+
+  -> run_watch_discovery(provider=None | a live SearchProvider)
+     -> app.discovery.search / dedup / triage (all unmodified)
+     -> DiscoveryRunResult (non-persisted): status, planned/executed
+        queries, triaged candidates, known-source matches, an optional
+        ChangeCandidateResult, and (when actionable) literal
+        `fetch_research_candidate.py ...` commands for an operator to run
+        by hand - never executed automatically
+```
+
+**What is automatic**: query planning, live search execution (only when a
+provider is explicitly supplied), dedup, triage, and — for any watch item
+that already has an existing, governed `SourceAssertion` — routing that id
+into the unmodified `classify_candidate()` (status `STAGED_EVIDENCE_CREATED`,
+Part 9's own "the bridge's job ends at SourceAssertion ID ready for Update
+& Report").
+
+**What remains human-gated, unchanged**: fetching a document
+(`scripts/fetch_research_candidate.py`, requires `--allow-live-network`
++`--allow-database-write`), selecting/keeping a fragment
+(`scripts/review_fragment_selection.py`, requires `--keep`), and every
+governed evidence-persistence call. This bridge module never imports or
+calls any of those — verified by an architectural-safety test
+(`tests/test_update_report_discovery_bridge.py::test_bridge_never_imports_fetch_or_persistence_or_hub_followup`).
+A live discovery run that finds an actionable candidate prints the exact
+fetch command an operator would run — it never runs it.
+
+**SearchResult != Evidence**: nothing in this module ever constructs a
+`SourceAssertion`, `Signal`, or field change from a `SearchResult`/
+`TriagedResult`. The only way a `ChangeCandidateResult` appears in a
+`DiscoveryRunResult` is through an *already-existing* `SourceAssertion`.
+
+**Plan-only vs. live**: `--discover` runs the bridge with `provider=None`
+— zero network calls, full query plan still shown (status `PLANNED_ONLY`
+when nothing else applies). `--discover-live` is the *only* flag that
+makes a live network call (via `BraveSearchProvider`); it is never implied
+by any other flag. Both remain entirely separate from `--apply`.
+
+**Typed field-change extraction remains out of scope**: discovery can
+raise new evidence to `NEW_SIGNAL_CANDIDATE`/`CORROBORATION_ONLY`/
+`NEEDS_MORE_EVIDENCE`/`DUPLICATE` (all reachable without a typed value),
+but never to `FIELD_CHANGE_CANDIDATE` on its own — that classification
+still requires an operator-supplied `proposed_changes` value via
+`--candidate`/`--propose`, exactly as in V1 (see "What still requires a
+human" above).
+
+**No autonomous governed writes**: `run_watch_discovery()`/
+`run_discovery_for_watch_set()` never call `session.add()`/`flush()`/
+`commit()` themselves, and the CLI's `--discover`/`--discover-live` path
+still opens the database via the same read-only SQLite URI as plain
+report mode.
+
+**Bounded by design**: at most 5 live queries per watch item
+(`MAX_LIVE_QUERIES_PER_WATCH_ITEM`), and at most 5 fetch instructions
+surfaced per watch item (`MAX_ACTIONABLE_CANDIDATES_PER_WATCH_ITEM`) — a
+real finding from the live SDF benchmark: a `site:<official domain>`
+query legitimately returns many pages on that domain, and the existing,
+unmodified triage scoring already promotes any same-domain hit to at
+least MEDIUM band, so an un-capped list would have printed dozens of
+fetch commands per watch item.
+
+**Known, documented limitations (V1.1)**:
+- `app.services.official_hub_followup` (bounded hub-page follow-up) is
+  not wired in — it is an internal detail of
+  `run_research_loop(follow_up_official_hubs=True)`, which this bridge
+  does not call.
+- Known-source matching (Part 8) is airport-scoped, exact-normalized-URL
+  matching only — it does not detect near-duplicate content at a
+  different URL.
+- A `WatchItem`'s `acquisition_notes` are keyed by `airport_id`; two watch
+  items for the same airport share one note slot in the rendered report
+  (an existing V1 report-engine limitation, not new to V1.1).

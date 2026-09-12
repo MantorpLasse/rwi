@@ -7,6 +7,8 @@
     python -m scripts.run_update_report --note 40:"Cloudflare-blocked - could not verify"
     python -m scripts.run_update_report --apply --signal-id 6 --apply-set target_year=2030 \\
         --reviewer "operator@example.test" --reason "AMPU Table 8-1 correction"
+    python -m scripts.run_update_report --discover
+    python -m scripts.run_update_report --discover-live
 
 DEFAULT BEHAVIOR IS READ-ONLY: with no `--apply`, this script opens the
 target database via SQLite's own read-only URI mode (`mode=ro`) - the same
@@ -37,6 +39,20 @@ already knows about). `--propose "SA_ID:field=value"` represents an
 operator who has already read that evidence and determined an explicit new
 value - this script never extracts a field value from raw text itself (see
 app.services.update_report_change_detection's own module docstring for why).
+
+DISCOVERY BRIDGE (V1.1, Part 12): `--discover` runs
+app.services.update_report_discovery_bridge for every watch item with
+`provider=None` - PLAN ONLY, zero network calls, same convention as
+app.services.research_loop.run_research_loop(provider=None). `--discover-live`
+runs the SAME bridge with a real `BraveSearchProvider` - the ONLY way this
+script ever makes a live network call; it is never implied by any other
+flag, including plain `--discover`. Neither flag ever fetches a document,
+persists a SourceAssertion, or bypasses the existing human fetch/KEEP gates
+(scripts/fetch_research_candidate.py, scripts/review_fragment_selection.py)
+- a live discovery run that finds an actionable candidate prints the exact
+`fetch_research_candidate.py` command an operator would run by hand, and
+stops there. See app.services.update_report_discovery_bridge's own module
+docstring for the full integration path and human-gate boundary.
 """
 from __future__ import annotations
 
@@ -127,12 +143,22 @@ class ReportRunConfig:
     correction_ids: "frozenset[int]" = frozenset()
     new_signal_ids: "frozenset[int]" = frozenset()
     acquisition_notes: "dict[int, str]" = None  # type: ignore[assignment]
+    discover: bool = False
+    discover_live: bool = False
+
+
+def _discovery_note(discovery_result) -> str:
+    parts = [discovery_result.status.value, *discovery_result.notes, *discovery_result.fetch_instructions]
+    return " | ".join(parts)
 
 
 def run_report(session: Session, config: ReportRunConfig) -> str:
-    """The one function that does the work for report/watch-only mode -
-    both `main()` and tests call this. Read-only: performs no add/flush/
-    commit regardless of the session it is given."""
+    """The one function that does the work for report/watch-only/discover
+    mode - both `main()` and tests call this. Read-only: performs no
+    add/flush/commit regardless of the session it is given, and regardless
+    of `config.discover`/`config.discover_live` (see
+    app.services.update_report_discovery_bridge's own module docstring -
+    it never writes either)."""
     watch_items = plan_watch_set(session, limit=config.limit)
     if config.watch_only:
         lines = [f"WATCH SET ({len(watch_items)} item(s))"]
@@ -141,12 +167,48 @@ def run_report(session: Session, config: ReportRunConfig) -> str:
         return "\n".join(lines) if watch_items else "WATCH SET (0 items)"
 
     proposed_by_id = config.proposed_changes_by_id or {}
-    candidate_ids = [item.source_assertion_id for item in watch_items if item.source_assertion_id is not None]
-    candidate_ids.extend(config.explicit_candidate_ids)
+    acquisition_notes = dict(config.acquisition_notes or {})
 
     seen: "set[int]" = set()
     results = []
-    for source_assertion_id in candidate_ids:
+    discovery_summary_lines: "list[str]" = []
+
+    if config.discover or config.discover_live:
+        from app.services.update_report_discovery_bridge import run_discovery_for_watch_set
+
+        provider = None
+        if config.discover_live:
+            from app.discovery.brave_search_provider import BraveSearchProvider
+
+            provider = BraveSearchProvider()
+
+        discovery_results = run_discovery_for_watch_set(session, watch_items, provider=provider)
+        for discovery_result in discovery_results:
+            discovery_summary_lines.append(
+                f"airport {discovery_result.watch_item.airport_id}: {discovery_result.status.value} "
+                f"(planned={len(discovery_result.queries_planned)}, executed={len(discovery_result.queries_executed)}, "
+                f"candidates={len(discovery_result.triaged_candidates)}, known={len(discovery_result.known_source_matches)})"
+            )
+            if discovery_result.change_candidate is not None:
+                source_assertion_id = discovery_result.change_candidate.source_assertion_id
+                if source_assertion_id not in seen:
+                    seen.add(source_assertion_id)
+                    results.append(discovery_result.change_candidate)
+            else:
+                acquisition_notes[discovery_result.watch_item.airport_id] = _discovery_note(discovery_result)
+    else:
+        candidate_ids = [item.source_assertion_id for item in watch_items if item.source_assertion_id is not None]
+        for source_assertion_id in candidate_ids:
+            is_duplicate = source_assertion_id in seen
+            seen.add(source_assertion_id)
+            results.append(
+                classify_candidate(
+                    session, CandidateEvidenceInput(source_assertion_id=source_assertion_id),
+                    is_duplicate_in_batch=is_duplicate,
+                )
+            )
+
+    for source_assertion_id in config.explicit_candidate_ids:
         is_duplicate = source_assertion_id in seen
         seen.add(source_assertion_id)
         evidence_input = CandidateEvidenceInput(
@@ -157,10 +219,11 @@ def run_report(session: Session, config: ReportRunConfig) -> str:
         )
         results.append(classify_candidate(session, evidence_input, is_duplicate_in_batch=is_duplicate))
 
-    report = generate_update_report(
-        watch_items=watch_items, candidates=tuple(results), acquisition_notes=config.acquisition_notes or {},
-    )
-    return render_report_text(report)
+    report = generate_update_report(watch_items=watch_items, candidates=tuple(results), acquisition_notes=acquisition_notes)
+    output = render_report_text(report)
+    if discovery_summary_lines:
+        output = "DISCOVERY SUMMARY\n" + "\n".join(discovery_summary_lines) + "\n\n" + output
+    return output
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -168,6 +231,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
     parser.add_argument("--limit", type=int, default=DEFAULT_WATCH_SET_LIMIT)
     parser.add_argument("--watch-only", action="store_true")
+    parser.add_argument("--discover", action="store_true", help="plan discovery for the watch set - zero network calls")
+    parser.add_argument(
+        "--discover-live", action="store_true",
+        help="run discovery for the watch set with a live BraveSearchProvider - the only flag that makes a live network call",
+    )
     parser.add_argument("--candidate", action="append", type=int, default=[], dest="candidates")
     parser.add_argument("--propose", action="append", type=_parse_propose, default=[], dest="proposals")
     parser.add_argument("--correction", action="append", type=int, default=[], dest="corrections")
@@ -226,6 +294,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         correction_ids=frozenset(args.corrections),
         new_signal_ids=frozenset(args.new_signals),
         acquisition_notes=dict(args.notes),
+        discover=args.discover,
+        discover_live=args.discover_live,
     )
 
     engine = build_readonly_engine(config.database)
