@@ -27,43 +27,36 @@ docstring. This module generalizes that proven pattern into one reusable,
 tested service, so a future correction is a function call with an explicit
 reason, not a new bespoke script.
 
-AUDIT TRAIL — THE ONE REAL GAP THIS MISSION FOUND, REPORTED HONESTLY RATHER
-THAN PAPERED OVER: this repository has exactly two existing append-only,
-human-attributed decision logs — `ReviewerAction` (required, NOT NULL
-`source_assertion_id`; a fixed, closed action vocabulary this mission is
-explicitly forbidden from extending) and `SignalPublicationAction` (a hard
-`CHECK (action IN ('PUBLISH','UNPUBLISH'))` constraint, and its own
-docstring explicitly says it "never touches any of its content fields").
-NEITHER can hold a general "field X changed from A to B, because Y" record
-without either a schema change (a new table, or new columns/CHECK values
-on an existing one) or reusing a fixed vocabulary in a way it was never
-designed for. Per this mission's own explicit instruction ("do not hide
-audit weakness behind source_notes free text" / "STOP before inventing
-[a new persisted audit table]"), this module does NOT invent one, and
-does NOT pretend `Signal.source_notes` is a substitute for one.
+AUDIT TRAIL — RESOLVED (RWI HQ "Signal Amendment Audit Trail — Append-Only
+Governance" mission, following the design recon
+docs/architecture/rwi-signal-amendment-audit-trail-design.md): every real
+`amend_signal()` call now creates one durable, immutable
+`app.models.signal_amendment.SignalAmendmentAction` row plus one
+`SignalAmendmentFieldChange` row per changed field (via
+`app.services.signal_amendment_history.record_signal_amendment()`), in the
+SAME transaction as the Signal mutation itself, atomically. This is a real,
+persisted, queryable audit trail — "show me every amendment ever made to
+Signal 6" is now `app.services.signal_amendment_history.list_signal_amendments()`.
 
-What this module actually provides instead, honestly scoped:
+Neither `ReviewerAction` (fixed, closed action vocabulary this mission is
+explicitly forbidden from extending) nor `SignalPublicationAction` (hard
+`CHECK`'d to `PUBLISH`/`UNPUBLISH` only, and its own docstring explicitly
+says it "never touches any of its content fields") was reused or altered -
+the design recon's own §3/§4 concluded reuse would corrupt either table's
+documented meaning; two new, dedicated, additive tables were the
+recommended (and now implemented) design instead.
 
-  1. A complete, structured `SignalAmendmentResult` — field/old value/new
-     value/reason/reviewer/provenance references/timestamp — returned to
-     the immediate caller (satisfies this mission's own explicit
-     "preserve old/new values in a returned result object" requirement).
-     A caller (e.g. a future Commander CLI) can log or print this; nothing
-     here forces it to be thrown away.
-  2. One dated, human-readable line appended (never overwritten) to
-     `Signal.source_notes`, in the exact style every historical
-     correction script already used — a public-facing transparency aid,
-     NOT a queryable audit record, and NOT claimed to be one anywhere in
-     this module.
-
-**The durable, structured, queryable "show me every amendment ever made to
-Signal 6" capability does not exist after this mission and would require a
-real schema decision (a new append-only table) in a future, separate,
-explicitly-authorized mission.** This module's own tests
-(`test_signal_amendment.py::test_no_new_audit_semantics_invented_silently`)
-assert directly that calling `amend_signal()` creates no new
-`ReviewerAction` or `SignalPublicationAction` row — this module invents no
-audit mechanism of its own, silently or otherwise.
+`Signal.source_notes` NO LONGER receives an automatic audit-prose line from
+this module (see design recon §12/§18): `source_notes` is public-facing
+evidence/context text; audit history is internal governance history, and
+conflating the two was always this module's own documented, temporary
+workaround, never the intended end state. A caller who also wants to add a
+public-facing research-finding sentence does so explicitly and separately
+(exactly like `scripts/update_fty_emas_details.py`/
+`scripts/update_ase_runway_relocation_note.py` already do), never as an
+automatic byproduct of calling `amend_signal()`. No existing production
+`source_notes` value was touched by this change - only future calls behave
+differently.
 
 SCOPE OF THIS WRITE SEAM: this is a write seam AFTER a human/governed
 decision has already been made elsewhere — it is deliberately NOT a
@@ -88,6 +81,7 @@ from app.models.airport import Runway
 from app.models.reviewer_action import ReviewerAction
 from app.models.signal import Signal
 from app.models.source_assertion import SourceAssertion
+from app.services.signal_amendment_history import record_signal_amendment
 
 __all__ = [
     "ALLOWED_AMENDMENT_FIELDS",
@@ -188,9 +182,13 @@ class FieldChange:
 
 @dataclass(frozen=True)
 class SignalAmendmentResult:
-    """Pure, structured record of one `amend_signal()` call - see module
-    docstring "AUDIT TRAIL" for exactly what this is (a returned result
-    object) and is not (a persisted, queryable audit trail)."""
+    """Structured record of one `amend_signal()` call, returned to the
+    immediate caller for convenience (e.g. printing a summary) - the
+    durable, queryable record of this same call is now the
+    `SignalAmendmentAction` row identified by `signal_amendment_action_id`
+    (see `app.services.signal_amendment_history.list_signal_amendments()`).
+    This object itself is never persisted and is not a second audit
+    system - the database rows are the source of truth."""
 
     signal_id: int
     reason: str
@@ -199,7 +197,7 @@ class SignalAmendmentResult:
     source_assertion_id: Optional[int]
     reviewer_action_id: Optional[int]
     timestamp: datetime
-    source_notes_appended: bool
+    signal_amendment_action_id: int
 
 
 def _validate_runway_compatibility(session: Session, signal: Signal, new_runway_id: Optional[int]) -> None:
@@ -266,16 +264,27 @@ def amend_signal(
     reviewer_action_id: Optional[int] = None,
 ) -> SignalAmendmentResult:
     """Load the existing Signal, validate every proposed change against
-    `ALLOWED_AMENDMENT_FIELDS`, refuse a no-op call, apply the real diff in
-    one transaction, append one dated `source_notes` line, and return a
-    `SignalAmendmentResult`. Never commits - calls `session.flush()` only,
-    exactly like `create_signal_from_approved_review()`/`publish_signal()`
-    do, so the caller controls the transaction boundary (and a validation
-    failure, which always happens before any `setattr`, leaves nothing to
-    roll back).
+    `ALLOWED_AMENDMENT_FIELDS`, refuse a no-op call, apply the real diff,
+    record it durably (one `SignalAmendmentAction` + one
+    `SignalAmendmentFieldChange` per changed field, via
+    `app.services.signal_amendment_history.record_signal_amendment()`),
+    and return a `SignalAmendmentResult`. Never commits - calls
+    `session.flush()` only, exactly like
+    `create_signal_from_approved_review()`/`publish_signal()` do, so the
+    caller controls the transaction boundary (and a validation failure,
+    which always happens before any `setattr`, leaves nothing to roll
+    back).
 
     Every validation runs BEFORE any mutation - a `SignalAmendmentError`
-    never leaves the Signal or the session partially changed.
+    never leaves the Signal or the session partially changed. The Signal
+    mutation and its audit rows are applied in the same transaction and
+    the same final `flush()` - a failure recording the audit rows never
+    leaves an unaudited Signal mutation behind (see
+    `record_signal_amendment()`'s own fail-closed validation, which runs
+    before either it or `amend_signal()` has added a single row).
+
+    `Signal.source_notes` is no longer touched by this function - see
+    module docstring "AUDIT TRAIL".
     """
     if not reason.strip():
         raise SignalAmendmentError("reason is required")
@@ -310,13 +319,19 @@ def amend_signal(
         raise SignalAmendmentError("no-op amendment: every proposed value already matches the current value")
 
     timestamp = datetime.now(UTC)
+
+    # Durable audit history first (steps 3-4 of this mission's own approved
+    # ordering), THEN the Signal mutation (step 5) - both land in the same
+    # transaction and the same final flush() (step 6), so a caller's
+    # rollback on any later failure undoes both together; there is no
+    # return path between the two that could leave one without the other.
+    action = record_signal_amendment(
+        session, signal_id=signal.id, changes=real_changes, reason=reason, reviewer=reviewer,
+        source_assertion_id=source_assertion_id, reviewer_action_id=reviewer_action_id,
+    )
+
     for change in real_changes:
         setattr(signal, change.field, change.new_value)
-
-    note_lines = ", ".join(f"{c.field}: {c.old_value!r} -> {c.new_value!r}" for c in real_changes)
-    provenance_suffix = f" (SourceAssertion #{source_assertion_id})" if source_assertion_id is not None else ""
-    new_note = f"[{timestamp.date()}] Amended by {reviewer.strip()}: {reason.strip()} ({note_lines}){provenance_suffix}"
-    signal.source_notes = f"{signal.source_notes}\n{new_note}" if signal.source_notes else new_note
 
     session.flush()
 
@@ -328,5 +343,5 @@ def amend_signal(
         source_assertion_id=source_assertion_id,
         reviewer_action_id=reviewer_action_id,
         timestamp=timestamp,
-        source_notes_appended=True,
+        signal_amendment_action_id=action.id,
     )

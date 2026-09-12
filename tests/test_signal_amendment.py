@@ -17,6 +17,7 @@ from app.services.signal_amendment import (
     SignalAmendmentError,
     amend_signal,
 )
+from app.services.signal_amendment_history import list_signal_amendments
 
 
 def make_session():
@@ -79,12 +80,13 @@ def test_reviewer_required():
         amend_signal(session, signal_id=signal.id, changes={"target_year": 2026}, reason="a real reason", reviewer="  ")
 
 
-# 4. No-op amendment rejected.
+# 4/9. No-op amendment rejected, and creates no SignalAmendmentAction row.
 def test_no_op_amendment_rejected():
     session = make_session()
     signal = make_signal(session, target_year=2028)
     with pytest.raises(SignalAmendmentError, match="no-op amendment"):
         amend_signal(session, signal_id=signal.id, changes={"target_year": 2028}, reason="a real reason", reviewer="r@example.test")
+    assert list_signal_amendments(session, signal.id) == ()
 
 
 def test_empty_changes_rejected():
@@ -94,12 +96,14 @@ def test_empty_changes_rejected():
         amend_signal(session, signal_id=signal.id, changes={}, reason="a real reason", reviewer="r@example.test")
 
 
-# 5. Disallowed (unknown) field rejected.
+# 5/10. Disallowed (unknown) field rejected, and creates no
+# SignalAmendmentAction row.
 def test_disallowed_unknown_field_rejected():
     session = make_session()
     signal = make_signal(session)
     with pytest.raises(SignalAmendmentError, match="not in the allowed amendment field set"):
         amend_signal(session, signal_id=signal.id, changes={"notes": "sneaky"}, reason="a real reason", reviewer="r@example.test")
+    assert list_signal_amendments(session, signal.id) == ()
 
 
 # 6. published cannot be changed.
@@ -167,7 +171,9 @@ def test_supporting_source_assertion_when_valid_is_recorded():
     )
     session.commit()
     assert result.source_assertion_id == assertion.id
-    assert f"SourceAssertion #{assertion.id}" in signal.source_notes
+    history = list_signal_amendments(session, signal.id)
+    assert len(history) == 1
+    assert history[0].source_assertion_id == assertion.id
 
 
 # 10/11. Incompatible provenance (different airport) fails closed - no
@@ -271,6 +277,7 @@ def test_rollback_on_validation_failure_leaves_nothing_changed():
     refreshed = session.get(Signal, signal.id)
     assert refreshed.target_year == 2028
     assert refreshed.category == "new_installation"
+    assert list_signal_amendments(session, signal.id) == ()
 
 
 # 14. The existing publication service remains the only publication write
@@ -293,20 +300,24 @@ def test_publication_state_never_touched():
     assert refreshed.published is False  # untouched either way
 
 
-# 15. No new audit semantics invented silently - no ReviewerAction, no
-# SignalPublicationAction row is ever created by this service.
-def test_no_new_audit_semantics_invented_silently():
+# 15. No ReviewerAction/SignalPublicationAction vocabulary is reused or
+# extended by this service - the durable audit trail is the dedicated
+# SignalAmendmentAction/SignalAmendmentFieldChange pair, never a repurposed
+# existing table.
+def test_no_reviewer_action_or_publication_action_created():
     session = make_session()
     signal = make_signal(session, target_year=2028)
 
-    amend_signal(session, signal_id=signal.id, changes={"target_year": 2026}, reason="a real reason", reviewer="r@example.test")
+    result = amend_signal(session, signal_id=signal.id, changes={"target_year": 2026}, reason="a real reason", reviewer="r@example.test")
     session.commit()
 
     assert session.scalars(select(ReviewerAction)).all() == []
     assert session.scalars(select(SignalPublicationAction)).all() == []
-    # The only trace is the returned result object plus the documented,
-    # explicitly-non-audit source_notes line.
-    assert signal.source_notes is not None and "Amended by" in signal.source_notes
+    # The durable trace is the persisted SignalAmendmentAction, not source_notes.
+    assert result.signal_amendment_action_id is not None
+    history = list_signal_amendments(session, signal.id)
+    assert len(history) == 1
+    assert history[0].action_id == result.signal_amendment_action_id
 
 
 def test_amend_nonexistent_signal_fails_closed():
@@ -315,15 +326,27 @@ def test_amend_nonexistent_signal_fails_closed():
         amend_signal(session, signal_id=999999, changes={"target_year": 2027}, reason="a real reason", reviewer="r@example.test")
 
 
-def test_source_notes_appends_rather_than_overwrites():
+# 23/24. amend_signal() no longer writes audit prose to source_notes, and
+# any existing source_notes value is preserved completely unchanged.
+def test_source_notes_left_completely_untouched():
     session = make_session()
     signal = make_signal(session, target_year=2028, source_notes="Original research finding from AMPU.")
 
     amend_signal(session, signal_id=signal.id, changes={"target_year": 2026}, reason="a real reason", reviewer="r@example.test")
     session.commit()
 
-    assert signal.source_notes.startswith("Original research finding from AMPU.\n")
-    assert "Amended by" in signal.source_notes
+    assert signal.source_notes == "Original research finding from AMPU."
+
+
+def test_source_notes_stays_none_when_it_was_none():
+    session = make_session()
+    signal = make_signal(session, target_year=2028)
+    assert signal.source_notes is None
+
+    amend_signal(session, signal_id=signal.id, changes={"target_year": 2026}, reason="a real reason", reviewer="r@example.test")
+    session.commit()
+
+    assert signal.source_notes is None
 
 
 def test_construction_and_completion_date_fields_amendable():

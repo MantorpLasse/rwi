@@ -29,6 +29,7 @@ from app.models.source_assertion_cross_source_alias_attestation import (
 )
 from app.models.manual_claim_evidence import ManualClaimEvidence
 from app.models.signal_publication_action import SignalPublicationAction
+from app.models.signal_amendment import SignalAmendmentAction, SignalAmendmentFieldChange
 
 __all__ = [
     "Airport",
@@ -50,6 +51,8 @@ __all__ = [
     "Runway",
     "RunwayEnd",
     "Signal",
+    "SignalAmendmentAction",
+    "SignalAmendmentFieldChange",
     "SignalDisposition",
     "SignalDispositionMember",
     "SignalPublicationAction",
