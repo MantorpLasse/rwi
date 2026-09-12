@@ -142,16 +142,36 @@ def get_known_official_hostnames(session: Session, airport_id: int) -> "tuple[st
 
 
 # --- Preferred-domain selection (RWI HQ "Official-Domain Discovery -
-# Smarter Domain Selection" mission) -----------------------------------------
+# Smarter Domain Selection" mission, refined by "Official-Domain Discovery
+# Selection Refinement" following the "Reliability vs Discovery Usefulness"
+# design recon) --------------------------------------------------------------
 #
-# NOT A TRUST RANKING (mission's own explicit design principle): every
-# candidate hostname already passed get_known_official_hostnames()'s own
-# reliability_level=="official" governance gate above - this section never
-# re-litigates whether a domain is trustworthy. It only answers "which of
-# these already-governed domains is most useful to search FIRST for
-# airport-specific project intelligence", using signals this repository
-# already treats as meaningful, in ascending order of how much has been
-# governed about that domain for THIS airport:
+# NOT A TRUST RANKING (mission's own explicit design principle, unchanged
+# and reinforced by this refinement): every candidate hostname already
+# passed get_known_official_hostnames()'s own reliability_level=="official"
+# governance gate above - this section never re-litigates whether a domain
+# is trustworthy, and this refinement does not touch Source.reliability_level,
+# evidentiary trust, or funding semantics in any way. It only answers
+# "which of these already-governed domains is most useful to search FIRST
+# for airport-specific project intelligence" - a DISCOVERY PRIORITY
+# question, deliberately kept separate from the RELIABILITY question.
+#
+# GENERIC MULTI-TENANT PORTAL (the one new distinction this refinement
+# adds, evaluated BEFORE every signal below): a small, explicit,
+# version-controlled set of hostnames that, in this repository's own real
+# governed data, serve many unrelated airports/entities with award/grant/
+# dataset RECORDS rather than airport-owned navigational structure (see
+# this constant's own comment for the exact evidence). A hostname on this
+# set is NOT less reliable, NOT less valid as evidence, and NOT excluded
+# from selection - it is simply demoted to a LOWER discovery-priority tier
+# than any OTHER governed official hostname for the same airport. If it is
+# the ONLY governed official hostname an airport has, it is still selected
+# (this is a comparative demotion, never an exclusion) - see
+# rank_official_hostnames()'s own fail-safe behavior.
+#
+# Within each tier (generic vs. non-generic), the existing cascade below is
+# completely unchanged, in ascending order of how much has been governed
+# about that domain for THIS airport:
 #
 #   1. Backs at least one PUBLISHED Signal (Signal.published == True).
 #      Signal.published is the single, authoritative, denormalized
@@ -189,6 +209,36 @@ def get_known_official_hostnames(session: Session, airport_id: int) -> "tuple[st
 # the mission's own firewall) this selection is NEVER written back
 # anywhere; it is recomputed fresh, read-only, on every call.
 
+# A small, explicit, version-controlled set - NOT a deny-list (these
+# domains remain fully valid official Sources and evidence providers;
+# nothing about their reliability_level or evidentiary trust changes
+# anywhere in this codebase). Each entry is justified by this repository's
+# own real governed data, inspected directly (RWI HQ "Official-Domain
+# Discovery Selection Refinement" mission's own design recon, Part A):
+# every governed Source row currently on these three hostnames is a
+# grant/award/bulk-dataset record shared across many unrelated airports
+# (USAspending award pages, FAA AIP/IIJA grant-amount PDFs mirrored via
+# explore.dot.gov, NFDC's 28-day NASR subscription ZIP distribution) -
+# none is an airport-owned navigational page (no board minutes, no
+# capital-program library, no bids/proposals hub). Deliberately NOT
+# included: bare "faa.gov" - that hostname's real governed content is
+# context-dependent (see the design recon's own Part F simulation: a
+# blanket faa.gov demotion produced ZERO net population improvement,
+# since affected airports simply fell back to this same generic tier
+# anyway, while risking wrongly demoting a genuinely airport-specific FAA
+# record this repository doesn't currently have an example of but might
+# in the future). Never a TLD/subdomain pattern (no "*.faa.gov",
+# no "*.gov") - exactly the same "small, explicit, curated, never a broad
+# pattern" discipline app.discovery.triage's own REGULATOR_DOMAINS/
+# VENDOR_CONTRACTOR_DOMAINS already establish for the identical reason.
+GENERIC_MULTI_TENANT_PORTAL_HOSTNAMES: frozenset[str] = frozenset(
+    {
+        "usaspending.gov",  # award/obligation records for any federal recipient, not airport-owned content
+        "explore.dot.gov",  # DOT's own generic grant/award explorer, same shape as usaspending.gov
+        "nfdc.faa.gov",  # bulk 28-day NASR subscription data distribution only - no navigable HTML content at all
+    }
+)
+
 
 @dataclass(frozen=True)
 class HostnameRanking:
@@ -196,13 +246,19 @@ class HostnameRanking:
     human-readable reason - diagnostic/explainability only (mirrors this
     codebase's own established "why did this happen" discipline, e.g.
     app.discovery.query.SearchQuery's template_id/identity_field/
-    identity_value). Never persisted, never treated as evidence."""
+    identity_value). Never persisted, never treated as evidence.
+
+    `is_generic_multi_tenant_portal` (RWI HQ "Official-Domain Discovery
+    Selection Refinement" mission) reflects only DISCOVERY PRIORITY, never
+    reliability - see GENERIC_MULTI_TENANT_PORTAL_HOSTNAMES's own comment.
+    """
 
     hostname: str
     published_signal_count: int
     signal_count: int
     reviewed_source_assertion_count: int
     official_source_count: int
+    is_generic_multi_tenant_portal: bool
     reason: str
 
 
@@ -298,11 +354,33 @@ def rank_official_hostnames(session: Session, airport_id: int) -> "tuple[Hostnam
     signal_counts = _count_per_hostname(all_signal_rows)
     reviewed_counts = _count_per_hostname(reviewed_sa_rows)
 
+    # RWI HQ "Official-Domain Discovery Selection Refinement" mission:
+    # computed once, over the full candidate set, so each hostname's own
+    # reason string can honestly say whether a comparison against a
+    # generic portal actually applied for THIS airport - never claimed
+    # for an airport that has no generic-portal candidate at all.
+    any_generic_present = any(h in GENERIC_MULTI_TENANT_PORTAL_HOSTNAMES for h in hostnames)
+    any_non_generic_present = any(h not in GENERIC_MULTI_TENANT_PORTAL_HOSTNAMES for h in hostnames)
+
     rankings = []
     for host in hostnames:
         inputs = (
             published_counts[host], signal_counts[host], reviewed_counts[host], len(source_ids_by_hostname[host]),
         )
+        is_generic = host in GENERIC_MULTI_TENANT_PORTAL_HOSTNAMES
+        base_reason = _reason_for(inputs)
+        # Wording deliberately avoids "more trustworthy"/"higher
+        # reliability"/"better evidence" (mission's own explicit
+        # instruction) - this is a discovery-priority fact only, never a
+        # reliability judgment. Only stated when the comparison actually
+        # applies to this airport (i.e. both kinds of hostname are
+        # present) - never implied for an airport with only one kind.
+        if is_generic and any_non_generic_present:
+            reason = f"generic multi-tenant portal, deprioritized for discovery only ({base_reason})"
+        elif not is_generic and any_generic_present:
+            reason = f"non-generic official domain, preferred over generic multi-tenant portal ({base_reason})"
+        else:
+            reason = base_reason
         rankings.append(
             HostnameRanking(
                 hostname=host,
@@ -310,14 +388,15 @@ def rank_official_hostnames(session: Session, airport_id: int) -> "tuple[Hostnam
                 signal_count=inputs[1],
                 reviewed_source_assertion_count=inputs[2],
                 official_source_count=inputs[3],
-                reason=_reason_for(inputs),
+                is_generic_multi_tenant_portal=is_generic,
+                reason=reason,
             )
         )
 
     rankings.sort(
         key=lambda r: (
-            -r.published_signal_count, -r.signal_count, -r.reviewed_source_assertion_count,
-            -r.official_source_count, r.hostname,
+            r.is_generic_multi_tenant_portal, -r.published_signal_count, -r.signal_count,
+            -r.reviewed_source_assertion_count, -r.official_source_count, r.hostname,
         )
     )
     return tuple(rankings)

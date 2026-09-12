@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.models import Airport, Signal, Source, SourceAssertion
 from app.services.official_domain_discovery import (
+    GENERIC_MULTI_TENANT_PORTAL_HOSTNAMES,
     get_known_official_hostnames,
     rank_official_hostnames,
     select_preferred_official_hostname,
@@ -429,3 +430,257 @@ def test_sdf_shaped_fixture_prefers_airport_operator_domain_via_signal_provenanc
         assert ranked[0].published_signal_count == 1
         assert ranked[1].hostname == "regulator-style.example.gov"
         assert ranked[1].published_signal_count == 0
+
+
+# --- Generic multi-tenant portal tier (RWI HQ "Official-Domain Discovery
+# Selection Refinement" mission) ---------------------------------------------
+
+
+def _generic_source(session, *, url: str) -> Source:
+    """A "generic multi-tenant portal" Source - same shape as
+    _official_source(), just a clearer name for tests below that
+    deliberately mix generic and non-generic hostnames."""
+    return _official_source(session, url=url)
+
+
+# 1. NON-GENERIC domain beats generic portal even with FEWER published
+# Signals - the core behavior this mission implements.
+def test_non_generic_domain_beats_generic_portal_despite_fewer_published_signals():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+
+        # Generic portal: 5 published Signals - would win under the OLD
+        # cascade-only ranking.
+        for i in range(5):
+            s = _generic_source(session, url=f"https://usaspending.gov/award/{i}")
+            _signal(session, airport_id=airport.id, source_id=s.id, published=True)
+
+        # Non-generic operator domain: only 1 published Signal.
+        operator_source = _official_source(session, url="https://binghamtonairport.com/board-minutes.pdf")
+        _signal(session, airport_id=airport.id, source_id=operator_source.id, published=True)
+
+        preferred = select_preferred_official_hostname(session, airport.id)
+        assert preferred == "binghamtonairport.com"
+
+        ranked = rank_official_hostnames(session, airport.id)
+        assert ranked[0].hostname == "binghamtonairport.com"
+        assert ranked[0].is_generic_multi_tenant_portal is False
+        assert "non-generic official domain, preferred over generic multi-tenant portal" in ranked[0].reason
+        assert ranked[1].hostname == "usaspending.gov"
+        assert ranked[1].is_generic_multi_tenant_portal is True
+        assert ranked[1].published_signal_count == 5
+        assert "generic multi-tenant portal, deprioritized for discovery only" in ranked[1].reason
+
+
+# 2. A generic portal remains fully selectable if it is the ONLY governed
+# domain - a comparative demotion, never an exclusion.
+def test_generic_portal_alone_is_still_selected():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        s = _generic_source(session, url="https://usaspending.gov/award/1")
+        _signal(session, airport_id=airport.id, source_id=s.id, published=True)
+
+        preferred = select_preferred_official_hostname(session, airport.id)
+        assert preferred == "usaspending.gov"
+
+        ranked = rank_official_hostnames(session, airport.id)
+        assert len(ranked) == 1
+        assert ranked[0].is_generic_multi_tenant_portal is True
+        # No competing non-generic domain exists for this airport - the
+        # reason must not falsely claim a comparison happened.
+        assert "preferred over" not in ranked[0].reason
+        assert "deprioritized" not in ranked[0].reason
+
+
+def test_explore_dot_gov_alone_is_still_selected():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        s = _generic_source(session, url="https://explore.dot.gov/some/award")
+        _unreviewed_sa(session, airport_id=airport.id, source_id=s.id)
+        assert select_preferred_official_hostname(session, airport.id) == "explore.dot.gov"
+
+
+def test_nfdc_faa_gov_alone_is_still_selected():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        s = _generic_source(session, url="https://nfdc.faa.gov/webContent/data.zip")
+        _unreviewed_sa(session, airport_id=airport.id, source_id=s.id)
+        assert select_preferred_official_hostname(session, airport.id) == "nfdc.faa.gov"
+
+
+# 3. Existing cascade still works, unchanged, BETWEEN two NON-GENERIC domains.
+def test_cascade_unchanged_between_two_non_generic_domains():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        published_source = _official_source(session, url="https://authority.example.org/a.pdf")
+        _signal(session, airport_id=airport.id, source_id=published_source.id, published=True)
+        assertion_only_source = _official_source(session, url="https://regulator.example.gov/b.pdf")
+        _reviewed_sa(session, airport_id=airport.id, source_id=assertion_only_source.id)
+
+        ranked = rank_official_hostnames(session, airport.id)
+        assert ranked[0].hostname == "authority.example.org"
+        assert ranked[1].hostname == "regulator.example.gov"
+        # Neither domain is generic - no airport with only non-generic
+        # candidates should ever see the new comparative wording.
+        assert "generic" not in ranked[0].reason
+        assert "generic" not in ranked[1].reason
+
+
+# 4. Existing cascade still works, unchanged, BETWEEN two GENERIC portal
+# domains (both demoted equally relative to a third non-generic one, but
+# still ranked against each other by the same cascade).
+def test_cascade_unchanged_between_two_generic_domains():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        operator_source = _official_source(session, url="https://authority.example.org/a.pdf")
+        _unreviewed_sa(session, airport_id=airport.id, source_id=operator_source.id)
+
+        many_signals_source = _generic_source(session, url="https://usaspending.gov/award/1")
+        _signal(session, airport_id=airport.id, source_id=many_signals_source.id, published=True)
+        few_signals_source = _generic_source(session, url="https://explore.dot.gov/award/2")
+        _reviewed_sa(session, airport_id=airport.id, source_id=few_signals_source.id)
+
+        ranked = rank_official_hostnames(session, airport.id)
+        assert ranked[0].hostname == "authority.example.org"  # non-generic always first
+        generic_ranked = [r for r in ranked if r.is_generic_multi_tenant_portal]
+        assert [r.hostname for r in generic_ranked] == ["usaspending.gov", "explore.dot.gov"]  # cascade still applies
+
+
+# 5. BGM-shaped synthetic fixture: operator-style domain loses today on
+# published count, wins after the new generic tier (using GENERIC_MULTI_
+# TENANT_PORTAL_HOSTNAMES's own real entries, not a synthetic stand-in,
+# to prove the real constant - not just a lookalike - drives this).
+def test_bgm_shaped_fixture_operator_domain_wins_over_real_generic_constant():
+    with Session(_engine()) as session:
+        airport = _airport(session, iata="BGM")
+        for i, host in enumerate(sorted(GENERIC_MULTI_TENANT_PORTAL_HOSTNAMES)):
+            s = _generic_source(session, url=f"https://{host}/award/{i}")
+            _signal(session, airport_id=airport.id, source_id=s.id, published=True)
+        operator_source = _official_source(session, url="https://binghamtonairport.com/x.pdf")
+        _signal(session, airport_id=airport.id, source_id=operator_source.id, published=True)
+
+        assert select_preferred_official_hostname(session, airport.id) == "binghamtonairport.com"
+
+
+# 6. SDF-shaped synthetic fixture: an operator domain that already wins
+# (highest tier already, no generic competitor at that tier) remains
+# selected - the refinement must not regress an already-correct case.
+def test_sdf_shaped_fixture_operator_domain_remains_selected():
+    with Session(_engine()) as session:
+        airport = _airport(session, iata="SDF")
+        operator_source = _official_source(session, url="https://flylouisville-style.example.com/x.pdf")
+        _signal(session, airport_id=airport.id, source_id=operator_source.id, published=True)
+
+        faa_source = _official_source(session, url="https://faa.gov/y.pdf")
+        _signal(session, airport_id=airport.id, source_id=faa_source.id, published=False)
+
+        generic_source = _generic_source(session, url="https://explore.dot.gov/z")
+        _reviewed_sa(session, airport_id=airport.id, source_id=generic_source.id)
+
+        assert select_preferred_official_hostname(session, airport.id) == "flylouisville-style.example.com"
+
+
+# 7. faa.gov-shaped domain is NOT automatically demoted - it competes on
+# the normal cascade like any other non-generic domain.
+def test_bare_faa_gov_is_not_in_the_generic_set_and_not_auto_demoted():
+    assert "faa.gov" not in GENERIC_MULTI_TENANT_PORTAL_HOSTNAMES
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        faa_source = _official_source(session, url="https://faa.gov/report.pdf")
+        _signal(session, airport_id=airport.id, source_id=faa_source.id, published=True)
+        weaker_source = _official_source(session, url="https://weaker-authority.example.org/x.pdf")
+        _unreviewed_sa(session, airport_id=airport.id, source_id=weaker_source.id)
+
+        ranked = rank_official_hostnames(session, airport.id)
+        # faa.gov wins here purely because it backs a published Signal and
+        # the other domain backs only an unreviewed assertion - the
+        # ORDINARY cascade, not a generic-tier demotion.
+        assert ranked[0].hostname == "faa.gov"
+        assert ranked[0].is_generic_multi_tenant_portal is False
+        assert "generic" not in ranked[0].reason
+
+
+# 8. nfdc.faa.gov IS treated as generic (distinct from bare faa.gov).
+def test_nfdc_faa_gov_is_generic_but_bare_faa_gov_is_not():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        nfdc_source = _generic_source(session, url="https://nfdc.faa.gov/data.zip")
+        _signal(session, airport_id=airport.id, source_id=nfdc_source.id, published=True)
+        faa_source = _official_source(session, url="https://faa.gov/report.pdf")
+        _unreviewed_sa(session, airport_id=airport.id, source_id=faa_source.id)
+
+        ranked = rank_official_hostnames(session, airport.id)
+        by_host = {r.hostname: r for r in ranked}
+        assert by_host["nfdc.faa.gov"].is_generic_multi_tenant_portal is True
+        assert by_host["faa.gov"].is_generic_multi_tenant_portal is False
+        # faa.gov wins despite backing weaker evidence, purely because
+        # nfdc.faa.gov is demoted to the generic tier first.
+        assert ranked[0].hostname == "faa.gov"
+
+
+# 9. An entirely unrecognized/never-seen hostname defaults to non-generic
+# (fails safe - never guessed onto the deny-list).
+def test_unknown_hostname_defaults_to_non_generic():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        s = _official_source(session, url="https://never-seen-before.example.net/x.pdf")
+        _unreviewed_sa(session, airport_id=airport.id, source_id=s.id)
+
+        ranked = rank_official_hostnames(session, airport.id)
+        assert ranked[0].is_generic_multi_tenant_portal is False
+
+
+# 10. A non-US authority-shaped domain behaves normally (the generic set
+# is a fixed literal list, never a TLD/pattern rule, so non-US domains are
+# never accidentally caught by it).
+def test_non_us_authority_domain_behaves_normally():
+    with Session(_engine()) as session:
+        airport = _airport(session, iata="WLG")
+        operator_source = _official_source(session, url="https://wellingtonairport-style.example.co.nz/x.pdf")
+        _signal(session, airport_id=airport.id, source_id=operator_source.id, published=True)
+        generic_source = _generic_source(session, url="https://usaspending.gov/award/9")
+        _signal(session, airport_id=airport.id, source_id=generic_source.id, published=True)
+
+        assert select_preferred_official_hostname(session, airport.id) == "wellingtonairport-style.example.co.nz"
+
+
+# 11. No test in this section (or the file as a whole) special-cases an
+# airport by name/IATA/ICAO/airport_id - _airport()'s own iata kwarg is
+# cosmetic labeling only, never read by the ranking logic itself, which
+# this test proves directly by swapping which iata_code is used for the
+# operator-domain-wins fixture and getting an identical result.
+def test_ranking_outcome_independent_of_airport_identity_fields():
+    for iata in ("XXX", "ZZZ", "BGM"):
+        with Session(_engine()) as session:
+            airport = _airport(session, iata=iata)
+            generic_source = _generic_source(session, url="https://usaspending.gov/award/1")
+            _signal(session, airport_id=airport.id, source_id=generic_source.id, published=True)
+            operator_source = _official_source(session, url="https://some-operator.example.com/x.pdf")
+            _signal(session, airport_id=airport.id, source_id=operator_source.id, published=True)
+
+            assert select_preferred_official_hostname(session, airport.id) == "some-operator.example.com"
+
+
+# 12. No persistence occurs for the refined ranking either.
+def test_generic_tier_ranking_does_not_persist():
+    with Session(_engine()) as session:
+        airport = _airport(session)
+        generic_source = _generic_source(session, url="https://usaspending.gov/award/1")
+        _signal(session, airport_id=airport.id, source_id=generic_source.id, published=True)
+        operator_source = _official_source(session, url="https://some-operator.example.com/x.pdf")
+        _signal(session, airport_id=airport.id, source_id=operator_source.id, published=True)
+        session.commit()
+
+        before = {
+            "Source": session.scalar(select(func.count()).select_from(Source)),
+            "SourceAssertion": session.scalar(select(func.count()).select_from(SourceAssertion)),
+            "Signal": session.scalar(select(func.count()).select_from(Signal)),
+        }
+        rank_official_hostnames(session, airport.id)
+        select_preferred_official_hostname(session, airport.id)
+        after = {
+            "Source": session.scalar(select(func.count()).select_from(Source)),
+            "SourceAssertion": session.scalar(select(func.count()).select_from(SourceAssertion)),
+            "Signal": session.scalar(select(func.count()).select_from(Signal)),
+        }
+        assert before == after
