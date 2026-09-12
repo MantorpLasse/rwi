@@ -235,3 +235,38 @@ fetch commands per watch item.
 - A `WatchItem`'s `acquisition_notes` are keyed by `airport_id`; two watch
   items for the same airport share one note slot in the rendered report
   (an existing V1 report-engine limitation, not new to V1.1).
+
+---
+
+## Human KEEP → Governed Evidence Persistence Bridge
+
+Closes the one operator-confirmed gap in the loop: a human-KEPT
+`CandidateFragment` (`scripts/review_fragment_selection.py`) previously had
+nowhere to go — no script wired it into a persistence service. Now:
+
+```
+Snapshot (already fetched) -> extract_document() -> select_fragments()
+  -> apply_keep_decisions(keep_indices=...)  [the SAME human KEEP gate
+     review_fragment_selection.py already uses]
+  -> CandidateFragment(s)
+  -> scripts/persist_kept_candidate_fragment.py
+     (build_metadata_from_kept_fragments / preview_kept_fragments /
+     persist_kept_fragments)
+  -> app.services.known_airport_evidence_persistence
+     .apply_known_airport_evidence_persistence()  [unmodified]
+  -> Source (create/reuse) + SourceAssertion (create/reuse)
+  -> python -m scripts.run_update_report --candidate <SourceAssertion id>
+```
+
+Two independent, explicit gates are both required to write anything:
+`--keep INDICES` (selects which fragment(s)) and `--allow-database-write`
+(a second, separate authorization, matching
+`scripts/fetch_research_candidate.py`'s own existing convention) — `--keep`
+alone only produces a zero-write preview. No Signal, ReviewerAction, or
+publication is ever created — `known_airport_evidence_persistence` itself
+never touches any of those. See
+`scripts/persist_kept_candidate_fragment.py`'s own module docstring for the
+full recon (exact object emitted after KEEP, exact persistence function
+reused, the one adapter field mapping, and which provenance fields are
+preserved vs. honestly reported as "not available" — `language` is never
+populated anywhere in this pipeline today).
