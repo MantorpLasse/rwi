@@ -177,3 +177,93 @@ def plan_official_domain_document_queries(official_domain: str) -> "tuple[Search
         )
         for template_id, phrase in _OFFICIAL_DOMAIN_DOCUMENT_QUERIES
     )
+
+
+# RWI HQ "Airport Official-Domain Discovery Query Pass" mission (following
+# that mission's own design recon, "Discovering Airport/Operator Official
+# Domains Safely"): a small, fixed, deterministic query set for the OPPOSITE
+# situation from plan_official_domain_document_queries() above - here, no
+# official domain is known (or the only known one(s) are generic multi-
+# tenant portals) and the goal is to FIND a candidate, never to search
+# within one already known. This function never derives, guesses, or
+# validates a hostname itself - it only renders search text; every
+# candidate hostname a caller acts on must come from a literal returned
+# SearchResult.url (see app.discovery.official_domain_candidates, which
+# consumes this function's output).
+#
+# Exactly 1-3 queries, fixed order, hard-capped at 3 - never multiplied,
+# never a second round, never AI-guessed. Accepts plain name/iata_code/
+# icao_code strings rather than the AirportSearchContext type the caller
+# already holds (see app/services's own airport search-context helper),
+# deliberately: this module (app/discovery/query.py) must stay free of
+# any app.services dependency (this package's own established "upstream
+# and read-only" discipline - see
+# tests/test_discovery_architectural_safety.py) - the caller (e.g.
+# scripts/research_airport_clue.py) already holds an AirportSearchContext
+# and passes its three fields through directly.
+#
+# The name-based query DELIBERATELY always includes the literal word
+# "airport" (RWI HQ's own live-recon finding, mission's own explicit
+# instruction): a bare "<name> official website" query for a single-word,
+# city-named airport (e.g. "Memphis") returns overwhelmingly city/tourism/
+# airline noise, never the airport's own site - real live evidence from the
+# design recon, not a hypothetical. Deliberately excludes "authority"/
+# "board"/"municipal"/"FAA"/any country-specific institutional vocabulary -
+# those bias toward US/Commonwealth naming conventions and are not
+# required for this to work internationally (the recon's own live
+# Wellington/NZ check found the real operator domain using only this exact
+# query shape).
+def plan_airport_official_domain_discovery_queries(
+    name: str, *, iata_code: "str | None" = None, icao_code: "str | None" = None,
+) -> "tuple[SearchQuery, ...]":
+    """Pure, deterministic: the same (name, iata_code, icao_code) always
+    produces the same ordered tuple of 1-3 SearchQuery objects -
+
+        "<name>" airport official website          (always)
+        <IATA> airport official                     (only if iata_code given)
+        <ICAO> airport official                     (only if icao_code given)
+
+    `name` is required and fails closed (ValueError) if blank - matches
+    AirportIdentity.__post_init__'s own "required field cannot be blank"
+    discipline. `iata_code`/`icao_code` are optional enrichments, each
+    stripped of surrounding whitespace; a blank string is treated the same
+    as None (simply omitted, never an empty/meaningless query). Never
+    touches a network, database, or clock.
+    """
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise ValueError("name must be a non-empty string")
+
+    rendered_name = f'"{clean_name}"' if " " in clean_name else clean_name
+    queries = [
+        SearchQuery(
+            rendered=f"{rendered_name} airport official website",
+            template_id="airport_official_domain_discovery_name",
+            identity_field="name",
+            identity_value=clean_name,
+        )
+    ]
+
+    clean_iata = (iata_code or "").strip()
+    if clean_iata:
+        queries.append(
+            SearchQuery(
+                rendered=f"{clean_iata} airport official",
+                template_id="airport_official_domain_discovery_iata",
+                identity_field="iata_code",
+                identity_value=clean_iata,
+            )
+        )
+
+    clean_icao = (icao_code or "").strip()
+    if clean_icao:
+        queries.append(
+            SearchQuery(
+                rendered=f"{clean_icao} airport official",
+                template_id="airport_official_domain_discovery_icao",
+                identity_field="icao_code",
+                identity_value=clean_icao,
+            )
+        )
+
+    return tuple(queries)

@@ -3,7 +3,11 @@
 import pytest
 
 from app.discovery.identity import AirportIdentity
-from app.discovery.query import build_search_plan, plan_official_domain_document_queries
+from app.discovery.query import (
+    build_search_plan,
+    plan_airport_official_domain_discovery_queries,
+    plan_official_domain_document_queries,
+)
 
 
 def test_name_only_identity_produces_only_name_field_queries():
@@ -154,3 +158,98 @@ def test_official_domain_document_queries_never_multiplies_per_dimension_or_anch
         assert "runway" not in query.rendered.lower()
         assert "phase" not in query.rendered.lower()
         assert "supplier" not in query.rendered.lower()
+
+
+# --- Airport official-domain DISCOVERY queries (RWI HQ "Airport
+# Official-Domain Discovery Query Pass" mission) -----------------------------
+
+
+# 1. Exact approved name-query shape, always containing the word "airport".
+def test_discovery_name_query_shape():
+    plan = plan_airport_official_domain_discovery_queries("Memphis")
+    assert [q.rendered for q in plan] == ["Memphis airport official website"]
+    assert "airport" in plan[0].rendered.lower()
+
+
+def test_discovery_name_query_quotes_multi_word_names():
+    plan = plan_airport_official_domain_discovery_queries("Cleveland-Hopkins International")
+    assert plan[0].rendered == '"Cleveland-Hopkins International" airport official website'
+
+
+# 2. IATA query added only when IATA exists.
+def test_discovery_iata_query_only_when_present():
+    with_iata = plan_airport_official_domain_discovery_queries("Memphis", iata_code="MEM")
+    assert [q.rendered for q in with_iata] == ["Memphis airport official website", "MEM airport official"]
+    without_iata = plan_airport_official_domain_discovery_queries("Memphis")
+    assert len(without_iata) == 1
+
+
+# 3. ICAO query added only when ICAO exists.
+def test_discovery_icao_query_only_when_present():
+    with_icao = plan_airport_official_domain_discovery_queries("Memphis", icao_code="KMEM")
+    assert "KMEM airport official" in [q.rendered for q in with_icao]
+    without_icao = plan_airport_official_domain_discovery_queries("Memphis")
+    assert len(without_icao) == 1
+
+
+def test_discovery_blank_iata_icao_treated_as_absent():
+    plan = plan_airport_official_domain_discovery_queries("Memphis", iata_code="  ", icao_code="")
+    assert len(plan) == 1
+
+
+# 4. Maximum 3 queries, even with both IATA and ICAO present.
+def test_discovery_max_three_queries():
+    plan = plan_airport_official_domain_discovery_queries("Memphis", iata_code="MEM", icao_code="KMEM")
+    assert len(plan) == 3
+    assert [q.rendered for q in plan] == [
+        "Memphis airport official website",
+        "MEM airport official",
+        "KMEM airport official",
+    ]
+
+
+def test_discovery_query_rejects_blank_name():
+    with pytest.raises(ValueError):
+        plan_airport_official_domain_discovery_queries("")
+    with pytest.raises(ValueError):
+        plan_airport_official_domain_discovery_queries("   ")
+
+
+def test_discovery_query_never_uses_authority_board_or_country_specific_vocabulary():
+    """Mission's own explicit instruction: keep the required query set
+    internationally usable - no "authority"/"board"/"municipal"/"FAA"
+    vocabulary baked into the query text itself."""
+    plan = plan_airport_official_domain_discovery_queries("Wellington International Airport", iata_code="WLG", icao_code="NZWN")
+    for query in plan:
+        lowered = query.rendered.lower()
+        for forbidden in ("authority", "board", "municipal", "faa"):
+            assert forbidden not in lowered
+
+
+def test_discovery_query_provenance_reconstructable():
+    plan = plan_airport_official_domain_discovery_queries("Aspen/Pitkin County Airport", iata_code="ASE", icao_code="KASE")
+    assert plan[0].identity_field == "name" and plan[0].identity_value == "Aspen/Pitkin County Airport"
+    assert plan[1].identity_field == "iata_code" and plan[1].identity_value == "ASE"
+    assert plan[2].identity_field == "icao_code" and plan[2].identity_value == "KASE"
+
+
+def test_discovery_query_deterministic_across_calls():
+    a = plan_airport_official_domain_discovery_queries("Memphis", iata_code="MEM", icao_code="KMEM")
+    b = plan_airport_official_domain_discovery_queries("Memphis", iata_code="MEM", icao_code="KMEM")
+    assert a == b
+
+
+# 19. Non-US airport identity works - no US-specific assumption anywhere.
+def test_discovery_query_works_for_non_us_identity():
+    plan = plan_airport_official_domain_discovery_queries("Sacheon Airport", iata_code="HIN")
+    assert plan[0].rendered == '"Sacheon Airport" airport official website'
+    assert plan[1].rendered == "HIN airport official"
+
+
+# 20. No airport-specific hardcoding - the same generic function produces
+# analogous output for two entirely different airports.
+def test_discovery_query_not_hardcoded_to_any_specific_airport():
+    for name, iata in (("SomeAirportA", "AAA"), ("SomeAirportB", "BBB")):
+        plan = plan_airport_official_domain_discovery_queries(name, iata_code=iata)
+        assert plan[0].rendered == f"{name} airport official website"
+        assert plan[1].rendered == f"{iata} airport official"

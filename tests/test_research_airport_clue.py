@@ -631,3 +631,187 @@ def test_hub_followup_flag_never_writes_to_database(tmp_path):
     ])
     after = open(db_path, "rb").read()
     assert before == after
+
+
+# --- Airport official-domain DISCOVERY pass CLI (RWI HQ "Airport
+# Official-Domain Discovery Query Pass" mission) -----------------------------
+
+
+# 16. Default CLI behavior unchanged when the flag is omitted.
+def test_discover_flag_omitted_is_byte_for_behavior_unchanged(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+    exit_code = cli.main(["--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Official-domain DISCOVERY pass: disabled" in out
+    assert "CANDIDATE ONLY" not in out
+
+
+# 15. No persistence occurs via the new flag.
+def test_discover_flag_never_writes_to_database(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+    before = open(db_path, "rb").read()
+    cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--discover-official-domain",
+    ])
+    after = open(db_path, "rb").read()
+    assert before == after
+
+
+def test_discover_flag_plan_only_mode_makes_no_network_call(tmp_path, capsys, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+
+    class _ExplodingProvider:
+        name = "brave"
+
+        def search(self, query):
+            raise AssertionError("must never be called without --allow-live-network")
+
+    monkeypatch.setitem(cli.PROVIDER_REGISTRY, "brave", _ExplodingProvider())
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS, "--discover-official-domain",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Official-domain DISCOVERY pass: ENABLED" in out
+    assert '"Louisville Muhammad Ali International Airport" airport official website' in out
+    assert "SDF airport official" in out
+    assert "KSDF airport official" in out
+    assert "zero network access performed" in out
+
+
+# 17. Opt-in CLI clearly labels candidates as not governed; known noise
+# domains are suppressed; "already governed"/"currently selected" are
+# annotated using the same read-only official-domain-discovery machinery.
+def test_discover_flag_labels_candidates_not_governed_and_suppresses_noise(tmp_path, capsys, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion_with_airport(db_path, official_url="https://www.flylouisville.com/x.pdf")
+
+    name_query_text = '"Louisville Muhammad Ali International Airport" airport official website'
+    iata_query_text = "SDF airport official"
+    canned = {
+        name_query_text: SearchOutcome(
+            query=SearchQuery(rendered=name_query_text, template_id="x", identity_field="name", identity_value="x"),
+            status=SearchOutcomeStatus.OK,
+            results=[_result(
+                SearchQuery(rendered=name_query_text, template_id="x", identity_field="name", identity_value="x"),
+                "https://www.flylouisville.com/", title="Louisville Muhammad Ali International Airport",
+            )],
+        ),
+        iata_query_text: SearchOutcome(
+            query=SearchQuery(rendered=iata_query_text, template_id="x", identity_field="iata_code", identity_value="SDF"),
+            status=SearchOutcomeStatus.OK,
+            results=[_result(
+                SearchQuery(rendered=iata_query_text, template_id="x", identity_field="iata_code", identity_value="SDF"),
+                "https://en.wikipedia.org/wiki/Louisville_Muhammad_Ali_International_Airport",
+                title="Wikipedia",
+            )],
+        ),
+    }
+    monkeypatch.setitem(cli.PROVIDER_REGISTRY, "brave", _FakeProvider(canned))
+
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid), *_SDF_ARGS,
+        "--use-official-domain-discovery", "--discover-official-domain", "--allow-live-network",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "CANDIDATE ONLY - NOT GOVERNED" in out
+    assert "flylouisville.com" in out
+    assert "already governed" in out
+    assert "currently selected" in out
+    assert "Known noise domains suppressed: 1" in out
+    assert "en.wikipedia.org" in out
+
+
+def test_discover_flag_json_shape_and_not_governed_label(tmp_path, capsys, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+
+    name_query_text = "Memphis airport official website"
+    canned = {
+        name_query_text: SearchOutcome(
+            query=SearchQuery(rendered=name_query_text, template_id="x", identity_field="name", identity_value="Memphis"),
+            status=SearchOutcomeStatus.OK,
+            results=[_result(
+                SearchQuery(rendered=name_query_text, template_id="x", identity_field="name", identity_value="Memphis"),
+                "https://flymemphis.com/", title="Memphis International Airport",
+            )],
+        ),
+    }
+    monkeypatch.setitem(cli.PROVIDER_REGISTRY, "brave", _FakeProvider(canned))
+
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid),
+        "--dimension", "timing", "--search-name", "Memphis",
+        "--discover-official-domain", "--allow-live-network", "--json",
+    ])
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["discover_official_domain_enabled"] is True
+    assert payload["discovery_queries"] == ["Memphis airport official website"]
+    assert payload["discovery_network_used"] is True
+    candidates = payload["discovery_candidates"]
+    assert len(candidates) == 1
+    assert candidates[0]["hostname"] == "flymemphis.com"
+    assert candidates[0]["_label"] == "CANDIDATE ONLY - NOT GOVERNED"
+    assert candidates[0]["already_governed"] is False
+    assert candidates[0]["currently_selected"] is False
+    # baseline (non-discovery) JSON fields are completely unaffected.
+    assert payload["official_domain_discovery_enabled"] is False
+    assert payload["official_domain_selected"] is None
+
+
+# 18. Memphis-shaped ambiguity: the mandatory "airport" keyword is present
+# in the rendered query text, matching the mission's own live-recon fix.
+def test_discover_flag_memphis_query_contains_mandatory_airport_keyword(tmp_path, capsys, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+    monkeypatch.setitem(cli.PROVIDER_REGISTRY, "brave", _FakeProvider({}))
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid),
+        "--dimension", "timing", "--search-name", "Memphis", "--search-iata", "MEM",
+        "--discover-official-domain",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Memphis airport official website" in out
+    assert "MEM airport official" in out
+
+
+# 19. Non-US airport identity works through the CLI.
+def test_discover_flag_works_for_non_us_airport_identity(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+    exit_code = cli.main([
+        "--database", db_path, "--source-assertion-id", str(aid),
+        "--dimension", "timing", "--search-name", "Wellington International Airport",
+        "--search-iata", "WLG", "--search-icao", "NZWN", "--discover-official-domain",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert '"Wellington International Airport" airport official website' in out
+    assert "WLG airport official" in out
+    assert "NZWN airport official" in out
+
+
+# 20. No airport-specific hardcoding anywhere in the new CLI code path -
+# the same generic flow produces analogous, symmetric output for two
+# entirely different airport identities.
+def test_discover_flag_not_hardcoded_to_any_specific_airport(tmp_path, capsys):
+    db_path = str(tmp_path / "test.db")
+    aid = _seed_source_assertion(db_path)
+    for name, iata in (("SomeAirportA", "AAA"), ("SomeAirportB", "BBB")):
+        exit_code = cli.main([
+            "--database", db_path, "--source-assertion-id", str(aid),
+            "--dimension", "timing", "--search-name", name, "--search-iata", iata,
+            "--discover-official-domain",
+        ])
+        out = capsys.readouterr().out
+        assert exit_code == 0
+        assert f"{name} airport official website" in out
+        assert f"{iata} airport official" in out

@@ -71,7 +71,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.discovery.brave_search_provider import BraveSearchProvider
+from app.discovery.dedup import deduplicate_results
+from app.discovery.identity import AirportIdentity
+from app.discovery.official_domain_candidates import OfficialDomainCandidate, group_candidates_by_hostname
+from app.discovery.query import plan_airport_official_domain_discovery_queries
 from app.discovery.search import SearchOutcomeStatus, SearchProvider
+from app.discovery.triage import triage_results
 from app.models import SourceAssertion
 from app.services.discovery_temporal_followup import AirportSearchContext, AirportSearchContextError
 from app.services.official_domain_discovery import rank_official_hostnames
@@ -161,6 +166,31 @@ def _parser() -> argparse.ArgumentParser:
         "read-only and their own same-domain document links (at most 20 per hub) are folded back "
         "into discovery as ordinary candidates - never as evidence, never recursively.",
     )
+    parser.add_argument(
+        "--discover-official-domain", action="store_true",
+        help="RWI HQ 'Airport Official-Domain Discovery Query Pass' mission. Opt-in, default "
+        "OFF; omitting this flag leaves every other behavior byte-for-behavior unchanged. "
+        "DISCOVERY ONLY - never governance. Runs a small, bounded, deterministic search pass "
+        "(app.discovery.query.plan_airport_official_domain_discovery_queries: 1-3 queries - a "
+        "quoted '<name> airport official website' query, plus '<IATA> airport official' and/or "
+        "'<ICAO> airport official' when those codes are known) against the same brave "
+        "SearchProvider used elsewhere in this script (requires --allow-live-network; without "
+        "it, only the query plan is shown - zero network access) to look for candidate airport/"
+        "operator official-domain hostnames. Every candidate hostname comes from a literal "
+        "returned search-result URL - never synthesized or guessed. A small, curated, version-"
+        "controlled set of known non-official noise domains (encyclopedias, social media, "
+        "flight trackers, airline sites, directory aggregators - app.discovery."
+        "official_domain_candidates.KNOWN_NOISE_DOMAINS) is suppressed; every other hostname, "
+        "including government/regulator/airport-authority domains, is shown. Output is clearly "
+        "labeled CANDIDATE ONLY - NOT GOVERNED. This flag creates no Fetch, no Source, no "
+        "SourceAssertion, and mutates nothing - a candidate becomes a governed official domain "
+        "ONLY through the existing, separate, human-initiated path: a human reviews the "
+        "candidates shown here, chooses one, and runs the existing Fetch workflow "
+        "(python -m scripts.fetch_discovered_url) against a URL on that hostname; once that "
+        "Fetch is preserved, reviewed, and tied to this airport as a reliability_level=='official' "
+        "Source/SourceAssertion, app.services.official_domain_discovery.get_known_official_hostnames() "
+        "picks it up automatically. Nothing in this flag automates any part of that handoff.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text.")
     return parser
 
@@ -192,6 +222,47 @@ def load_source_assertion_airport_id(session: Session, source_assertion_id: int)
     return assertion.airport_id
 
 
+def run_official_domain_discovery_pass(
+    context: AirportSearchContext, provider: "SearchProvider | None",
+) -> "tuple[tuple, tuple[OfficialDomainCandidate, ...], tuple[str, ...]]":
+    """RWI HQ 'Airport Official-Domain Discovery Query Pass' mission.
+    DISCOVERY ONLY: plans (via app.discovery.query.
+    plan_airport_official_domain_discovery_queries) and, when `provider`
+    is given, executes a hard-capped 1-3 query search pass, then reuses
+    the existing deduplicate_results()/triage_results() pipeline
+    unmodified before grouping by hostname (app.discovery.
+    official_domain_candidates.group_candidates_by_hostname) and
+    suppressing known noise domains.
+
+    Returns `(queries, candidates, suppressed_noise_hostnames)`. When
+    `provider` is None (no --allow-live-network), `candidates` and
+    `suppressed_noise_hostnames` are both empty - the plan is shown, but
+    zero network access occurs, matching every other query list this
+    script already prints without executing.
+
+    This function performs no database access, creates no Fetch, no
+    Source, no SourceAssertion, and mutates nothing - see this module's
+    own --discover-official-domain help text for the full, separate,
+    human-initiated governance handoff.
+    """
+    queries = plan_airport_official_domain_discovery_queries(
+        context.name, iata_code=context.iata_code, icao_code=context.icao_code,
+    )
+    if provider is None:
+        return queries, (), ()
+
+    all_results = []
+    for query in queries:
+        outcome = provider.search(query)
+        all_results.extend(outcome.results)
+
+    deduped = deduplicate_results(all_results)
+    identity = AirportIdentity(name=context.name, iata_code=context.iata_code, icao_code=context.icao_code)
+    triaged = triage_results(deduped, identity=identity)
+    candidates, suppressed = group_candidates_by_hostname(triaged)
+    return queries, candidates, suppressed
+
+
 _MAX_CANDIDATES_SHOWN_PER_DIMENSION_HUMAN = 5
 
 _RESEARCH_STATUS_LINE = (
@@ -212,6 +283,10 @@ def _print_human(
     report: ResearchLoopReport, *, network_used: bool, use_literal_anchors: bool,
     official_domain_discovery_enabled: bool = False, known_official_hostnames: "tuple[str, ...]" = (),
     official_domain_reason: "str | None" = None, follow_up_official_hubs_enabled: bool = False,
+    discover_official_domain_enabled: bool = False, discovery_queries: "tuple" = (),
+    discovery_candidates: "tuple[OfficialDomainCandidate, ...]" = (),
+    discovery_suppressed_noise_hostnames: "tuple[str, ...]" = (), discovery_network_used: bool = False,
+    official_domain_selected: "str | None" = None,
 ) -> None:
     print(_DISCLAIMER)
 
@@ -251,6 +326,36 @@ def _print_human(
     print(f"Official-hub follow-up: {'ENABLED' if follow_up_official_hubs_enabled else 'disabled'}")
     if follow_up_official_hubs_enabled and not report.official_domain:
         print("Official-hub follow-up: no governed official domain resolved - no-op, existing plan unchanged.")
+
+    print(f"\nOfficial-domain DISCOVERY pass: {'ENABLED' if discover_official_domain_enabled else 'disabled'}")
+    if discover_official_domain_enabled:
+        print("Queries (max 3):")
+        for q in discovery_queries:
+            print(f"  {q.rendered}")
+        if not discovery_network_used:
+            print("No --allow-live-network given: discovery plan shown only, zero network access performed.")
+        else:
+            print(f"Known noise domains suppressed: {len(discovery_suppressed_noise_hostnames)}")
+            if discovery_suppressed_noise_hostnames:
+                print(f"  {', '.join(discovery_suppressed_noise_hostnames)}")
+            if discovery_candidates:
+                print("CANDIDATE ONLY - NOT GOVERNED (promotion requires a separate, human-initiated Fetch/Source/SourceAssertion - see --help):")
+                for c in discovery_candidates:
+                    already_governed = c.hostname in known_official_hostnames
+                    currently_selected = c.hostname == official_domain_selected
+                    flags = []
+                    if already_governed:
+                        flags.append("already governed")
+                    if currently_selected:
+                        flags.append("currently selected")
+                    flag_text = f" [{', '.join(flags)}]" if flags else ""
+                    print(f"  [{c.priority_band.value}] {c.hostname}{flag_text} (supported by {c.supporting_result_count} quer{'y' if c.supporting_result_count == 1 else 'ies'})")
+                    print(f"    {c.best_title}")
+                    print(f"    {c.best_url}")
+                    print(f"    why: {'; '.join(c.reasons)}")
+            else:
+                print("No candidate hostnames survived noise suppression.")
+
     print("\nSearch candidates are not evidence and do not resolve the research question.")
 
     for q in report.questions:
@@ -335,6 +440,10 @@ def _print_json(
     report: ResearchLoopReport, *, network_used: bool, use_literal_anchors: bool,
     official_domain_discovery_enabled: bool = False, known_official_hostnames: "tuple[str, ...]" = (),
     official_domain_reason: "str | None" = None, follow_up_official_hubs_enabled: bool = False,
+    discover_official_domain_enabled: bool = False, discovery_queries: "tuple" = (),
+    discovery_candidates: "tuple[OfficialDomainCandidate, ...]" = (),
+    discovery_suppressed_noise_hostnames: "tuple[str, ...]" = (), discovery_network_used: bool = False,
+    official_domain_selected: "str | None" = None,
 ) -> None:
     context = report.clue.airport_context
     anchors = extract_literal_anchors(report.clue.evidence_text, airport_context=context) if use_literal_anchors else ()
@@ -394,6 +503,25 @@ def _print_json(
             }
             for q in report.questions
         ],
+        "discover_official_domain_enabled": discover_official_domain_enabled,
+        "discovery_queries": [q.rendered for q in discovery_queries],
+        "discovery_network_used": discovery_network_used,
+        "discovery_suppressed_noise_hostnames": list(discovery_suppressed_noise_hostnames),
+        "discovery_candidates": [
+            {
+                "_label": "CANDIDATE ONLY - NOT GOVERNED",
+                "hostname": c.hostname,
+                "best_url": c.best_url,
+                "best_title": c.best_title,
+                "best_snippet": c.best_snippet,
+                "supporting_result_count": c.supporting_result_count,
+                "priority_band": c.priority_band.value,
+                "reasons": list(c.reasons),
+                "already_governed": c.hostname in known_official_hostnames,
+                "currently_selected": c.hostname == official_domain_selected,
+            }
+            for c in discovery_candidates
+        ],
         "network_used": network_used,
         "query_outcomes": [
             {
@@ -440,7 +568,7 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     with Session(engine) as session:
         try:
             evidence_text = load_evidence_text(session, args.source_assertion_id)
-            if args.use_official_domain_discovery:
+            if args.use_official_domain_discovery or args.discover_official_domain:
                 airport_id = load_source_assertion_airport_id(session, args.source_assertion_id)
                 if airport_id is not None:
                     # Deterministic cap (RWI HQ "Official-Domain Document
@@ -474,10 +602,28 @@ def main(argv: "Sequence[str] | None" = None) -> int:
         return 2
 
     provider: "SearchProvider | None" = PROVIDER_REGISTRY["brave"] if args.allow_live_network else None
+    # official_domain is gated strictly on --use-official-domain-discovery
+    # here (never on --discover-official-domain alone) - the two flags are
+    # independent, and --discover-official-domain must never silently
+    # activate the separate official-domain-DOCUMENT 4-query pass inside
+    # run_research_loop as a side effect. known_official_hostnames/
+    # official_domain itself (the ranked top hostname) are still computed
+    # above whenever either flag is set, purely for the discovery pass's
+    # own "already governed"/"currently selected" candidate annotations.
+    official_domain_for_document_pass = official_domain if args.use_official_domain_discovery else None
     report = run_research_loop(
-        clue, provider=provider, use_literal_anchors=args.use_literal_anchors, official_domain=official_domain,
+        clue, provider=provider, use_literal_anchors=args.use_literal_anchors,
+        official_domain=official_domain_for_document_pass,
         follow_up_official_hubs=args.follow_up_official_hubs,
     )
+
+    discovery_queries: tuple = ()
+    discovery_candidates: "tuple[OfficialDomainCandidate, ...]" = ()
+    discovery_suppressed_noise_hostnames: "tuple[str, ...]" = ()
+    if args.discover_official_domain:
+        discovery_queries, discovery_candidates, discovery_suppressed_noise_hostnames = (
+            run_official_domain_discovery_pass(context, provider)
+        )
 
     if args.json:
         _print_json(
@@ -485,6 +631,10 @@ def main(argv: "Sequence[str] | None" = None) -> int:
             official_domain_discovery_enabled=args.use_official_domain_discovery,
             known_official_hostnames=known_official_hostnames, official_domain_reason=official_domain_reason,
             follow_up_official_hubs_enabled=args.follow_up_official_hubs,
+            discover_official_domain_enabled=args.discover_official_domain, discovery_queries=discovery_queries,
+            discovery_candidates=discovery_candidates,
+            discovery_suppressed_noise_hostnames=discovery_suppressed_noise_hostnames,
+            discovery_network_used=args.allow_live_network, official_domain_selected=official_domain,
         )
     else:
         _print_human(
@@ -492,6 +642,10 @@ def main(argv: "Sequence[str] | None" = None) -> int:
             official_domain_discovery_enabled=args.use_official_domain_discovery,
             known_official_hostnames=known_official_hostnames, official_domain_reason=official_domain_reason,
             follow_up_official_hubs_enabled=args.follow_up_official_hubs,
+            discover_official_domain_enabled=args.discover_official_domain, discovery_queries=discovery_queries,
+            discovery_candidates=discovery_candidates,
+            discovery_suppressed_noise_hostnames=discovery_suppressed_noise_hostnames,
+            discovery_network_used=args.allow_live_network, official_domain_selected=official_domain,
         )
     return 0
 
