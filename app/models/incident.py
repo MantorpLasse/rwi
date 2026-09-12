@@ -14,7 +14,12 @@ class Incident(Base):
 
     An activation destroys the arresting material, so it almost always
     means a future replacement order. Every insert automatically creates
-    a matching high-confidence Signal - no manual review step.
+    a matching high-confidence Signal - no manual review step to CREATE it,
+    but (RWI HQ "Trust Preconditions for Update & Report V1" mission) that
+    Signal is created unpublished (`published=False`) - a human still
+    decides whether it goes public, via the existing
+    app.services.signal_publication.publish_signal() path, exactly like
+    every other Signal-creation path already requires.
     """
 
     __tablename__ = "incidents"
@@ -74,6 +79,19 @@ def _replacement_signal_title(connection, target: "Incident") -> str:
 
 @event.listens_for(Incident, "after_insert")
 def _create_replacement_signal(_mapper, connection, target: "Incident") -> None:
+    """RWI HQ "Trust Preconditions for Update & Report V1" mission, Part 1:
+    this Signal is created automatically, with no SourceAssertion, no
+    ReviewerAction, and no human review step - so it must never reach the
+    public site by default the way a hand-approved Signal does.
+    `published=False` is set explicitly here (Signal.published's own
+    column-level default of True is left completely untouched - see
+    app/models/signal.py's own docstring on that column, which already
+    anticipates exactly this: "a future governed-write path... must
+    explicitly pass published=False itself"). A human can still choose to
+    publish this Signal later through the existing, separate
+    app.services.signal_publication.publish_signal() path - this change
+    only removes the automatic, unreviewed, immediate-publication behavior
+    this one creation path used to have."""
     from app.models.signal import DEFAULT_SCORE_BY_CONFIDENCE, Signal
 
     if not target.implies_replacement:
@@ -92,5 +110,6 @@ def _create_replacement_signal(_mapper, connection, target: "Incident") -> None:
             probability_score=DEFAULT_SCORE_BY_CONFIDENCE[confidence],
             target_year=None,
             notes=target.summary,
+            published=False,
         )
     )
