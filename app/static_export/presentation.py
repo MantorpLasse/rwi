@@ -106,6 +106,12 @@ LOCALES = {
             "underlaget är starkt, och en aktuell möjlighet kan ha ett bara måttligt Score om underlaget ännu är "
             "tunt. Saknas Score för en signal visas ett streck (–) istället för en påhittad siffra."
         ),
+        # ("RWI HQ Bilingual Static Site - Slice 1" mission) Mission #7J
+        # "Varför nu?" dynamic sentence templates - {vendor} is substituted
+        # by build.py, never re-translated per airport/signal.
+        "attention_vendor_confirmed": "{vendor} bekräftad som leverantör",
+        "attention_grant_current": "Aktuellt federalt finansieringsunderlag finns",
+        "attention_incident_unconfirmed": "En incident har registrerats, ersättning inte bekräftad",
     },
     "en": {
         "nav_overview": "Overview", "nav_signals": "Signals", "nav_airports": "Airports",
@@ -179,6 +185,9 @@ LOCALES = {
             "is strong, and a current opportunity can have only a moderate Score while the evidence is still thin. "
             "When no Score is recorded for a signal, a dash (-) is shown instead of a fabricated number."
         ),
+        "attention_vendor_confirmed": "{vendor} confirmed as vendor",
+        "attention_grant_current": "Current federal funding evidence exists",
+        "attention_incident_unconfirmed": "An incident has been recorded, replacement not confirmed",
     },
 }
 
@@ -240,8 +249,216 @@ LIFECYCLE_PRESENTATION = {
 }
 
 
+# RWI HQ "Bilingual Static Site — Slice 1: Localization Plumbing" mission:
+# the remaining small, closed presentation vocabularies that used to live as
+# Swedish-only mappings in app/static_export/build.py, migrated here to
+# follow the exact same bilingual-dict-plus-accessor-function shape already
+# proven by STATUS_PRESENTATION/LIFECYCLE_PRESENTATION above - one place,
+# never duplicated between files. Canonical keys and non-language metadata
+# (css class, glossary anchor) are preserved unchanged from their build.py
+# originals; only the label/tooltip text itself gained an "en" counterpart,
+# translated conservatively/directly from the existing Swedish wording -
+# never database values, source titles, airport names, or evidence text,
+# none of which pass through this module at all.
+
+CATEGORY_PRESENTATION = {
+    "new_installation": {"class": "new", "sv": "Ny installation", "en": "New installation"},
+    "replacement": {"class": "replace", "sv": "Ersättning", "en": "Replacement"},
+    "replacement_after_incident": {"class": "incident", "sv": "Efter incident", "en": "After incident"},
+    "study": {"class": "study", "sv": "Studie", "en": "Study"},
+    "potential_new_construction": {"class": "new", "sv": "Möjlig ny installation", "en": "Possible new installation"},
+    "maintenance": {"class": "study", "sv": "Underhåll", "en": "Maintenance"},
+    "replacement_watch": {"class": "replace", "sv": "Ersättning – bevakas", "en": "Replacement – watched"},
+    "unknown": {"class": "study", "sv": "Ej klassificerad", "en": "Unclassified"},
+}
+
+CONFIDENCE_LABEL_PRESENTATION = {
+    "high": {"sv": "Hög", "en": "High"},
+    "med": {"sv": "Medel", "en": "Medium"},
+    "low": {"sv": "Låg", "en": "Low"},
+}
+
+CLAIM_CATEGORY_PRESENTATION = {
+    "explicit_document_fact": {"sv": "Bekräftat sakförhållande", "en": "Confirmed factual statement"},
+    "procedural_request": {"sv": "Begäran/förfarande", "en": "Request/procedure"},
+    "temporal_statement": {"sv": "Tidsuppgift", "en": "Timing statement"},
+    "relationship": {"sv": "Ansvarig part", "en": "Responsible party"},
+}
+
+TEMPORAL_QUALIFIER_PRESENTATION = {
+    "historical_fact": {"sv": "Historiskt förhållande", "en": "Historical fact"},
+    "current_state_as_of_document_date": {
+        "sv": "Aktuellt läge vid källans datum", "en": "Current state as of the source's date",
+    },
+    "planned_future_action": {"sv": "Planerad/kommande åtgärd", "en": "Planned/upcoming action"},
+    "requested_pending_approval": {"sv": "Begärd, väntar godkännande", "en": "Requested, pending approval"},
+    "completed": {"sv": "Genomförd", "en": "Completed"},
+    "unknown": {"sv": "Okänt tidsläge", "en": "Unknown timing"},
+}
+
+# (label, anchor, sv_tooltip, en_tooltip) per Source.source_type - anchor is
+# never translated (it is a URL fragment into ordlista.html, language-
+# neutral by construction). Tooltip text is a direct, conservative
+# translation of the existing Swedish wording, never a paraphrase that could
+# drift from it independently.
+SOURCE_TYPE_PRESENTATION = {
+    "master_plan": {
+        "sv": "Master Plan", "en": "Master Plan", "anchor": "master-plan",
+        "sv_tooltip": "En flygplats långsiktiga utvecklingsplan, ofta 10-20 år framåt.",
+        "en_tooltip": "An airport's long-term development plan, typically 10-20 years ahead.",
+    },
+    "Master Plan": {
+        "sv": "Master Plan", "en": "Master Plan", "anchor": "master-plan",
+        "sv_tooltip": "En flygplats långsiktiga utvecklingsplan, ofta 10-20 år framåt.",
+        "en_tooltip": "An airport's long-term development plan, typically 10-20 years ahead.",
+    },
+    "aip_grant": {
+        "sv": "AIP-bidrag", "en": "AIP grant", "anchor": "aip",
+        "sv_tooltip": (
+            "Ett amerikanskt statligt bidragsprogram. Ett beviljat AIP-bidrag betyder att "
+            "pengarna finns, men inte alltid att bygget redan startat."
+        ),
+        "en_tooltip": (
+            "A US federal grant program. An awarded AIP grant means the money exists, but not "
+            "always that construction has already started."
+        ),
+    },
+    "iija_grant": {
+        "sv": "IIJA-bidrag", "en": "IIJA grant", "anchor": "iija-bidrag",
+        "sv_tooltip": (
+            "En separat, större statlig bidragspott, fungerar ungefär som AIP men är en "
+            "egen pengapåse."
+        ),
+        "en_tooltip": (
+            "A separate, larger federal grant pool, functioning similarly to AIP but its own "
+            "funding pot."
+        ),
+    },
+    "usaspending_grant": {
+        "sv": "USAspending-bidrag", "en": "USAspending grant", "anchor": "usaspending-bidrag",
+        "sv_tooltip": (
+            "Ett verkligt, redan beviljat federalt bidrag, hämtat direkt från den "
+            "amerikanska statens egna offentliga utbetalningsregister."
+        ),
+        "en_tooltip": (
+            "A real, already-awarded federal grant, taken directly from the US government's "
+            "own public payment register."
+        ),
+    },
+    "faa_tableau": {
+        "sv": "FAA:s kartdata", "en": "FAA map data", "anchor": "faa-kartdata",
+        "sv_tooltip": (
+            "Officiell information direkt från den amerikanska luftfartsmyndigheten "
+            "(FAA) om vad som redan är byggt."
+        ),
+        "en_tooltip": (
+            "Official information directly from the US aviation authority (FAA) about what "
+            "has already been built."
+        ),
+    },
+    "faa_fact_sheet": {
+        "sv": "FAA:s faktablad", "en": "FAA fact sheet", "anchor": "faa-kartdata",
+        "sv_tooltip": (
+            "Officiell information direkt från den amerikanska luftfartsmyndigheten "
+            "(FAA) om vad som redan är byggt."
+        ),
+        "en_tooltip": (
+            "Official information directly from the US aviation authority (FAA) about what "
+            "has already been built."
+        ),
+    },
+    "CIP": {
+        "sv": "CIP", "en": "CIP", "anchor": "cip",
+        "sv_tooltip": "En flygplats egen, mer kortsiktiga investeringslista (vanligtvis 3-5 år).",
+        "en_tooltip": "An airport's own, more short-term investment list (typically 3-5 years).",
+    },
+    "ALP": {
+        "sv": "ALP", "en": "ALP", "anchor": "alp",
+        "sv_tooltip": "En teknisk ritning över hur flygplatsen ser ut och ska se ut.",
+        "en_tooltip": "A technical drawing of how the airport looks and is planned to look.",
+    },
+    "news": {"sv": "Nyhetskälla", "en": "News source", "anchor": None, "sv_tooltip": None, "en_tooltip": None},
+    "shareholder_newsletter": {
+        "sv": "Aktieägarbrev", "en": "Shareholder letter", "anchor": None, "sv_tooltip": None, "en_tooltip": None,
+    },
+    "faa_construction_report": {
+        "sv": "FAA byggrapport", "en": "FAA construction report", "anchor": None,
+        "sv_tooltip": None, "en_tooltip": None,
+    },
+    "environmental_assessment": {
+        "sv": "Miljökonsekvensbeskrivning (EA)", "en": "Environmental assessment (EA)", "anchor": None,
+        "sv_tooltip": None, "en_tooltip": None,
+    },
+    "state_aviation_system_plan": {
+        "sv": "Delstatlig flygplatsplan", "en": "State aviation system plan", "anchor": None,
+        "sv_tooltip": None, "en_tooltip": None,
+    },
+}
+
+# Mission #7J "Varför nu?" status wording - deliberately a separate, shorter
+# "in progress" phrasing from STATUS_PRESENTATION's own plain status labels
+# above (e.g. "Upphandling pågår"/"Procurement underway" here vs.
+# STATUS_PRESENTATION's plain "Upphandling"/"Procurement") - not a
+# duplicate, a different grammatical context, kept intentionally distinct.
+ATTENTION_STATUS_PRESENTATION = {
+    "procurement": {"sv": "Upphandling pågår", "en": "Procurement underway"},
+    "under construction": {"sv": "Byggnation pågår", "en": "Construction underway"},
+    "design": {"sv": "Projektering pågår", "en": "Design underway"},
+    "master_plan": {"sv": "Master Plan-fas", "en": "Master Plan phase"},
+    "environmental_review": {"sv": "Miljöprövning pågår", "en": "Environmental review underway"},
+    "cip": {"sv": "CIP-planering pågår", "en": "CIP planning underway"},
+    "alp": {"sv": "ALP-planering pågår", "en": "ALP planning underway"},
+    "funded": {"sv": "Finansiering beviljad", "en": "Funding approved"},
+}
+
+
 def text(key: str, locale: str = "sv") -> str:
     return LOCALES.get(locale, LOCALES["sv"]).get(key, key)
+
+
+def category_view(value: str | None, locale: str = "sv") -> tuple[str, str]:
+    """(label, css_class). Mirrors status_view()'s own fallback discipline:
+    an unrecognized category value renders as its own raw text (never a
+    translated placeholder), matching build.py's pre-existing behavior
+    exactly."""
+    entry = CATEGORY_PRESENTATION.get(value or "")
+    if entry:
+        return entry[locale], entry["class"]
+    fallback = value or ("Okänd" if locale == "sv" else "Unclassified")
+    return fallback, "study"
+
+
+def confidence_label(level: str, locale: str = "sv") -> str:
+    entry = CONFIDENCE_LABEL_PRESENTATION.get(level)
+    return entry[locale] if entry else level
+
+
+def claim_category_label(value: str, locale: str = "sv") -> str:
+    entry = CLAIM_CATEGORY_PRESENTATION.get(value)
+    return entry[locale] if entry else value
+
+
+def temporal_qualifier_label(value: str, locale: str = "sv") -> str:
+    entry = TEMPORAL_QUALIFIER_PRESENTATION.get(value)
+    return entry[locale] if entry else value
+
+
+def source_type_view(value: str | None, locale: str = "sv") -> tuple[str | None, str | None, str | None]:
+    """(label, anchor, tooltip) - anchor/tooltip are None when this
+    source_type has no glossary entry, so source_badge() falls back to a
+    plain, unlinked badge instead of a dead link. Matches build.py's
+    pre-existing _source_type_view() fallback exactly."""
+    if not value:
+        return None, None, None
+    entry = SOURCE_TYPE_PRESENTATION.get(value)
+    if not entry:
+        return ("Övrig källa" if locale == "sv" else "Other source"), None, None
+    return entry[locale], entry["anchor"], entry[f"{locale}_tooltip"]
+
+
+def attention_status_wording(status: str, locale: str = "sv") -> "str | None":
+    entry = ATTENTION_STATUS_PRESENTATION.get(status)
+    return entry[locale] if entry else None
 
 def status_view(value: str | None, locale: str = "sv") -> tuple[str, str]:
     if not value:

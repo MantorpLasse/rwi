@@ -22,7 +22,18 @@ from app.services.manual_claim_evidence import get_manual_claims_for_source_asse
 from app.services.manual_identity_evidence import normalize_for_containment_check
 from app.services.runway_identity import AmbiguousRunwayDesignationError, normalize_end
 from app.services.signal_lifecycle_assessment import resolve_effective_signal_lifecycle
-from app.static_export.presentation import lifecycle_view, public_signal_state, status_view, text
+from app.static_export.presentation import (
+    attention_status_wording,
+    category_view,
+    claim_category_label,
+    confidence_label,
+    lifecycle_view,
+    public_signal_state,
+    source_type_view,
+    status_view,
+    temporal_qualifier_label,
+    text,
+)
 from app.static_export.signal_lifecycle import SignalLifecycleState
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -43,114 +54,22 @@ _CONFIDENCE_LEVEL = {
     "unknown": "low",
 }
 
-_CONFIDENCE_LABEL = {"high": "Hög", "med": "Medel", "low": "Låg"}
-
 # scripts/graduate_signal_to_installation.py sets this - a distinct label so
 # a graduated signal reads as "done", not as a broken/unrecognized status.
 
-# Category text mapping — the single place the rest of the site imports from,
-# per DESIGN_BRIEF.md's "Bygg denna mappning på ett ställe". Never show a raw
-# database category value in a template. new_installation/replacement/
-# replacement_after_incident/study/potential_new_construction are the values
-# the brief lists explicitly; maintenance/replacement_watch/unknown are real
-# values already present in production data that also need a label.
-_CATEGORY = {
-    "new_installation": ("Ny installation", "new"),
-    "replacement": ("Ersättning", "replace"),
-    "replacement_after_incident": ("Efter incident", "incident"),
-    "study": ("Studie", "study"),
-    "potential_new_construction": ("Möjlig ny installation", "new"),
-    "maintenance": ("Underhåll", "study"),
-    "replacement_watch": ("Ersättning – bevakas", "replace"),
-    "unknown": ("Ej klassificerad", "study"),
-}
-
-# app.services.evidence_claim_semantics.ClaimCategory.value -> public-facing
-# label ("RWI - Sacheon Evidence Surfacing - View-Model Slice" mission).
-# The single place this mapping lives, per DESIGN_BRIEF.md's "Bygg denna
-# mappning på ett ställe" - never a raw ClaimCategory value in a template.
-# Generic over every existing member, never keyed on a specific claim's own
-# content.
-_CLAIM_CATEGORY_LABEL = {
-    "explicit_document_fact": "Bekräftat sakförhållande",
-    "procedural_request": "Begäran/förfarande",
-    "temporal_statement": "Tidsuppgift",
-    "relationship": "Ansvarig part",
-}
-
-# app.services.evidence_claim_semantics.TemporalQualifier.value -> public-
-# facing label - same single-mapping discipline as _CLAIM_CATEGORY_LABEL.
-_TEMPORAL_QUALIFIER_LABEL = {
-    "historical_fact": "Historiskt förhållande",
-    "current_state_as_of_document_date": "Aktuellt läge vid källans datum",
-    "planned_future_action": "Planerad/kommande åtgärd",
-    "requested_pending_approval": "Begärd, väntar godkännande",
-    "completed": "Genomförd",
-    "unknown": "Okänt tidsläge",
-}
-
-# Source.source_type -> (display label, /ordlista.html anchor, one-sentence
-# tooltip) - the single place this mapping lives, per DESIGN_BRIEF.md's
-# "Bygg denna mappning på ett ställe" (already applied to _CATEGORY above).
-# Anchor/tooltip text is verbatim from the glossary content the source-type
-# badges link to - never paraphrased here.
-#
-# "Master Plan" (capitalized, space) is an older, pre-snake_case alias for
-# the same concept as "master_plan" - both map to the same anchor. A few
-# source_type values already in the database (Airport/Authority/
-# Environmental/FAA/Procurement/Watchlist) are leftover free-text fragments
-# from early, pre-"forenkling" data, not a real taxonomy - deliberately not
-# mapped here (fixing that is a separate, unrelated data-quality task); they
-# fall through to the "no entry" branch below and render as a plain,
-# unlinked badge showing the raw value, exactly as before this change.
-_SOURCE_TYPE = {
-    "master_plan": (
-        "Master Plan", "master-plan",
-        "En flygplats långsiktiga utvecklingsplan, ofta 10-20 år framåt.",
-    ),
-    "Master Plan": (
-        "Master Plan", "master-plan",
-        "En flygplats långsiktiga utvecklingsplan, ofta 10-20 år framåt.",
-    ),
-    "aip_grant": (
-        "AIP-bidrag", "aip",
-        "Ett amerikanskt statligt bidragsprogram. Ett beviljat AIP-bidrag betyder att "
-        "pengarna finns, men inte alltid att bygget redan startat.",
-    ),
-    "iija_grant": (
-        "IIJA-bidrag", "iija-bidrag",
-        "En separat, större statlig bidragspott, fungerar ungefär som AIP men är en "
-        "egen pengapåse.",
-    ),
-    "usaspending_grant": (
-        "USAspending-bidrag", "usaspending-bidrag",
-        "Ett verkligt, redan beviljat federalt bidrag, hämtat direkt från den "
-        "amerikanska statens egna offentliga utbetalningsregister.",
-    ),
-    "faa_tableau": (
-        "FAA:s kartdata", "faa-kartdata",
-        "Officiell information direkt från den amerikanska luftfartsmyndigheten "
-        "(FAA) om vad som redan är byggt.",
-    ),
-    "faa_fact_sheet": (
-        "FAA:s faktablad", "faa-kartdata",
-        "Officiell information direkt från den amerikanska luftfartsmyndigheten "
-        "(FAA) om vad som redan är byggt.",
-    ),
-    "CIP": (
-        "CIP", "cip",
-        "En flygplats egen, mer kortsiktiga investeringslista (vanligtvis 3-5 år).",
-    ),
-    "ALP": (
-        "ALP", "alp",
-        "En teknisk ritning över hur flygplatsen ser ut och ska se ut.",
-    ),
-    "news": ("Nyhetskälla", None, None),
-    "shareholder_newsletter": ("Aktieägarbrev", None, None),
-    "faa_construction_report": ("FAA byggrapport", None, None),
-    "environmental_assessment": ("Miljökonsekvensbeskrivning (EA)", None, None),
-    "state_aviation_system_plan": ("Delstatlig flygplatsplan", None, None),
-}
+# RWI HQ "Bilingual Static Site - Slice 1: Localization Plumbing" mission:
+# the category/confidence-label/claim-category/temporal-qualifier/source-type
+# presentation mappings that used to live here as Swedish-only dicts now live
+# in app.static_export.presentation (CATEGORY_PRESENTATION,
+# CONFIDENCE_LABEL_PRESENTATION, CLAIM_CATEGORY_PRESENTATION,
+# TEMPORAL_QUALIFIER_PRESENTATION, SOURCE_TYPE_PRESENTATION), following the
+# exact same bilingual-dict-plus-accessor-function shape STATUS_PRESENTATION/
+# LIFECYCLE_PRESENTATION already established there - one place, never
+# duplicated between files (DESIGN_BRIEF.md's "Bygg denna mappning på ett
+# ställe" principle, now applied uniformly). This module calls the
+# presentation-layer accessor functions (category_view(), confidence_label(),
+# claim_category_label(), temporal_qualifier_label(), source_type_view()),
+# never re-derives their mappings.
 
 
 # SLT1: default-view relevance ordering for SignalLifecycleState - current/
@@ -187,34 +106,22 @@ def _confidence_level(value: str | None) -> str:
     return _CONFIDENCE_LEVEL.get((value or "").lower(), "low")
 
 
-def _category_view(value: str | None) -> tuple[str, str]:
-    return _CATEGORY.get(value or "", (value or "Okänd", "study"))
-
-
-def _source_type_view(value: str | None) -> tuple[str | None, str | None, str | None]:
-    """Returns (label, anchor, tooltip) - anchor/tooltip are None when this
-    source_type has no glossary entry, so source_badge() falls back to a
-    plain, unlinked badge instead of a dead link."""
-    if not value:
-        return None, None, None
-    return _SOURCE_TYPE.get(value, ("Övrig källa", None, None))
+# category_view()/source_type_view() are called directly from
+# app.static_export.presentation (imported above) at every call site below -
+# no local wrapper is kept, so there is exactly one function per mapping,
+# never two names for the same lookup.
 
 
 # Mission #7J ("Varför nu?"): the approved, fixed status -> public-safe
 # wording map from Mission #7I's own explainability contract (Part H). Each
 # entry is deliberately a committed pipeline/process stage, not a bare
 # status label restatement - see that mission's own trigger table for the
-# "must not imply" boundary attached to each one.
-_ATTENTION_STATUS_WORDING = {
-    "procurement": "Upphandling pågår",
-    "under construction": "Byggnation pågår",
-    "design": "Projektering pågår",
-    "master_plan": "Master Plan-fas",
-    "environmental_review": "Miljöprövning pågår",
-    "cip": "CIP-planering pågår",
-    "alp": "ALP-planering pågår",
-    "funded": "Finansiering beviljad",
-}
+# "must not imply" boundary attached to each one. RWI HQ "Bilingual Static
+# Site - Slice 1" mission: this wording now lives in
+# app.static_export.presentation.ATTENTION_STATUS_PRESENTATION (bilingual),
+# read here via attention_status_wording() - see that module's own comment
+# for why it is a separate dict from STATUS_PRESENTATION rather than a
+# duplicate.
 
 # Same vocabulary as signal_lifecycle.py's own _GRANT_SOURCE_TYPES, and the
 # same "current or future fiscal year" test (today.year - planning_year <= 0)
@@ -227,7 +134,7 @@ _ATTENTION_GRANT_SOURCE_TYPES = frozenset({"usaspending_grant", "aip_grant", "ii
 
 
 def _attention_reason_view(
-    signal: Signal, *, today: date, lifecycle_state: "SignalLifecycleState"
+    signal: Signal, *, today: date, lifecycle_state: "SignalLifecycleState", locale: str = "sv"
 ) -> str | None:
     """Mission #7J: one deterministic, presentation-only "Varför nu?"
     sentence explaining why a Signal is worth an analyst's attention right
@@ -266,11 +173,12 @@ def _attention_reason_view(
         return None
 
     if signal.confirmed_vendor:
-        return f"{signal.confirmed_vendor} bekräftad som leverantör"
+        return text("attention_vendor_confirmed", locale).format(vendor=signal.confirmed_vendor)
 
     status = (signal.status or "").strip().lower()
-    if status in _ATTENTION_STATUS_WORDING:
-        return _ATTENTION_STATUS_WORDING[status]
+    wording = attention_status_wording(status, locale)
+    if wording is not None:
+        return wording
 
     source_type = ((signal.source.source_type if signal.source else None) or "").strip().lower()
     if (
@@ -278,15 +186,15 @@ def _attention_reason_view(
         and signal.planning_year is not None
         and today.year - signal.planning_year <= 0
     ):
-        return "Aktuellt federalt finansieringsunderlag finns"
+        return text("attention_grant_current", locale)
 
     if (signal.category or "") == "replacement_after_incident":
-        return "En incident har registrerats, ersättning inte bekräftad"
+        return text("attention_incident_unconfirmed", locale)
 
     return None
 
 
-def _signal_view(signal: Signal, *, today: date, session: Session) -> SimpleNamespace:
+def _signal_view(signal: Signal, *, today: date, session: Session, locale: str = "sv") -> SimpleNamespace:
     source = signal.source
     # RWI HQ "Signal Detail Funding-Caveat Parity" mission: the SAME
     # funding-source predicate _build_timeline_events() already uses for
@@ -295,12 +203,12 @@ def _signal_view(signal: Signal, *, today: date, session: Session) -> SimpleName
     # not funding-sourced, so the template's existing "Total projektbudget"
     # presentation is untouched for every non-funding Signal.
     is_funding_signal = source is not None and source.source_type in _GRANT_SOURCE_TYPES_TIMELINE
-    category_label, category_class = _category_view(signal.category)
+    category_label, category_class = category_view(signal.category, locale)
     confidence_level = _confidence_level(signal.confidence)
-    source_type_label, source_type_anchor, source_type_tooltip = _source_type_view(
-        source.source_type if source else None
+    source_type_label, source_type_anchor, source_type_tooltip = source_type_view(
+        source.source_type if source else None, locale
     )
-    public_status_label, public_qualification = public_signal_state(signal.id, signal.status)
+    public_status_label, public_qualification = public_signal_state(signal.id, signal.status, locale)
     # SLT1 (docs/architecture/rwi-signal-temporal-relevance-opportunity-
     # lifecycle-design.md): a presentation-only, non-persisted machine
     # baseline - see app.static_export.signal_lifecycle's own module
@@ -318,11 +226,11 @@ def _signal_view(signal: Signal, *, today: date, session: Session) -> SimpleName
     # is used publicly.
     effective_lifecycle = resolve_effective_signal_lifecycle(session, signal, today=today)
     lifecycle_state = effective_lifecycle.effective_state
-    lifecycle_label, lifecycle_class, lifecycle_tooltip = lifecycle_view(lifecycle_state.value)
+    lifecycle_label, lifecycle_class, lifecycle_tooltip = lifecycle_view(lifecycle_state.value, locale)
     # Mission #7J: deterministic, presentation-only "Varför nu?" - see
     # _attention_reason_view()'s own docstring for the exact approved
     # trigger fields/precedence. None is a valid, expected result.
-    attention_reason = _attention_reason_view(signal, today=today, lifecycle_state=lifecycle_state)
+    attention_reason = _attention_reason_view(signal, today=today, lifecycle_state=lifecycle_state, locale=locale)
     return SimpleNamespace(
         id=signal.id,
         title=signal.title,
@@ -331,10 +239,10 @@ def _signal_view(signal: Signal, *, today: date, session: Session) -> SimpleName
         category_class=category_class,
         confidence=signal.confidence,
         confidence_level=confidence_level,
-        confidence_label=_CONFIDENCE_LABEL[confidence_level],
+        confidence_label=confidence_label(confidence_level, locale),
         status=signal.status,
         status_label=public_status_label,
-        status_role=status_view(signal.status)[1],
+        status_role=status_view(signal.status, locale)[1],
         public_qualification=public_qualification,
         is_completed=signal.status == "completed",
         installation_id=signal.installation_id,
@@ -415,14 +323,14 @@ def _signal_view(signal: Signal, *, today: date, session: Session) -> SimpleName
 # semantics), and `relationship.role`/`.scope` (free-text governance
 # classification vocabulary, not intended for direct public display -
 # `claim.statement` already restates the relationship in plain language).
-def _claim_view(claim: Claim) -> SimpleNamespace:
+def _claim_view(claim: Claim, locale: str = "sv") -> SimpleNamespace:
     temporal_label = None
     temporal_detail = None
     if claim.temporal is not None:
-        temporal_label = _TEMPORAL_QUALIFIER_LABEL.get(claim.temporal.qualifier.value, claim.temporal.qualifier.value)
+        temporal_label = temporal_qualifier_label(claim.temporal.qualifier.value, locale)
         temporal_detail = claim.temporal.detail
     return SimpleNamespace(
-        category_label=_CLAIM_CATEGORY_LABEL.get(claim.category.value, claim.category.value),
+        category_label=claim_category_label(claim.category.value, locale),
         statement=claim.statement,
         excerpt=claim.provenance.raw_text_excerpt,
         temporal_label=temporal_label,
@@ -445,13 +353,13 @@ def _claim_view(claim: Claim) -> SimpleNamespace:
 # _signal_view()'s own returned object - see _build()'s own "DATA.JSON"
 # note for why evidence is threaded as a separate, signal_detail.html-only
 # template context variable instead.
-def _evidence_view(signal: Signal, *, session: Session) -> "tuple[SimpleNamespace, ...]":
+def _evidence_view(signal: Signal, *, session: Session, locale: str = "sv") -> "tuple[SimpleNamespace, ...]":
     claims: "list[Claim]" = []
     for source_assertion in signal.supporting_source_assertions:
         found = get_manual_claims_for_source_assertion(session, source_assertion.id)
         if found:
             claims.extend(found)
-    return tuple(_claim_view(c) for c in claims)
+    return tuple(_claim_view(c, locale) for c in claims)
 
 
 # Read-only public projection of an Airport's currently-ADMITTED aliases
@@ -477,10 +385,10 @@ def _alias_view(airport: Airport, *, session: Session) -> "tuple[str, ...]":
 _RUNWAY_TRACKED_INSTALLATION_TYPES = ("EMASMAX", "greenEMAS")
 
 
-def _installation_view(installation: Installation) -> SimpleNamespace:
+def _installation_view(installation: Installation, locale: str = "sv") -> SimpleNamespace:
     source = installation.source
-    source_type_label, source_type_anchor, source_type_tooltip = _source_type_view(
-        source.source_type if source else None
+    source_type_label, source_type_anchor, source_type_tooltip = source_type_view(
+        source.source_type if source else None, locale
     )
     return SimpleNamespace(
         id=installation.id,
@@ -1092,21 +1000,26 @@ def _market_category_distribution_view(signal_views: "list[SimpleNamespace]") ->
     about WHICH signals belong in "Efter projekttyp"; `_market_intelligence_view`
     below is the one place that decides (active_opportunity + developing_watch
     only, per Mission #7C section 2E - never the full published set, which
-    would only restate the Overview's own existing stage donut). Reuses
-    `_category_view()` verbatim - the same single mapping every other
-    category label on the site already uses; no new project-type
-    classification is introduced. Returns `[]` for an empty input (template
-    shows an honest empty-state, never a fabricated category)."""
+    would only restate the Overview's own existing stage donut). Reuses each
+    view's own already-computed `category_label`/`category_class`
+    (`_signal_view()`'s own category_view() call, already locale-correct)
+    rather than recomputing them a second time - the same single mapping
+    every other category label on the site already uses, and one fewer
+    place that would otherwise need its own `locale` parameter (RWI HQ
+    "Bilingual Static Site - Slice 1" mission). Returns `[]` for an empty
+    input (template shows an honest empty-state, never a fabricated
+    category)."""
     total = len(signal_views)
     if not total:
         return []
+    labels_by_category = {view.category: (view.category_label, view.category_class) for view in signal_views}
     counts = Counter(view.category for view in signal_views)
     ordered = sorted(counts.items(), key=lambda item: -item[1])
     return [
         SimpleNamespace(
             category=category,
-            label=_category_view(category)[0],
-            css_class=_category_view(category)[1],
+            label=labels_by_category[category][0],
+            css_class=labels_by_category[category][1],
             count=count,
             pct=round(100 * count / total),
         )
@@ -1655,7 +1568,7 @@ def _airport_location_view(airport: Airport) -> "SimpleNamespace | None":
 # (e.g. the Brazil/Gadelius one-off-script imports) where an Installation
 # cites a bare Source with no SourceAssertion at all.
 def _airport_source_assertion_evidence_view(
-    airport: Airport, *, session: Session,
+    airport: Airport, *, session: Session, locale: str = "sv",
 ) -> "list[tuple[tuple, SimpleNamespace]]":
     entries: "list[tuple[tuple, SimpleNamespace]]" = []
     for assertion in airport.source_assertions:
@@ -1664,10 +1577,10 @@ def _airport_source_assertion_evidence_view(
         source = assertion.source
         if source is None or not source.title:
             continue
-        source_type_label, source_type_anchor, source_type_tooltip = _source_type_view(source.source_type)
+        source_type_label, source_type_anchor, source_type_tooltip = source_type_view(source.source_type, locale)
         key = (source.title, source.url, source.published_date)
         found = get_manual_claims_for_source_assertion(session, assertion.id)
-        claims = tuple(_claim_view(c) for c in found) if found else ()
+        claims = tuple(_claim_view(c, locale) for c in found) if found else ()
         item = SimpleNamespace(
             source_title=source.title,
             source_publisher=source.publisher,
@@ -1688,7 +1601,7 @@ def _airport_evidence_view(
     orm_signals_by_id: dict[int, Signal],
     signal_views: list[SimpleNamespace],
     installation_views: list[SimpleNamespace],
-    *, session: Session,
+    *, session: Session, locale: str = "sv",
 ) -> tuple[SimpleNamespace, ...]:
     order: list[tuple] = []
     items: dict[tuple, SimpleNamespace] = {}
@@ -1700,7 +1613,7 @@ def _airport_evidence_view(
         if key in items:
             continue
         orm_signal = orm_signals_by_id.get(view.id)
-        claims = _evidence_view(orm_signal, session=session) if orm_signal is not None else ()
+        claims = _evidence_view(orm_signal, session=session, locale=locale) if orm_signal is not None else ()
         items[key] = SimpleNamespace(
             source_title=view.source_title,
             source_publisher=view.source_publisher,
@@ -1714,7 +1627,7 @@ def _airport_evidence_view(
         )
         order.append(key)
 
-    for key, item in _airport_source_assertion_evidence_view(airport, session=session):
+    for key, item in _airport_source_assertion_evidence_view(airport, session=session, locale=locale):
         if key in items:
             continue
         items[key] = item
@@ -1767,15 +1680,15 @@ def _evidence_summary_view(evidence: "tuple[SimpleNamespace, ...]") -> SimpleNam
 
 
 def _airport_view(
-    airport: Airport, *, today: date, session: Session
+    airport: Airport, *, today: date, session: Session, locale: str = "sv"
 ) -> "tuple[SimpleNamespace, tuple[SimpleNamespace, ...]]":
     public_orm_signals = [s for s in airport.signals if _is_public_signal(s)]
     orm_signals_by_id = {s.id: s for s in public_orm_signals}
     signal_views = sorted(
-        (_signal_view(s, today=today, session=session) for s in public_orm_signals),
+        (_signal_view(s, today=today, session=session, locale=locale) for s in public_orm_signals),
         key=_signal_sort_key,
     )
-    installation_views = [_installation_view(i) for i in airport.installations]
+    installation_views = [_installation_view(i, locale) for i in airport.installations]
     installed_base_summary = _installed_base_summary_view(installation_views)
     current_emas = _current_emas_views(airport)
     incident_views = [
@@ -1801,7 +1714,9 @@ def _airport_view(
     intelligence_history_dated, intelligence_history_undated = _intelligence_history_view(
         incident_views, signal_views
     )
-    evidence = _airport_evidence_view(airport, orm_signals_by_id, signal_views, installation_views, session=session)
+    evidence = _airport_evidence_view(
+        airport, orm_signals_by_id, signal_views, installation_views, session=session, locale=locale,
+    )
     view = SimpleNamespace(
         id=airport.id,
         # ("RWI - Juicy Design Mission #1" mission) The single headline
@@ -1902,22 +1817,34 @@ def _json_default(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def build_site(output_dir: Path, *, session: Session | None = None, today: date | None = None) -> None:
+def build_site(
+    output_dir: Path, *, session: Session | None = None, today: date | None = None, locale: str = "sv",
+) -> None:
     """`today` defaults to the real current date - the same real-clock
     default `datetime.now(UTC)` already uses for `generated_at` just below.
     Callers (chiefly the SLT1 test suite) may pass a fixed date so
     lifecycle-derivation results stay stable across real-calendar time
-    instead of drifting as the actual date advances."""
+    instead of drifting as the actual date advances.
+
+    `locale` (RWI HQ "Bilingual Static Site - Slice 1: Localization
+    Plumbing" mission): defaults to "sv", so every existing caller that
+    never passes it - including the CLI (`scripts/export_static_site.py`)
+    and the whole pre-existing test suite - continues to generate exactly
+    the current Swedish site, unchanged. Passing `locale="en"` is
+    architecturally supported end-to-end (view-model construction, `t()`
+    binding, render context) but this slice does not yet enable a public
+    English build path anywhere - no caller passes anything other than the
+    "sv" default today."""
     owns_session = session is None
     session = session or SessionLocal()
     try:
-        _build(output_dir, session, today=today or date.today())
+        _build(output_dir, session, today=today or date.today(), locale=locale)
     finally:
         if owns_session:
             session.close()
 
 
-def _build(output_dir: Path, session: Session, *, today: date) -> None:
+def _build(output_dir: Path, session: Session, *, today: date, locale: str = "sv") -> None:
     output_dir = Path(output_dir)
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -1929,7 +1856,12 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
     shutil.copytree(STATIC_DIR / "images", output_dir / "images")
 
     env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
-    env.globals["t"] = text
+    # RWI HQ "Bilingual Static Site - Slice 1" mission: bound to this
+    # build's own `locale` rather than the raw `text` function (whose own
+    # default is "sv") - every existing template call site (`t("key")`,
+    # ~70 of them) needs zero changes to become locale-aware, since none of
+    # them ever pass a second argument today.
+    env.globals["t"] = lambda key: text(key, locale)
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     airports = session.scalars(
@@ -1952,7 +1884,7 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
     # ("RWI - Juicy Design Mission #4" mission) `evidence` is threaded
     # per-airport, separately from `airport_views` (which feeds data.json
     # directly) - see _airport_view's own "DATA.JSON" note.
-    airport_pairs = [_airport_view(a, today=today, session=session) for a in airports]
+    airport_pairs = [_airport_view(a, today=today, session=session, locale=locale) for a in airports]
     airport_views = [view for view, _evidence in airport_pairs]
     airport_evidence_by_id = {view.id: evidence for view, evidence in airport_pairs}
 
@@ -1977,14 +1909,26 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
     # re-querying, never by attaching evidence onto the shared view object
     # itself (see the render loop's own "DATA.JSON" note for why).
     signal_pairs = sorted(
-        ((s, _signal_view(s, today=today, session=session)) for s in public_signals),
+        ((s, _signal_view(s, today=today, session=session, locale=locale)) for s in public_signals),
         key=lambda pair: _signal_sort_key(pair[1]),
     )
     signal_views = [view for _source_signal, view in signal_pairs]
 
     def render(name: str, path: Path, **context) -> None:
+        # RWI HQ "Bilingual Static Site - Slice 1" mission: `locale` and
+        # `page_path` (this build's own output-relative path, e.g.
+        # "signals/67.html") are injected into every render automatically -
+        # no individual render() call site needs to pass either. Neither is
+        # consumed by any template yet (no visible change in this slice);
+        # they exist so a future language-switcher/hreflang slice can
+        # compute cross-locale link targets without touching every render()
+        # call again.
         template = env.get_template(name)
-        path.write_text(template.render(generated_at=generated_at, **context), encoding="utf-8")
+        page_path = path.relative_to(output_dir).as_posix()
+        path.write_text(
+            template.render(generated_at=generated_at, locale=locale, page_path=page_path, **context),
+            encoding="utf-8",
+        )
 
     # ("RWI - Juicy Design Mission #2 - V2.3" mission) Computed once, fed to
     # BOTH Marknadsläge and the new Global intelligens map - one single
@@ -2130,7 +2074,7 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
             output_dir / "signals" / f"{signal.id}.html",
             root="..",
             signal=signal,
-            evidence=_evidence_view(source_signal, session=session),
+            evidence=_evidence_view(source_signal, session=session, locale=locale),
         )
 
     data = {
