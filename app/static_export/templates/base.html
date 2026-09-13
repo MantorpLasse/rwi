@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="sv">
+<html lang="{{ locale }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,6 +8,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ root }}/style.css">
+{# RWI HQ "Bilingual Static Site - Slice 2" mission: relative-path
+   hreflang alternates only - no rel="canonical" is emitted anywhere on
+   this site, because no production hostname/base URL exists anywhere in
+   this repository's configuration, and this mission explicitly forbids
+   fabricating one. See the mission's own final report for this documented
+   limitation. #}
+<link rel="alternate" hreflang="sv" href="{{ self_hreflang_href if locale == 'sv' else switch_url }}">
+<link rel="alternate" hreflang="en" href="{{ switch_url if locale == 'sv' else self_hreflang_href }}">
 </head>
 <body>
 <header class="site">
@@ -17,14 +25,26 @@
       <a href="{{ root }}/index.html">{{ t("nav_overview") }}</a>
       <a href="{{ root }}/signals/index.html">{{ t("nav_signals") }}</a>
       <a href="{{ root }}/airports/index.html">{{ t("nav_airports") }}</a>
-      <a href="{{ root }}/marknadslage.html">{{ t("nav_market") }}</a>
+      <a href="{{ root }}/{{ market_page_href }}">{{ t("nav_market") }}</a>
       <a href="{{ root }}/ordlista.html">{{ t("nav_glossary") }}</a>
+      {# RWI HQ "Bilingual Static Site - Slice 2" mission: plain text
+         links, never flag icons; current language identified via
+         aria-current="page" on a non-link span (the same "you are here"
+         pattern real language switchers commonly use); the other language
+         is a real <a> - keyboard-accessible, no JavaScript, works on a
+         fully static export. switch_url is computed centrally in
+         build.py's own render() closure - no entity-specific path is ever
+         hardcoded here. #}
+      <span class="lang-switch">
+        {% if locale == "sv" %}<span aria-current="page">SV</span> | <a href="{{ switch_url }}">EN</a>
+        {% else %}<a href="{{ switch_url }}">SV</a> | <span aria-current="page">EN</span>{% endif %}
+      </span>
     </nav>
   </div>
 </header>
 <div class="wrap">
 {% block content %}{% endblock %}
-<footer class="site">Genererad {{ generated_at }} · statisk export, ingen server behövs för att läsa den. · <a href="{{ root }}/om.html">Om sidan &amp; ansvarsfriskrivning →</a></footer>
+<footer class="site">{{ t("footer_generated") }} {{ generated_at }} · {{ t("footer_static_note") }} · <a href="{{ root }}/om.html">{{ t("footer_about_link") }}</a></footer>
 </div>
 </body>
 </html>

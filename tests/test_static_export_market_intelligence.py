@@ -223,8 +223,11 @@ def test_lifecycle_derivation_is_reused_not_reimplemented():
     source = inspect.getsource(build._market_intelligence_view)
     assert "derive_signal_lifecycle" not in source  # consumes already-computed lifecycle_state, never re-derives
     assert "lifecycle_state ==" in source
-    # Uses the existing snapshot view verbatim.
-    assert "_lifecycle_counts_view(signal_views)" in source
+    # Uses the existing snapshot view verbatim (RWI HQ "Bilingual Static
+    # Site - Slice 2" mission: now also passes `locale` through, so the
+    # snapshot's own labels localize correctly - still the same, single
+    # reused function, never a second implementation).
+    assert "_lifecycle_counts_view(signal_views, locale)" in source
 
 
 def test_score_rendering_matches_mission_6_glossary_link(tmp_path):

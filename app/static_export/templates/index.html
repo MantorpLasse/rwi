@@ -29,28 +29,28 @@
         <span class="hero-kpi-icon" aria-hidden="true">🛫</span>
         <div>
           <div class="hero-kpi-value">{{ airport_count }}</div>
-          <div class="hero-kpi-label">Övervakade flygplatser</div>
+          <div class="hero-kpi-label">{{ t("kpi_airports_monitored") }}</div>
         </div>
       </div>
       <div class="hero-kpi">
         <span class="hero-kpi-icon" aria-hidden="true">📡</span>
         <div>
           <div class="hero-kpi-value" style="color:var(--verified)">{{ active_opportunity_count }}</div>
-          <div class="hero-kpi-label">Aktiva möjligheter</div>
+          <div class="hero-kpi-label">{{ t("kpi_active_opportunities") }}</div>
         </div>
       </div>
       <div class="hero-kpi">
         <span class="hero-kpi-icon" aria-hidden="true">🚧</span>
         <div>
           <div class="hero-kpi-value" style="color:var(--med-ink)">{{ in_progress_count }}</div>
-          <div class="hero-kpi-label">Projekt i rörelse</div>
+          <div class="hero-kpi-label">{{ t("kpi_projects_in_motion") }}</div>
         </div>
       </div>
       <div class="hero-kpi">
         <span class="hero-kpi-icon" aria-hidden="true">🛡️</span>
         <div>
           <div class="hero-kpi-value">{{ installation_count }}</div>
-          <div class="hero-kpi-label">EMAS-installationer</div>
+          <div class="hero-kpi-label">{{ t("kpi_emas_installations") }}</div>
         </div>
       </div>
     </div>
@@ -66,17 +66,17 @@
       <div class="card-header">{{ t("signals_snapshot") }}<a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_signals") }} →</a></div>
       <table>
         <thead>
-          <tr><th>Flygplats</th><th>Signal</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th></tr>
+          <tr><th>{{ t("col_airport") }}</th><th>Signal</th><th>{{ t("status") }}</th><th>{{ t("project_type") }}</th><th>{{ t("confidence") }}</th><th>{{ t("year") }}</th></tr>
         </thead>
         <tbody>
           {% for signal in top_signals %}
           <tr>
-            <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
+            <td data-label="{{ t('col_airport') }}"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
             <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-            <td data-label="Status"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
-            <td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td>
-            <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
-            <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
+            <td data-label="{{ t('status') }}"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
+            <td data-label="{{ t('project_type') }}">{{ cat(signal.category_label, signal.category_class) }}</td>
+            <td data-label="{{ t('confidence') }}">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
+            <td data-label="{{ t('year') }}" class="mono">{{ signal.planning_year or "–" }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -104,7 +104,7 @@
           <div class="market-dominant-flag">{{ m.flag or "" }}</div>
           <div>
             <div class="market-dominant-country">{{ m.country }}</div>
-            <div class="market-dominant-count"><strong>{{ m.pct_of_total }}%</strong> av aktiviteten · {{ m.count }} signaler</div>
+            <div class="market-dominant-count"><strong>{{ m.pct_of_total }}%</strong> {{ t("of_activity") }} · {{ m.count }} {{ t("signal_count_word") }}</div>
           </div>
         </div>
         {% endfor %}
@@ -119,7 +119,7 @@
         </div>
       </div>
       {% else %}
-      <div class="empty-state">Ingen marknadsdata ännu.</div>
+      <div class="empty-state">{{ t("market_no_data") }}</div>
       {% endif %}
     </div>
 
@@ -142,7 +142,7 @@
             {% endfor %}
           </g>
           <text x="70" y="66" text-anchor="middle" class="stage-donut-total">{{ signal_count }}</text>
-          <text x="70" y="84" text-anchor="middle" class="stage-donut-total-label">signaler</text>
+          <text x="70" y="84" text-anchor="middle" class="stage-donut-total-label">{{ t("signal_count_word") }}</text>
         </svg>
         <div class="stage-donut-legend">
           {% for seg in stage_distribution %}
@@ -151,7 +151,7 @@
         </div>
       </div>
       {% else %}
-      <div class="empty-state">Ingen signaldata ännu.</div>
+      <div class="empty-state">{{ t("no_signal_data") }}</div>
       {% endif %}
     </div>
 
@@ -244,16 +244,16 @@
             <summary class="footprint-country-header">
               <span class="map-legend-flag">{{ node.flag or "" }}</span>
               <span class="map-legend-country">{{ node.country }}</span>
-              <span class="footprint-country-count">{{ node.airport_count }} {{ "flygplats" if node.airport_count == 1 else "flygplatser" }} med dokumenterad EMAS</span>
+              <span class="footprint-country-count">{{ node.airport_count }} {{ t("airport_singular") if node.airport_count == 1 else t("airport_plural") }} {{ t("with_documented_emas") }}</span>
             </summary>
             <ul class="footprint-airport-list">
               {% for a in node.airports %}
               <li>
                 <a href="{{ root }}/airports/{{ a.id }}.html">{{ airport_label(a.code, a.name) }} {{ a.name }}</a>
                 {% if a.type_label %}<span class="footprint-tag">{{ a.type_label }}</span>{% endif %}
-                <span class="footprint-tag">{% if a.year_label %}Installerad {{ a.year_label }}{% else %}{{ t("footprint_year_unknown") }}{% endif %}</span>
-                {% if a.ends_label %}<span class="footprint-tag">Bana {{ a.ends_label }}</span>{% endif %}
-                <span class="footprint-tag{{ ' footprint-tag-confirmed' if a.vendor_label else '' }}">{% if a.vendor_label %}Bekräftad leverantör: {{ a.vendor_label }}{% else %}{{ t("footprint_vendor_unconfirmed") }}{% endif %}</span>
+                <span class="footprint-tag">{% if a.year_label %}{{ t("installed_word") }} {{ a.year_label }}{% else %}{{ t("footprint_year_unknown") }}{% endif %}</span>
+                {% if a.ends_label %}<span class="footprint-tag">{{ t("runway_prefix") }} {{ a.ends_label }}</span>{% endif %}
+                <span class="footprint-tag{{ ' footprint-tag-confirmed' if a.vendor_label else '' }}">{% if a.vendor_label %}{{ t("confirmed_vendor_label") }}: {{ a.vendor_label }}{% else %}{{ t("footprint_vendor_unconfirmed") }}{% endif %}</span>
                 {% if not a.has_marker %}<span class="footprint-no-marker">({{ t("footprint_no_marker") }})</span>{% endif %}
               </li>
               {% endfor %}
@@ -287,7 +287,7 @@
           {% endfor %}
           {% for node in global_intelligence %}
           <circle cx="{{ node.x }}" cy="{{ node.y }}" r="{{ node.radius }}" class="map-node{{ ' map-node-dominant' if node.is_dominant else '' }}">
-            <title>{{ node.country }}: {{ node.count }} signaler ({{ node.pct_of_total }}% av aktiviteten)</title>
+            <title>{{ node.country }}: {{ node.count }} {{ t("signal_count_word") }} ({{ node.pct_of_total }}% {{ t("of_activity") }})</title>
           </circle>
           {% endfor %}
         </svg>
@@ -297,12 +297,12 @@
             <span class="map-legend-flag">{{ m.flag or "" }}</span>
             <span class="map-legend-country">{{ m.country }}</span>
             <span class="map-legend-pct mono">{{ m.pct_of_total }}%</span>
-            <span class="map-legend-count">{{ m.count }} signaler</span>
+            <span class="map-legend-count">{{ m.count }} {{ t("signal_count_word") }}</span>
           </div>
           {% endfor %}
         </div>
         {% else %}
-        <div class="empty-state">Ingen aktivitetsdata ännu.</div>
+        <div class="empty-state">{{ t("no_activity_data") }}</div>
         {% endif %}
       </div>
     </div>
@@ -336,16 +336,16 @@
 <div class="bottom-grid">
 
   <div class="card panel-strong">
-    <div class="card-header">EMAS-aktivitet över tid</div>
+    <div class="card-header">{{ t("emas_activity_over_time") }}</div>
     {% if trend %}
     <div class="card-body">
       <div class="trend-legend">
-        <span class="trend-legend-item"><span class="trend-swatch trend-swatch-install"></span>Installationer (bekräftat)</span>
-        <span class="trend-legend-item"><span class="trend-swatch trend-swatch-signal"></span>Signaler (prognos, planerat år)</span>
+        <span class="trend-legend-item"><span class="trend-swatch trend-swatch-install"></span>{{ t("trend_legend_installations") }}</span>
+        <span class="trend-legend-item"><span class="trend-swatch trend-swatch-signal"></span>{{ t("trend_legend_signals") }}</span>
       </div>
 
       <div class="trend-scroll">
-      <svg class="trend-chart" viewBox="0 0 {{ trend.width }} {{ trend.bar_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Nya installationer och signaler per år">
+      <svg class="trend-chart" viewBox="0 0 {{ trend.width }} {{ trend.bar_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('trend_chart_aria') }}">
         <defs>
           <pattern id="trend-hatch" width="5" height="5" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
             <line x1="0" y1="0" x2="0" y2="5" stroke="var(--low-ink)" stroke-width="1.5" opacity="0.7" />
@@ -358,18 +358,18 @@
         {% for bar in trend.bars %}
           {% if bar.install_h > 0 %}
           <rect x="{{ bar.install_x }}" y="{{ bar.install_y }}" width="{{ bar.bar_w }}" height="{{ bar.install_h }}" rx="1.5" class="trend-bar-install">
-            <title>{{ bar.year }} · Installationer: {{ bar.install_count }}</title>
+            <title>{{ bar.year }} · {{ t("trend_tooltip_installations") }}: {{ bar.install_count }}</title>
           </rect>
           {% endif %}
           {% if bar.signal_h > 0 %}
           <rect x="{{ bar.signal_x }}" y="{{ bar.signal_y }}" width="{{ bar.bar_w }}" height="{{ bar.signal_h }}" rx="1.5" class="trend-bar-signal">
-            <title>{{ bar.year }} · Signaler (prognos): {{ bar.signal_count }}</title>
+            <title>{{ bar.year }} · {{ t("trend_tooltip_signals_forecast") }}: {{ bar.signal_count }}</title>
           </rect>
           {% endif %}
         {% endfor %}
       </svg>
 
-      <svg class="trend-chart trend-chart-cumulative" viewBox="0 0 {{ trend.width }} {{ trend.line_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Kumulativt antal installationer per år">
+      <svg class="trend-chart trend-chart-cumulative" viewBox="0 0 {{ trend.width }} {{ trend.line_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('trend_cumulative_aria') }}">
         {% for tick in trend.ticks %}
         <line x1="{{ tick.x }}" y1="0" x2="{{ tick.x }}" y2="{{ trend.line_baseline_y }}" class="trend-gridline" />
         <text x="{{ tick.x }}" y="{{ trend.line_height - 4 }}" class="trend-tick-label" text-anchor="middle">{{ tick.year }}</text>
@@ -380,7 +380,7 @@
         {% for p in trend.points %}
         {% if p.year % 5 == 0 %}
         <circle cx="{{ p.x }}" cy="{{ p.y }}" r="2.5" class="trend-point">
-          <title>{{ p.year }} · Totalt installerat: {{ p.cumulative }}</title>
+          <title>{{ p.year }} · {{ t("trend_tooltip_total_installed") }}: {{ p.cumulative }}</title>
         </circle>
         {% endif %}
         {% endfor %}
@@ -388,24 +388,24 @@
       </div>
 
       <p class="trend-caption">
-        {{ trend.total_installations }} installationer med känt installationsår (av {{ installation_count }} totalt) och {{ trend.total_signals }} signaler med bedömt år (av {{ signal_count }} totalt), {{ trend.start_year }}–{{ trend.end_year }}. Signaler är planerade/möjliga projekt, inte bekräftade installationer.
+        {{ t("trend_caption").format(installations=trend.total_installations, installation_total=installation_count, signals=trend.total_signals, signal_total=signal_count, start_year=trend.start_year, end_year=trend.end_year) }}
       </p>
     </div>
     {% else %}
-    <div class="empty-state">Ingen daterad installations- eller signaldata ännu.</div>
+    <div class="empty-state">{{ t("no_dated_data") }}</div>
     {% endif %}
   </div>
 
   <div class="card panel-strong">
-    <div class="card-header">Senast uppdaterat</div>
-    <div class="card-body" style="padding-bottom:0"><p class="timeline-meta" style="margin:0">Aktuella projekt- och källuppdateringar. Historiska incidenter och rena bevakningsuppgifter visas inte här.</p></div>
+    <div class="card-header">{{ t("recently_updated") }}</div>
+    <div class="card-body" style="padding-bottom:0"><p class="timeline-meta" style="margin:0">{{ t("recent_updates_intro") }}</p></div>
     {% if recent_changes %}
-    <div class="intelligence-feed" role="table" aria-label="Senast uppdaterat">
+    <div class="intelligence-feed" role="table" aria-label="{{ t('recently_updated') }}">
         <div class="intelligence-head" role="row">
-          <div role="columnheader">TYP</div>
-          <div role="columnheader">FLYGPLATS</div>
-          <div role="columnheader">BESKRIVNING</div>
-          <div role="columnheader">DATUM</div>
+          <div role="columnheader">{{ t("col_type_upper") }}</div>
+          <div role="columnheader">{{ t("col_airport_upper") }}</div>
+          <div role="columnheader">{{ t("col_description_upper") }}</div>
+          <div role="columnheader">{{ t("col_date_upper") }}</div>
         </div>
         {% for entry in recent_changes %}<article class="intelligence-item">
           <div class="intelligence-type">{{ cat(entry.category_label, entry.category_class) }}</div>
@@ -424,7 +424,7 @@
     </div>
     <div class="card-body" style="padding-top:14px"><a class="card-action" href="{{ root }}/signals/index.html">{{ t("view_all_updates") }} →</a></div>
     {% else %}
-    <div class="empty-state">Ändringsloggen startade {{ changelog_start_date }}. Ändringar före dess finns inte registrerade.</div>
+    <div class="empty-state">{{ t("changelog_empty").format(date=changelog_start_date) }}</div>
     {% endif %}
   </div>
 

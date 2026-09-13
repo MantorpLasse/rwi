@@ -2,13 +2,13 @@
 {% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill, star_toggle, lifecycle_badge %}
 {% block title %}{{ signal.title }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
-<div class="breadcrumbs"><a href="{{ root }}/signals/index.html">← Signaler</a></div>
+<div class="breadcrumbs"><a href="{{ root }}/signals/index.html">{{ t("back_to_signals") }}</a></div>
 <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap">
   <div>
     <p class="subtitle" style="margin-bottom:4px">
       <a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ sign(signal.airport_code, signal.airport_name) }} {{ signal.airport_name }}</a>
     </p>
-    <h1>{{ star_toggle(signal.id) }} <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span> {{ signal.title }}</h1>
+    <h1>{{ star_toggle(signal.id) }} <span class="info-hint" title="{{ t('watch_tooltip') }}">ⓘ</span> {{ signal.title }}</h1>
     {{ lifecycle_badge(signal) }}
     <span class="pill {{ 'done' if signal.is_completed else 'status' }}">{{ signal.status_label or signal.category_label }}</span>
     {% if signal.public_qualification %}<p class="timeline-meta">{{ signal.public_qualification }}</p>{% endif %}
@@ -16,7 +16,7 @@
     {{ gauge(signal.confidence_level, signal.confidence_label, root) }}
     {{ vendor_pill(signal.confirmed_vendor, root) }}
     {% if signal.installation_id %}
-    <a href="{{ root }}/airports/{{ signal.airport_id }}.html#installation-{{ signal.installation_id }}">→ Se installation</a>
+    <a href="{{ root }}/airports/{{ signal.airport_id }}.html#installation-{{ signal.installation_id }}">{{ t("see_installation_link") }}</a>
     {% endif %}
   </div>
   {% if signal.probability_score is not none %}
@@ -27,18 +27,18 @@
 <div class="grid-2" style="margin-top:24px">
   <div>
     <div class="card">
-      <div class="card-header">Detaljer</div>
+      <div class="card-header">{{ t("details_heading") }}</div>
       <div class="card-body">
         <dl class="meta">
-          <dt>Läge</dt><dd>{{ lifecycle_badge(signal) }}<div class="timeline-meta" style="margin-top:4px">{{ signal.lifecycle_tooltip }}</div></dd>
-          <dt>Status</dt><dd><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></dd>
-          <dt>Projekttyp</dt><dd>{{ cat(signal.category_label, signal.category_class) }}</dd>
-          <dt>Confidence</dt><dd>{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</dd>
-          <dt>Planeringsår</dt><dd class="mono">{{ signal.planning_year or "–" }}</dd>
-          <dt>Upphandlingsår</dt><dd class="mono">{{ signal.procurement_year or "–" }}</dd>
-          <dt>Bana</dt><dd class="mono">{{ signal.runway_designation or "–" }}</dd>
-          <dt>Trolig leverantör</dt><dd>{{ signal.likely_supplier or "Inte bedömd" }}</dd>
-          <dt>Motivering</dt><dd>{{ signal.supplier_reason or "–" }}</dd>
+          <dt>{{ t("lifecycle_label_word") }}</dt><dd>{{ lifecycle_badge(signal) }}<div class="timeline-meta" style="margin-top:4px">{{ signal.lifecycle_tooltip }}</div></dd>
+          <dt>{{ t("status") }}</dt><dd><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></dd>
+          <dt>{{ t("project_type") }}</dt><dd>{{ cat(signal.category_label, signal.category_class) }}</dd>
+          <dt>{{ t("confidence") }}</dt><dd>{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</dd>
+          <dt>{{ t("planning_year_label") }}</dt><dd class="mono">{{ signal.planning_year or "–" }}</dd>
+          <dt>{{ t("procurement_year_label") }}</dt><dd class="mono">{{ signal.procurement_year or "–" }}</dd>
+          <dt>{{ t("runway_label_word") }}</dt><dd class="mono">{{ signal.runway_designation or "–" }}</dd>
+          <dt>{{ t("likely_supplier_label") }}</dt><dd>{{ signal.likely_supplier or t("not_assessed") }}</dd>
+          <dt>{{ t("reasoning_label") }}</dt><dd>{{ signal.supplier_reason or "–" }}</dd>
         </dl>
       </div>
     </div>
@@ -69,19 +69,19 @@
     {% endif %}
 
     <div class="card">
-      <div class="card-header">Källa</div>
+      <div class="card-header">{{ t("source") }}</div>
       <div class="card-body">
         {% if signal.source_title %}
         <h2>{{ signal.source_title }}</h2>
         <p style="color:var(--text-dim); margin-top:-6px">{{ signal.source_publisher or "" }}{% if signal.source_publisher and signal.source_type %} · {% endif %}{{ source_badge(signal, root) }}</p>
         {% if signal.source_url %}
-        {% if signal.source_published_date %}<p class="timeline-meta">Senast verifierad källa: {{ signal.source_published_date }}</p>{% endif %}
-        <a href="{{ signal.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
+        {% if signal.source_published_date %}<p class="timeline-meta">{{ t("last_verified_source") }}: {{ signal.source_published_date }}</p>{% endif %}
+        <a href="{{ signal.source_url }}" target="_blank" rel="noopener">{{ t("open_source_link") }}</a>
         {% else %}
-        <span style="color:var(--text-faint)">Ingen offentlig länk (t.ex. internt dokument).</span>
+        <span style="color:var(--text-faint)">{{ t("no_public_link") }}</span>
         {% endif %}
         {% else %}
-        <span style="color:var(--text-dim)">Ingen källa kopplad ännu.</span>
+        <span style="color:var(--text-dim)">{{ t("no_source_linked") }}</span>
         {% endif %}
       </div>
     </div>
@@ -89,8 +89,8 @@
     {% if signal.source_notes %}
     <div class="card annotation">
       <div class="card-header">
-        Detaljer från källan
-        <span class="eyebrow">Fritext (kostnad, datum m.m.) utan egna fält i databasen</span>
+        {{ t("source_details_heading") }}
+        <span class="eyebrow">{{ t("source_details_eyebrow") }}</span>
       </div>
       <div class="card-body">
         <p style="white-space:pre-line; margin:0">{{ signal.source_notes }}</p>
@@ -101,16 +101,16 @@
 
   <div>
     <div class="card">
-      <div class="card-header">Ekonomi</div>
+      <div class="card-header">{{ t("economy_heading") }}</div>
       <div class="card-body">
-        <div style="color:var(--text-dim); font-size:0.85rem">{% if signal.funding_caveat %}Bidragsbelopp{% else %}Total projektbudget{% endif %}</div>
+        <div style="color:var(--text-dim); font-size:0.85rem">{% if signal.funding_caveat %}{{ t("grant_amount_label") }}{% else %}{{ t("total_project_budget_label") }}{% endif %}</div>
         <div class="money" style="font-size:1.3rem; margin-bottom:{% if signal.funding_caveat %}4px{% else %}14px{% endif %}">
           {% if signal.estimated_total_value_usd %}${{ "{:,.0f}".format(signal.estimated_total_value_usd) }}{% else %}–{% endif %}
         </div>
         {% if signal.funding_caveat %}
         <div style="color:var(--text-dim); font-size:0.78rem; margin-bottom:14px">{{ signal.funding_caveat }}</div>
         {% endif %}
-        <div style="color:var(--text-dim); font-size:0.85rem">Bedömd EMAS-del</div>
+        <div style="color:var(--text-dim); font-size:0.85rem">{{ t("estimated_emas_share_label") }}</div>
         <div class="money" style="font-size:1.3rem">
           {% if signal.estimated_emas_value_usd %}${{ "{:,.0f}".format(signal.estimated_emas_value_usd) }}{% else %}–{% endif %}
         </div>

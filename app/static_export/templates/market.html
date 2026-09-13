@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% from "_components.html" import cat, signal_row %}
-{% block title %}Marknadsläge · Runway Safe Intelligence{% endblock %}
+{% block title %}{{ t("nav_market") }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
-<h1>Marknadsläge</h1>
-<p class="subtitle">Vad som händer i EMAS-marknaden just nu, byggt uteslutande på RWI:s publicerade signaler och deras redan granskade underlag.</p>
+<h1>{{ t("nav_market") }}</h1>
+<p class="subtitle">{{ t("market_subtitle") }}</p>
 
 {# ("RWI - Mission #7C" mission) A. Market Snapshot - reuses
    _lifecycle_counts_view()/the exact ".lifecycle-stats" markup
@@ -27,18 +27,18 @@
    Källa, Score→ordlista#score, per Mission #6) already established on
    /signals/index.html - never a competing card/row system. #}
 <section class="card panel-strong">
-  <div class="card-header">Aktuella möjligheter ({{ market.active_opportunities|length }})</div>
+  <div class="card-header">{{ t("active_opportunities_heading") }} ({{ market.active_opportunities|length }})</div>
   {% if market.active_opportunities %}
   <div class="card-body" style="padding:0">
     <table>
-      <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
+      <thead><tr><th>{{ t("watch_column_label") }} <span class="info-hint" title="{{ t('watch_tooltip') }}">ⓘ</span></th><th>{{ t("col_airport") }}</th><th>Signal</th><th>{{ t("lifecycle_column_label") }}</th><th>{{ t("status") }}</th><th>{{ t("project_type") }}</th><th>{{ t("confidence") }}</th><th>{{ t("year") }}</th><th>{{ t("source") }}</th><th>Score</th></tr></thead>
       <tbody>
-        {% for signal in market.active_opportunities %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">Varför nu? {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
+        {% for signal in market.active_opportunities %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">{{ t("why_now_prefix") }} {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
       </tbody>
     </table>
   </div>
   {% else %}
-  <div class="card-body"><div class="empty-state empty-state-compact">Inga aktuella möjligheter är publicerade just nu.</div></div>
+  <div class="card-body"><div class="empty-state empty-state-compact">{{ t("no_active_opportunities") }}</div></div>
   {% endif %}
 </section>
 
@@ -52,35 +52,35 @@
    existing LIFECYCLE_PRESENTATION copy (presentation.py), never new
    wording invented here. #}
 <details class="card secondary-disclosure history-disclosure">
-  <summary class="card-header">Under bevakning ({{ market.developing_watch|length }})</summary>
+  <summary class="card-header">{{ t("developing_watch_heading") }} ({{ market.developing_watch|length }})</summary>
   {% if market.developing_watch %}
   <div class="card-body" style="padding:0">
     <table>
-      <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
+      <thead><tr><th>{{ t("watch_column_label") }} <span class="info-hint" title="{{ t('watch_tooltip') }}">ⓘ</span></th><th>{{ t("col_airport") }}</th><th>Signal</th><th>{{ t("lifecycle_column_label") }}</th><th>{{ t("status") }}</th><th>{{ t("project_type") }}</th><th>{{ t("confidence") }}</th><th>{{ t("year") }}</th><th>{{ t("source") }}</th><th>Score</th></tr></thead>
       <tbody>
-        {% for signal in market.developing_watch %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">Varför nu? {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
+        {% for signal in market.developing_watch %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">{{ t("why_now_prefix") }} {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
       </tbody>
     </table>
   </div>
   {% else %}
-  <div class="empty-state empty-state-compact">Inga signaler under bevakning just nu.</div>
+  <div class="empty-state empty-state-compact">{{ t("no_developing_watch_signals") }}</div>
   {% endif %}
 </details>
 
 <details class="card secondary-disclosure history-disclosure">
-  <summary class="card-header">Behöver research ({{ market.stale_unresolved|length }})</summary>
+  <summary class="card-header">{{ t("needs_research_heading") }} ({{ market.stale_unresolved|length }})</summary>
   {% if market.stale_unresolved %}
   <div class="card-body" style="padding:0">
-    <p class="timeline-meta" style="padding:14px 16px 0">Källbelagda signaler där RWI ännu saknar färsk uppföljning - inte bedömda som avslutade eller irrelevanta, bara obekräftade sedan sist.</p>
+    <p class="timeline-meta" style="padding:14px 16px 0">{{ t("stale_unresolved_explain") }}</p>
     <table>
-      <thead><tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead>
+      <thead><tr><th>{{ t("watch_column_label") }} <span class="info-hint" title="{{ t('watch_tooltip') }}">ⓘ</span></th><th>{{ t("col_airport") }}</th><th>Signal</th><th>{{ t("lifecycle_column_label") }}</th><th>{{ t("status") }}</th><th>{{ t("project_type") }}</th><th>{{ t("confidence") }}</th><th>{{ t("year") }}</th><th>{{ t("source") }}</th><th>Score</th></tr></thead>
       <tbody>
-        {% for signal in market.stale_unresolved %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">Varför nu? {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
+        {% for signal in market.stale_unresolved %}{{ signal_row(signal, root) }}{% if signal.attention_reason %}<tr class="attention-row"><td colspan="10" class="attention-reason">{{ t("why_now_prefix") }} {{ signal.attention_reason }}</td></tr>{% endif %}{% endfor %}
       </tbody>
     </table>
   </div>
   {% else %}
-  <div class="empty-state empty-state-compact">Inga signaler behöver förnyad research just nu.</div>
+  <div class="empty-state empty-state-compact">{{ t("no_stale_signals") }}</div>
   {% endif %}
 </details>
 
@@ -93,7 +93,7 @@
    Marknadsläge (country) panel already established on the Overview - no
    new CSS, no second bar-chart implementation. #}
 <section class="card panel-strong">
-  <div class="card-header">Efter projekttyp<span class="card-action" style="color:var(--text-faint); font-weight:400">Aktuella möjligheter + Under bevakning</span></div>
+  <div class="card-header">{{ t("by_project_type_heading") }}<span class="card-action" style="color:var(--text-faint); font-weight:400">{{ t("active_plus_watch_eyebrow") }}</span></div>
   {% if market.category_distribution %}
   <div class="card-body">
     <div class="market-summary">
@@ -107,7 +107,7 @@
     </div>
   </div>
   {% else %}
-  <div class="card-body"><div class="empty-state empty-state-compact">Inga aktuella eller bevakade projekt att kategorisera just nu.</div></div>
+  <div class="card-body"><div class="empty-state empty-state-compact">{{ t("no_categorizable_projects") }}</div></div>
   {% endif %}
 </section>
 

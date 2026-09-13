@@ -28,7 +28,7 @@
 {%- endmacro %}
 
 {% macro gauge(level, label, root) -%}
-<div class="gauge {{ level }}"><span></span><span></span><span></span><a class="gauge-label gloss-link" href="{{ root }}/ordlista.html#confidence" title="Hur säkra vi är på att informationen stämmer, baserat på hur bra källan är – inte hur säkert det är att projektet blir av.">{{ label }}</a></div>
+<div class="gauge {{ level }}"><span></span><span></span><span></span><a class="gauge-label gloss-link" href="{{ root }}/ordlista.html#confidence" title="{{ t('glossary_confidence_body') }}">{{ label }}</a></div>
 {%- endmacro %}
 
 {% macro cat(label, css_class) -%}
@@ -56,23 +56,27 @@
 {%- elif view.source_type_anchor -%}
 <a class="pill status" href="{{ root }}/ordlista.html#{{ view.source_type_anchor }}" title="{{ view.source_type_tooltip }}">{{ view.source_type_label }}</a>
 {%- else -%}
-<span class="pill status" title="Källtyp: {{ view.source_type_label }}">{{ view.source_type_label }}</span>
+<span class="pill status" title="{{ t('source_type_prefix') }}: {{ view.source_type_label }}">{{ view.source_type_label }}</span>
 {%- endif -%}
 {%- endmacro %}
 
 {# "Bekräftad leverantör"-pillen, med etiketten länkad till ordlistan. #}
 {% macro vendor_pill(vendor, root) -%}
 {%- if vendor -%}
-<span class="pill vendor"><a class="gloss-link" href="{{ root }}/ordlista.html#bekraftad-leverantor" title="Vi har hittat en källa som namnger exakt vilket företag som levererat eller ska leverera systemet.">Bekräftad leverantör</a>: {{ vendor }}</span>
+<span class="pill vendor"><a class="gloss-link" href="{{ root }}/ordlista.html#bekraftad-leverantor" title="{{ t('confirmed_vendor_tooltip') }}">{{ t("confirmed_vendor_label") }}</a>: {{ vendor }}</span>
 {%- endif -%}
 {%- endmacro %}
 
 {# Star toggle for the "bevaka" (watch) feature - purely client-side
    (localStorage, see static/watch.js), no server state at all. Always
    server-rendered as unwatched (☆); watch.js repaints on load from
-   whatever's in the visitor's own browser. #}
+   whatever's in the visitor's own browser. The dynamic re-label watch.js
+   itself applies on click ("Sluta bevaka signal"/"Bevaka signal") remains
+   Swedish-only - out of this slice's file scope (static/watch.js), a
+   known, minor, deliberately deferred gap (see the mission's own final
+   report). #}
 {% macro star_toggle(signal_id) -%}
-<button type="button" class="star-toggle" data-signal-id="{{ signal_id }}" aria-pressed="false" aria-label="Bevaka signal">☆</button>
+<button type="button" class="star-toggle" data-signal-id="{{ signal_id }}" aria-pressed="false" aria-label="{{ t('watch_signal_label') }}">☆</button>
 {%- endmacro %}
 
 {# One standalone signal table row (signals_list.html's ungrouped rows).
@@ -86,15 +90,15 @@
     data-lifecycle="{{ signal.lifecycle_state }}"
     data-signal-ids="{{ signal.id }}"
 >
-  <td data-label="Bevaka">{{ star_toggle(signal.id) }}</td>
-  <td data-label="Flygplats"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
+  <td data-label="{{ t('watch_column_label') }}">{{ star_toggle(signal.id) }}</td>
+  <td data-label="{{ t('col_airport') }}"><a href="{{ root }}/airports/{{ signal.airport_id }}.html">{{ airport_label(signal.airport_code, signal.airport_name) }}</a></td>
   <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a></td>
-  <td data-label="Läge">{{ lifecycle_badge(signal) }}</td>
-  <td data-label="Status"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
-  <td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td>
-  <td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
-  <td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
-  <td data-label="Källa" class="src">{{ source_badge(signal, root) }}</td>
+  <td data-label="{{ t('lifecycle_column_label') }}">{{ lifecycle_badge(signal) }}</td>
+  <td data-label="{{ t('status') }}"><span class="pill {{ 'done' if signal.is_completed else 'status ' ~ signal.status_role }}">{{ signal.status_label }}</span></td>
+  <td data-label="{{ t('project_type') }}">{{ cat(signal.category_label, signal.category_class) }}</td>
+  <td data-label="{{ t('confidence') }}">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td>
+  <td data-label="{{ t('year') }}" class="mono">{{ signal.planning_year or "–" }}</td>
+  <td data-label="{{ t('source') }}" class="src">{{ source_badge(signal, root) }}</td>
   <td data-label="Score">{% if signal.probability_score is not none %}<a class="score gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% else %}–{% endif %}</td>
 </tr>
 {%- endmacro %}

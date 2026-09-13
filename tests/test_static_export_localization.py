@@ -1,14 +1,18 @@
-"""RWI HQ "Bilingual Static Site - Slice 1: Localization Plumbing" mission:
-focused tests proving locale threading through the static-export view-model
-layer works, while the default (no locale passed) build remains exactly
-Swedish and generates no public English tree.
+"""RWI HQ "Bilingual Static Site" mission, Slice 1 (Localization Plumbing)
+and Slice 2 (English Build + Language Switcher): focused tests proving
+locale threading through the static-export view-model layer works.
+
+Originally written for Slice 1, when the default (no locale passed) build
+was still Swedish-only and no public English tree existed. Slice 2
+superseded that: a normal `build_site()` call now always produces both the
+Swedish root tree and its English mirror under `/en/` (see
+tests/test_static_export_bilingual_site.py for Slice 2's own full-build,
+language-switcher, and hreflang tests) - the small number of tests below
+whose own premise depended on the old single-locale `locale=` kwarg or the
+old "no /en/ output" behavior have been updated in place to match.
 
 Every test uses an isolated in-memory database, matching this repository's
-own established test_static_export_signal_lifecycle.py convention. No test
-in this file compares HTML output pixel-for-pixel - Slice 1 does not
-translate template prose (Slice 2's job); these tests verify the plumbing
-(locale parameter threading, Jinja t() binding, view-model bilingual
-fields) rather than full-page translation.
+own established test_static_export_signal_lifecycle.py convention.
 """
 from __future__ import annotations
 
@@ -211,33 +215,39 @@ class TestJinjaTranslationBinding:
         assert "Signaler" in html
         assert 'lang="sv"' in html  # base.html's own hardcoded attribute, untouched this slice
 
-    def test_build_site_explicit_sv_locale_matches_default(self, tmp_path):
+    def test_build_site_single_sv_locale_matches_default_sv_tree(self, tmp_path):
+        """RWI HQ 'Bilingual Static Site - Slice 2' mission: build_site()'s
+        `locale=` kwarg was replaced by `locales=` (a tuple, default
+        `("sv", "en")` - a normal build now always produces both trees).
+        A single-locale `locales=("sv",)` build must still produce a
+        byte-identical Swedish root tree to the default two-locale build's
+        own Swedish half."""
         engine = _engine()
         with Session(engine) as session:
             _seed_airport_and_signal(session)
             output_default = tmp_path / "site_default"
-            output_sv = tmp_path / "site_sv"
             build_site(output_default, session=session, today=TODAY)
         engine2 = _engine()
         with Session(engine2) as session2:
             _seed_airport_and_signal(session2)
-            build_site(output_sv, session=session2, today=TODAY, locale="sv")
+            output_sv_only = tmp_path / "site_sv_only"
+            build_site(output_sv_only, session=session2, today=TODAY, locales=("sv",))
         assert (output_default / "index.html").read_text(encoding="utf-8") == (
-            output_sv / "index.html"
+            output_sv_only / "index.html"
         ).read_text(encoding="utf-8")
 
-    def test_build_site_en_locale_renders_english_nav_text(self, tmp_path):
+    def test_build_site_en_tree_renders_english_nav_text(self, tmp_path):
+        """Slice 2: a normal build's /en/ subtree is now fully translated -
+        superseding Slice 1's own 'not yet translated' finding."""
         engine = _engine()
         with Session(engine) as session:
             _seed_airport_and_signal(session)
             output = tmp_path / "site_en"
-            build_site(output, session=session, today=TODAY, locale="en")
-        html = (output / "index.html").read_text(encoding="utf-8")
+            build_site(output, session=session, today=TODAY)
+        html = (output / "en" / "index.html").read_text(encoding="utf-8")
         assert "Overview" in html
         assert "Signals" in html
-        # Not yet translated in this slice (template prose is Slice 2's job) -
-        # base.html's own hardcoded lang attribute is untouched.
-        assert 'lang="sv"' in html
+        assert 'lang="en"' in html
 
     def test_no_raw_translation_key_rendered_for_known_keys(self, tmp_path):
         """Every t("key") call site in the templates must resolve to real
@@ -248,8 +258,8 @@ class TestJinjaTranslationBinding:
         with Session(engine) as session:
             _seed_airport_and_signal(session)
             output = tmp_path / "site_en_rawkey"
-            build_site(output, session=session, today=TODAY, locale="en")
-        html = (output / "index.html").read_text(encoding="utf-8")
+            build_site(output, session=session, today=TODAY)
+        html = (output / "en" / "index.html").read_text(encoding="utf-8")
         assert "nav_overview" not in html
         assert "nav_signals" not in html
         assert "hero_headline_1" not in html
@@ -270,24 +280,28 @@ class TestDataJsonAndOutputTreeUnchanged:
         assert isinstance(data["signals"], list)
         assert data["signals"][0]["category_label"] == "Ersättning"
 
-    def test_no_en_output_directory_generated_by_default_build(self, tmp_path):
+    def test_en_output_directory_generated_by_default_build(self, tmp_path):
+        """RWI HQ 'Bilingual Static Site - Slice 2' mission: supersedes
+        Slice 1's own 'no /en/ output yet' finding - a normal build now
+        always produces the full English mirror under /en/."""
         engine = _engine()
         with Session(engine) as session:
             _seed_airport_and_signal(session)
             output = tmp_path / "site"
             build_site(output, session=session, today=TODAY)
-        assert not (output / "en").exists()
+        assert (output / "en" / "index.html").exists()
+        assert (output / "en" / "data.json").exists()
+        assert (output / "en" / "style.css").exists()
 
-    def test_no_en_output_directory_even_when_locale_en_is_passed(self, tmp_path):
-        """Slice 1 makes English generation architecturally POSSIBLE (a
-        caller can build an all-English tree at a caller-chosen path), but
-        does not itself write a public /en/ subtree under the normal
-        single-locale output_dir - that wiring is Slice 2's job."""
+    def test_locales_sv_only_produces_no_en_output(self, tmp_path):
+        """Passing a narrower `locales` tuple (e.g. for a fast, isolated
+        test build) still works - only the requested locale trees are
+        written."""
         engine = _engine()
         with Session(engine) as session:
             _seed_airport_and_signal(session)
-            output = tmp_path / "site_en_only"
-            build_site(output, session=session, today=TODAY, locale="en")
+            output = tmp_path / "site_sv_only"
+            build_site(output, session=session, today=TODAY, locales=("sv",))
         assert not (output / "en").exists()
         assert (output / "index.html").exists()
 

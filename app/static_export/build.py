@@ -27,9 +27,12 @@ from app.static_export.presentation import (
     category_view,
     claim_category_label,
     confidence_label,
+    current_emas_basis_label,
+    current_emas_provenance_phrase,
     lifecycle_view,
     public_signal_state,
     source_type_view,
+    status_role_label,
     status_view,
     temporal_qualifier_label,
     text,
@@ -284,11 +287,12 @@ def _signal_view(signal: Signal, *, today: date, session: Session, locale: str =
         estimated_total_value_usd=signal.estimated_total_value_usd,
         estimated_emas_value_usd=signal.estimated_emas_value_usd,
         # RWI HQ "Signal Detail Funding-Caveat Parity" mission: reuses the
-        # existing _FUNDING_CAVEAT verbatim (never a second, independently-
+        # same presentation.LOCALES["funding_caveat_text"] every other
+        # funding-caveat call site reads (never a second, independently-
         # worded caveat) - None for a non-funding Signal, so
         # signal_detail.html's existing "Total projektbudget" label/layout
         # is completely unaffected for every Signal this field doesn't apply to.
-        funding_caveat=(_FUNDING_CAVEAT if is_funding_signal else None),
+        funding_caveat=(text("funding_caveat_text", locale) if is_funding_signal else None),
         airport_id=signal.airport_id,
         airport_name=signal.airport.name,
         airport_code=signal.airport.iata_code or signal.airport.icao_code or "–",
@@ -450,18 +454,14 @@ def _runway_view(runway: Runway) -> SimpleNamespace:
 # 100% deterministic (every governed Runway has exactly two RunwayEnd
 # rows, verified nationwide with zero exceptions).
 
-_CURRENT_EMAS_BASIS_LABEL = {
-    "reviewed": "Granskad identitet",
-    "nasr": "FAA NASR aktuell förekomst",
-}
-# Separate from _CURRENT_EMAS_BASIS_LABEL (the badge text) because "FAA
-# NASR" reads correctly capitalized in a badge but awkward mid-sentence if
-# naively lowercased for prose ("enligt faa nasr...") - own phrasing per
-# basis keeps both correct instead of deriving one from the other.
-_CURRENT_EMAS_PROVENANCE_PHRASE = {
-    "reviewed": "granskad identitet",
-    "nasr": "FAA NASR",
-}
+# RWI HQ "Bilingual Static Site - Slice 2" mission: this presentation
+# family's own bilingual labels/phrases now live in
+# app.static_export.presentation (CURRENT_EMAS_BASIS_PRESENTATION/
+# CURRENT_EMAS_PROVENANCE_PHRASE_PRESENTATION), read here via
+# current_emas_basis_label()/current_emas_provenance_phrase() - Slice 1 had
+# deliberately left this family Swedish-only; see that module's own comment
+# for the unchanged reasoning behind keeping basis-label and provenance-
+# phrase separate.
 
 
 def _find_canonical_runway_end(airport: Airport, physical_designation: str | None) -> RunwayEnd | None:
@@ -497,7 +497,8 @@ def _protected_direction(runway_end: RunwayEnd) -> str | None:
 
 
 def _current_emas_item(
-    *, airport: Airport, physical_designation: str | None, evidence_basis: str, cycle: str | None
+    *, airport: Airport, physical_designation: str | None, evidence_basis: str, cycle: str | None,
+    locale: str = "sv",
 ) -> tuple[object, SimpleNamespace] | None:
     """Builds one public current-EMAS item plus its dedup key (the
     canonical RunwayEnd.id when resolvable, so a reviewed identity and an
@@ -509,17 +510,20 @@ def _current_emas_item(
         return None
     canonical_end = _find_canonical_runway_end(airport, physical_designation)
     protected = _protected_direction(canonical_end) if canonical_end else None
-    primary_label = f"Bana {protected}" if protected else f"Bana {physical_designation}"
-    provenance = f"Fysisk placering enligt {_CURRENT_EMAS_PROVENANCE_PHRASE[evidence_basis]}: bana {physical_designation}."
+    runway_word = text("runway_prefix", locale)
+    primary_label = f"{runway_word} {protected}" if protected else f"{runway_word} {physical_designation}"
+    provenance = text("current_emas_provenance", locale).format(
+        basis=current_emas_provenance_phrase(evidence_basis, locale), end=physical_designation,
+    )
     if evidence_basis == "nasr" and cycle:
-        provenance += f" NASR-cykel {cycle}. Uppgiften beskriver förekomst vid banände, inte projektstatus eller fysisk historik."
+        provenance += text("current_emas_nasr_cycle_note", locale).format(cycle=cycle)
     dedup_key = ("end", canonical_end.id) if canonical_end else ("raw", airport.id, evidence_basis, physical_designation)
     item = SimpleNamespace(
         primary_label=primary_label,
         physical_runway_end=physical_designation,
         protected_runway_direction=protected,
         evidence_basis=evidence_basis,
-        evidence_basis_label=_CURRENT_EMAS_BASIS_LABEL[evidence_basis],
+        evidence_basis_label=current_emas_basis_label(evidence_basis, locale),
         provenance_text=provenance,
     )
     return dedup_key, item
@@ -542,7 +546,9 @@ def _current_emas_item(
 # every Installation agrees on it (type_label/vendor_label are None, and
 # year_label becomes a range, the moment two rows disagree) - never
 # silently picks one value out of several real, different ones.
-def _installed_base_summary_view(installations: "list[SimpleNamespace]") -> "SimpleNamespace | None":
+def _installed_base_summary_view(
+    installations: "list[SimpleNamespace]", locale: str = "sv",
+) -> "SimpleNamespace | None":
     if not installations:
         return None
     count = len(installations)
@@ -552,12 +558,13 @@ def _installed_base_summary_view(installations: "list[SimpleNamespace]") -> "Sim
     for installation in installations:
         if installation.runway_end and installation.runway_end not in ends:
             ends.append(installation.runway_end)
+    conjunction = f" {text('and_conjunction', locale)} "
     if len(ends) == 0:
         ends_label = None
     elif len(ends) == 1:
         ends_label = ends[0]
     else:
-        ends_label = " och ".join([", ".join(ends[:-1]), ends[-1]]) if len(ends) > 2 else " och ".join(ends)
+        ends_label = conjunction.join([", ".join(ends[:-1]), ends[-1]]) if len(ends) > 2 else conjunction.join(ends)
     years = sorted({i.install_year for i in installations if i.install_year})
     if not years:
         year_label = None
@@ -573,7 +580,7 @@ def _installed_base_summary_view(installations: "list[SimpleNamespace]") -> "Sim
     )
 
 
-def _current_emas_views(airport: Airport) -> list[SimpleNamespace]:
+def _current_emas_views(airport: Airport, locale: str = "sv") -> list[SimpleNamespace]:
     """Merges the two governed current-EMAS pathways (reviewed
     PhysicalInstallationIdentity and raw NASR current-presence
     SourceAssertion) into one deduplicated, presentation-ready list.
@@ -590,7 +597,8 @@ def _current_emas_views(airport: Airport) -> list[SimpleNamespace]:
     ]
     for identity in reviewed:
         result = _current_emas_item(
-            airport=airport, physical_designation=identity.runway_end, evidence_basis="reviewed", cycle=None
+            airport=airport, physical_designation=identity.runway_end, evidence_basis="reviewed", cycle=None,
+            locale=locale,
         )
         if result:
             key, item = result
@@ -606,7 +614,8 @@ def _current_emas_views(airport: Airport) -> list[SimpleNamespace]:
         source = assertion.source
         cycle = source.external_id.split(":")[2] if source and source.external_id else None
         result = _current_emas_item(
-            airport=airport, physical_designation=assertion.runway_end, evidence_basis="nasr", cycle=cycle
+            airport=airport, physical_designation=assertion.runway_end, evidence_basis="nasr", cycle=cycle,
+            locale=locale,
         )
         if result:
             key, item = result
@@ -686,11 +695,10 @@ def _is_public_signal(signal: Signal) -> bool:
 # unchanged to minimize diff - both call sites are documented here).
 _GRANT_SOURCE_TYPES_TIMELINE = frozenset({"usaspending_grant", "aip_grant", "iija_grant"})
 
-_FUNDING_CAVEAT = (
-    "Ett bidragsbelopp anger inte automatiskt ett EMAS-kontraktsvärde, en leverantörsintäkt, "
-    "en total projektkostnad eller en genomförd upphandling - se \"Bedömd EMAS-del\" på signalens "
-    "egen sida för vad som faktiskt är fastställt."
-)
+# RWI HQ "Bilingual Static Site - Slice 2" mission: this caveat text now
+# lives as presentation.LOCALES["funding_caveat_text"], read via text() at
+# each call site with that call's own locale, instead of one Swedish-only
+# module constant.
 
 
 def _timeline_event(
@@ -730,6 +738,7 @@ def _timeline_event(
 def _intelligence_history_view(
     incidents: list[SimpleNamespace],
     signals: list[SimpleNamespace],
+    locale: str = "sv",
 ) -> tuple[list[SimpleNamespace], list[SimpleNamespace]]:
     """Chronological PROJECT/EVENT history for airport_detail.html's
     "Intelligenshistorik" section - Signals and Incidents only (see this
@@ -752,7 +761,7 @@ def _intelligence_history_view(
             category_class="incident",
             category_label="Incident",
             title=incident.incident_type,
-            subtitle="EMAS aktiverat" if incident.emas_engaged else "EMAS inte aktiverat",
+            subtitle=text("emas_engaged", locale) if incident.emas_engaged else text("emas_not_engaged", locale),
             source_url=incident.source_url,
         )
         dated.append(event)
@@ -784,7 +793,7 @@ def _intelligence_history_view(
             source_published_date=signal.source_published_date,
             source_title=signal.source_title,
             financial_total_usd=(signal.estimated_total_value_usd if is_funding else None),
-            financial_caveat=(_FUNDING_CAVEAT if is_funding else None),
+            financial_caveat=(text("funding_caveat_text", locale) if is_funding else None),
             date_reason=date_reason,
         )
         (dated if event.year else undated).append(event)
@@ -962,7 +971,7 @@ def _recent_changes_view(
     return [SimpleNamespace(**vars(e), date_label=e.evidence_date.isoformat()) for e in entries[:limit]]
 
 
-def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
+def _lifecycle_counts_view(signal_views: list[SimpleNamespace], locale: str = "sv") -> list[SimpleNamespace]:
     """One row per SignalLifecycleState, in the same relevance order as
     _LIFECYCLE_SORT_TIER, each carrying its own real count over the exact
     signal_views passed in (never a separately-queried or hardcoded number)
@@ -971,9 +980,9 @@ def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNa
     return [
         SimpleNamespace(
             state=state.value,
-            label=lifecycle_view(state.value)[0],
-            css_class=lifecycle_view(state.value)[1],
-            tooltip=lifecycle_view(state.value)[2],
+            label=lifecycle_view(state.value, locale)[0],
+            css_class=lifecycle_view(state.value, locale)[1],
+            tooltip=lifecycle_view(state.value, locale)[2],
             count=counts.get(state.value, 0),
         )
         for state in sorted(SignalLifecycleState, key=lambda s: _LIFECYCLE_SORT_TIER[s])
@@ -1027,7 +1036,7 @@ def _market_category_distribution_view(signal_views: "list[SimpleNamespace]") ->
     ]
 
 
-def _market_intelligence_view(signal_views: "list[SimpleNamespace]") -> SimpleNamespace:
+def _market_intelligence_view(signal_views: "list[SimpleNamespace]", locale: str = "sv") -> SimpleNamespace:
     """Top-level view model for marknadslage.html. `signal_views` is the
     same already-published, already-sorted (_signal_sort_key: lifecycle
     tier, then score descending, then id) list every other page on the
@@ -1047,7 +1056,7 @@ def _market_intelligence_view(signal_views: "list[SimpleNamespace]") -> SimpleNa
     stale = [v for v in signal_views if v.lifecycle_state == "stale_unresolved"]
     historical_count = sum(1 for v in signal_views if v.lifecycle_state == "realized_historical")
     return SimpleNamespace(
-        snapshot=_lifecycle_counts_view(signal_views),
+        snapshot=_lifecycle_counts_view(signal_views, locale),
         active_opportunities=active,
         developing_watch=watch,
         stale_unresolved=stale,
@@ -1120,16 +1129,9 @@ def _market_summary_view(signal_views: list[SimpleNamespace]) -> list[SimpleName
 # fetched dynamically so it stays in sync with that single source of truth
 # rather than being duplicated as a second, driftable copy of the same
 # string.
-_STATUS_ROLE_LABEL = {
-    "completed": "Färdigställd",
-    "funded": "Finansierad",
-    "design": "Projektering",
-    "procurement": "Upphandling",
-    "construction": "Under byggnation",
-    "review": "Miljöprövning",
-    "planning": "Planering",
-    "unknown": "Ej klassificerad",
-}
+# RWI HQ "Bilingual Static Site - Slice 2" mission: this mapping now lives
+# as presentation.STATUS_ROLE_PRESENTATION (bilingual), read here via
+# status_role_label().
 
 # ("RWI - Juicy Design Mission #2" mission) Real, deterministic distribution
 # of public Signals across pipeline stage (status_view()'s own `role`
@@ -1151,7 +1153,7 @@ _DONUT_CIRCUMFERENCE = round(2 * 3.14159265358979 * _DONUT_RADIUS, 2)
 _STAGE_OTHER_ROLE = "unknown"  # reuses the existing neutral/muted color token; never a fabricated new role color
 
 
-def _stage_distribution_view(signal_views: list[SimpleNamespace]) -> list[SimpleNamespace]:
+def _stage_distribution_view(signal_views: list[SimpleNamespace], locale: str = "sv") -> list[SimpleNamespace]:
     total = len(signal_views)
     if not total:
         return []
@@ -1165,10 +1167,10 @@ def _stage_distribution_view(signal_views: list[SimpleNamespace]) -> list[Simple
     for role, count in role_counts.items():
         if fold_singletons and role in singleton_roles:
             continue
-        label = text("research_watch") if role == "identified" else _STATUS_ROLE_LABEL.get(role, role)
+        label = text("research_watch", locale) if role == "identified" else status_role_label(role, locale)
         buckets.append((label, role, count))
     if other_count:
-        buckets.append(("Övrigt", _STAGE_OTHER_ROLE, other_count))
+        buckets.append((text("stage_other_label", locale), _STAGE_OTHER_ROLE, other_count))
 
     buckets.sort(key=lambda item: -item[2])
 
@@ -1689,8 +1691,8 @@ def _airport_view(
         key=_signal_sort_key,
     )
     installation_views = [_installation_view(i, locale) for i in airport.installations]
-    installed_base_summary = _installed_base_summary_view(installation_views)
-    current_emas = _current_emas_views(airport)
+    installed_base_summary = _installed_base_summary_view(installation_views, locale)
+    current_emas = _current_emas_views(airport, locale)
     incident_views = [
         SimpleNamespace(
             id=i.id,
@@ -1712,7 +1714,7 @@ def _airport_view(
     # own docstring and this module's "public information model" note above
     # for why Installations no longer feed this chronological view.
     intelligence_history_dated, intelligence_history_undated = _intelligence_history_view(
-        incident_views, signal_views
+        incident_views, signal_views, locale
     )
     evidence = _airport_evidence_view(
         airport, orm_signals_by_id, signal_views, installation_views, session=session, locale=locale,
@@ -1817,8 +1819,47 @@ def _json_default(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
+# RWI HQ "Bilingual Static Site - Slice 2: English Build + Language
+# Switcher" mission: Swedish keeps its existing unprefixed URLs exactly as
+# they are; English mirrors the same relative structure under /en/. This is
+# the ONE exception where the actual filename differs by locale (the
+# Swedish page has always been named after the Swedish word - "marknadsläge"
+# - never "market.html"), so the language-switcher/hreflang machinery below
+# needs one explicit lookup rather than a bare identity mapping.
+_LOCALE_ROOT_PREFIX = {"sv": None, "en": "en"}
+_MARKET_PAGE_FILENAME = {"sv": "marknadslage.html", "en": "market.html"}
+
+
+def _other_locale_page_path(locale: str, page_path: str) -> str:
+    """Maps a page's own path in `locale` to the equivalent page's path in
+    the OTHER locale. Identity for every page except the market page,
+    whose filename itself differs (see _MARKET_PAGE_FILENAME above)."""
+    other_locale = "en" if locale == "sv" else "sv"
+    if page_path == _MARKET_PAGE_FILENAME[locale]:
+        return _MARKET_PAGE_FILENAME[other_locale]
+    return page_path
+
+
+def _language_switch_url(*, locale: str, root: str, other_page_path: str) -> str:
+    """Relative URL from the current page to the equivalent page in the
+    other locale ("sv" <-> "en") - the language-switcher's own href, and
+    also reused for the hreflang alternate pointing at the other locale.
+
+    Reuses this build's own existing `root` value (relative path back to
+    the CURRENT locale's own root directory - always "." or ".." in this
+    repository's fixed, at-most-one-level page nesting), so no new
+    nesting-depth concept is introduced: a Swedish page descends one
+    additional segment into `en/`; an English page ascends one additional
+    segment out of `en/` back to the Swedish root. Both are exactly one
+    extra path segment relative to `root` itself."""
+    step = "en" if locale == "sv" else ".."
+    prefix = step if root == "." else f"{root}/{step}"
+    return f"{prefix}/{other_page_path}"
+
+
 def build_site(
-    output_dir: Path, *, session: Session | None = None, today: date | None = None, locale: str = "sv",
+    output_dir: Path, *, session: Session | None = None, today: date | None = None,
+    locales: "tuple[str, ...]" = ("sv", "en"),
 ) -> None:
     """`today` defaults to the real current date - the same real-clock
     default `datetime.now(UTC)` already uses for `generated_at` just below.
@@ -1826,42 +1867,37 @@ def build_site(
     lifecycle-derivation results stay stable across real-calendar time
     instead of drifting as the actual date advances.
 
-    `locale` (RWI HQ "Bilingual Static Site - Slice 1: Localization
-    Plumbing" mission): defaults to "sv", so every existing caller that
-    never passes it - including the CLI (`scripts/export_static_site.py`)
-    and the whole pre-existing test suite - continues to generate exactly
-    the current Swedish site, unchanged. Passing `locale="en"` is
-    architecturally supported end-to-end (view-model construction, `t()`
-    binding, render context) but this slice does not yet enable a public
-    English build path anywhere - no caller passes anything other than the
-    "sv" default today."""
+    `locales` (RWI HQ "Bilingual Static Site - Slice 2" mission): defaults
+    to `("sv", "en")` - a normal build now always produces BOTH the
+    Swedish root tree and its full English mirror under `/en/` in one
+    call, per this mission's own "one normal build produces 1. Swedish
+    root tree 2. English /en/ tree" requirement. Pass a narrower tuple
+    (e.g. `("sv",)`) only for tests that need a single-locale build for
+    speed or isolation - every real caller (the CLI, a real deploy) uses
+    the default. "sv" always writes to `output_dir` itself; any other
+    locale writes to `output_dir/<locale>` (only "en" exists today - see
+    _LOCALE_ROOT_PREFIX)."""
     owns_session = session is None
     session = session or SessionLocal()
     try:
-        _build(output_dir, session, today=today or date.today(), locale=locale)
+        _build(output_dir, session, today=today or date.today(), locales=locales)
     finally:
         if owns_session:
             session.close()
 
 
-def _build(output_dir: Path, session: Session, *, today: date, locale: str = "sv") -> None:
+def _build(output_dir: Path, session: Session, *, today: date, locales: "tuple[str, ...]" = ("sv", "en")) -> None:
+    """Loads governed data from the database exactly ONCE (both queries
+    below), then calls `_build_locale_tree()` once per requested locale -
+    the expensive DB/eager-load work is shared; only the cheap, pure-Python
+    view-model label derivation (already locale-parameterized since Slice
+    1) repeats per locale. See _build_locale_tree()'s own docstring for
+    what a single locale's tree generation actually does."""
     output_dir = Path(output_dir)
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
-    (output_dir / "airports").mkdir()
-    (output_dir / "signals").mkdir()
-    shutil.copy2(STATIC_DIR / "style.css", output_dir / "style.css")
-    shutil.copy2(STATIC_DIR / "watch.js", output_dir / "watch.js")
-    shutil.copytree(STATIC_DIR / "images", output_dir / "images")
 
-    env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
-    # RWI HQ "Bilingual Static Site - Slice 1" mission: bound to this
-    # build's own `locale` rather than the raw `text` function (whose own
-    # default is "sv") - every existing template call site (`t("key")`,
-    # ~70 of them) needs zero changes to become locale-aware, since none of
-    # them ever pass a second argument today.
-    env.globals["t"] = lambda key: text(key, locale)
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     airports = session.scalars(
@@ -1881,12 +1917,6 @@ def _build(output_dir: Path, session: Session, *, today: date, locale: str = "sv
             selectinload(Airport.source_assertions).selectinload(SourceAssertion.source),
         ).order_by(Airport.name)
     ).all()
-    # ("RWI - Juicy Design Mission #4" mission) `evidence` is threaded
-    # per-airport, separately from `airport_views` (which feeds data.json
-    # directly) - see _airport_view's own "DATA.JSON" note.
-    airport_pairs = [_airport_view(a, today=today, session=session, locale=locale) for a in airports]
-    airport_views = [view for view, _evidence in airport_pairs]
-    airport_evidence_by_id = {view.id: evidence for view, evidence in airport_pairs}
 
     all_signals = session.scalars(
         select(Signal).options(
@@ -1902,6 +1932,58 @@ def _build(output_dir: Path, session: Session, *, today: date, locale: str = "sv
             selectinload(Signal.supporting_source_assertions),
         )
     ).all()
+
+    for locale in locales:
+        prefix = _LOCALE_ROOT_PREFIX.get(locale)
+        locale_output_dir = output_dir if prefix is None else output_dir / prefix
+        _build_locale_tree(
+            locale_output_dir, session, today=today, locale=locale, generated_at=generated_at,
+            airports=airports, all_signals=all_signals,
+        )
+
+
+def _build_locale_tree(
+    output_dir: Path, session: Session, *, today: date, locale: str, generated_at: str,
+    airports: "list[Airport]", all_signals: "list[Signal]",
+) -> None:
+    """Generates one locale's complete page tree under `output_dir`
+    ("sv" -> the site root itself; "en" -> `<root>/en`, per
+    _LOCALE_ROOT_PREFIX). Identical in shape to what `_build()` alone used
+    to do before Slice 2 - the only real change is that DB reads/eager
+    loading now happen once in the caller and are passed in, never
+    re-queried per locale (RWI HQ "Bilingual Static Site - Slice 2"
+    mission's own "prefer one DB/session load" instruction)."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "airports").mkdir(exist_ok=True)
+    (output_dir / "signals").mkdir(exist_ok=True)
+    # Static assets (style.css/watch.js/images) are duplicated per locale
+    # tree rather than referenced across the sv/en boundary - this keeps
+    # the existing `root` variable's own meaning (relative path back to
+    # THIS locale's own root) completely unchanged for every existing
+    # template reference to `{{ root }}/style.css` etc., avoiding a second
+    # "asset root" concept and, per this mission's own "zero CSS edits"
+    # preference, zero template changes for asset paths. The duplicated
+    # files are small (one stylesheet, one script, a handful of images).
+    shutil.copy2(STATIC_DIR / "style.css", output_dir / "style.css")
+    shutil.copy2(STATIC_DIR / "watch.js", output_dir / "watch.js")
+    shutil.copytree(STATIC_DIR / "images", output_dir / "images", dirs_exist_ok=True)
+
+    env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
+    # RWI HQ "Bilingual Static Site - Slice 1" mission: bound to this
+    # build's own `locale` rather than the raw `text` function (whose own
+    # default is "sv") - every existing template call site (`t("key")`,
+    # ~70 of them) needs zero changes to become locale-aware, since none of
+    # them ever pass a second argument today.
+    env.globals["t"] = lambda key: text(key, locale)
+
+    # ("RWI - Juicy Design Mission #4" mission) `evidence` is threaded
+    # per-airport, separately from `airport_views` (which feeds data.json
+    # directly) - see _airport_view's own "DATA.JSON" note.
+    airport_pairs = [_airport_view(a, today=today, session=session, locale=locale) for a in airports]
+    airport_views = [view for view, _evidence in airport_pairs]
+    airport_evidence_by_id = {view.id: evidence for view, evidence in airport_pairs}
+
     public_signals = [s for s in all_signals if _is_public_signal(s)]
     # Paired (ORM signal, public view) list, sorted together, so the
     # signal_detail.html render loop below can still reach the ORM
@@ -1914,19 +1996,27 @@ def _build(output_dir: Path, session: Session, *, today: date, locale: str = "sv
     )
     signal_views = [view for _source_signal, view in signal_pairs]
 
-    def render(name: str, path: Path, **context) -> None:
-        # RWI HQ "Bilingual Static Site - Slice 1" mission: `locale` and
-        # `page_path` (this build's own output-relative path, e.g.
-        # "signals/67.html") are injected into every render automatically -
-        # no individual render() call site needs to pass either. Neither is
-        # consumed by any template yet (no visible change in this slice);
-        # they exist so a future language-switcher/hreflang slice can
-        # compute cross-locale link targets without touching every render()
-        # call again.
+    def render(name: str, path: Path, *, root: str, **context) -> None:
+        # RWI HQ "Bilingual Static Site - Slice 1/2" missions: `locale`,
+        # `page_path` (this locale tree's own output-relative path, e.g.
+        # "signals/67.html"), `switch_url` (the language-switcher's own
+        # href, to the equivalent page in the OTHER locale), and
+        # `market_page_href` (this locale's own filename for the market
+        # page, since it is the one page whose filename differs by locale)
+        # are injected into every render automatically - no individual
+        # render() call site needs to pass any of them.
         template = env.get_template(name)
         page_path = path.relative_to(output_dir).as_posix()
+        other_page_path = _other_locale_page_path(locale, page_path)
+        switch_url = _language_switch_url(locale=locale, root=root, other_page_path=other_page_path)
+        self_hreflang_href = page_path.rsplit("/", 1)[-1]
         path.write_text(
-            template.render(generated_at=generated_at, locale=locale, page_path=page_path, **context),
+            template.render(
+                generated_at=generated_at, locale=locale, page_path=page_path, root=root,
+                switch_url=switch_url, self_hreflang_href=self_hreflang_href,
+                market_page_href=_MARKET_PAGE_FILENAME[locale],
+                **context,
+            ),
             encoding="utf-8",
         )
 
@@ -1968,7 +2058,7 @@ def _build(output_dir: Path, session: Session, *, today: date, locale: str = "sv
         ),
         top_signals=signal_views[:5],
         market_summary=market_summary,
-        stage_distribution=_stage_distribution_view(signal_views),
+        stage_distribution=_stage_distribution_view(signal_views, locale),
         donut_circumference=_DONUT_CIRCUMFERENCE,
         donut_radius=_DONUT_RADIUS,
         global_intelligence=_global_intelligence_view(market_summary),
@@ -2040,14 +2130,14 @@ def _build(output_dir: Path, session: Session, *, today: date, locale: str = "sv
         # year/source/Score - never inherited from another Signal.
         signals=signal_views,
         statuses=[
-            SimpleNamespace(value=status, label=status_view(status)[0])
+            SimpleNamespace(value=status, label=status_view(status, locale)[0])
             for status in sorted({s.status for s in signal_views if s.status})
         ],
         countries=sorted({s.country for s in signal_views if s.country}),
         # SLT1: real, computed counts for the four lifecycle states (design
         # doc S11/S18's own "current opportunity count is correct"
         # requirement) - never invented, never hardcoded.
-        lifecycle_counts=_lifecycle_counts_view(signal_views),
+        lifecycle_counts=_lifecycle_counts_view(signal_views, locale),
     )
 
     # ("RWI - Mission #7C" mission) "Marknadsläge" - see
@@ -2056,9 +2146,9 @@ def _build(output_dir: Path, session: Session, *, today: date, locale: str = "sv
     # already uses - no second Signal query, no FH-D4 read.
     render(
         "market.html",
-        output_dir / "marknadslage.html",
+        output_dir / _MARKET_PAGE_FILENAME[locale],
         root=".",
-        market=_market_intelligence_view(signal_views),
+        market=_market_intelligence_view(signal_views, locale),
     )
     # ("RWI - Sacheon Evidence Surfacing" mission) DATA.JSON: `evidence` is
     # deliberately passed as a SEPARATE template context variable here,

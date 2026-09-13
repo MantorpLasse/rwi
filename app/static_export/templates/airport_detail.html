@@ -2,7 +2,7 @@
 {% from "_components.html" import sign, gauge, cat, source_badge, vendor_pill, lifecycle_badge %}
 {% block title %}{{ airport.name }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
-<div class="breadcrumbs"><a href="{{ root }}/airports/index.html">← Flygplatser</a></div>
+<div class="breadcrumbs"><a href="{{ root }}/airports/index.html">{{ t("back_to_airports") }}</a></div>
 {# ("RWI - Juicy Design Mission #2" mission) Stronger header: title/subtitle
    left, the airport's own dominant project status (Mission #1's
    Airport.primary_signal) as one large badge top-right - the exact
@@ -40,7 +40,7 @@
     <div class="quick-fact-value">{{ cat(airport.primary_signal.category_label, airport.primary_signal.category_class) }}</div>
   </div>
   <div class="quick-fact">
-    <div class="quick-fact-label">Styrka i underlaget</div>
+    <div class="quick-fact-label">{{ t("evidence_strength_label") }}</div>
     <div class="quick-fact-value">{{ gauge(airport.primary_signal.confidence_level, airport.primary_signal.confidence_label, root) }}</div>
   </div>
   {% if airport.primary_signal.planning_year %}
@@ -91,14 +91,14 @@
      - already-authored, already-reviewed, deterministic per-state copy
      (LIFECYCLE_PRESENTATION) - never new speculative commentary. #}
   <section class="card panel-strong project-summary">
-    <div class="card-header">Vad händer just nu</div>
+    <div class="card-header">{{ t("whats_happening_now") }}</div>
     <div class="card-body">
       <h2 class="project-summary-title"><a href="{{ root }}/signals/{{ airport.primary_signal.id }}.html">{{ airport.primary_signal.title }}</a></h2>
       {% if airport.primary_signal.public_qualification %}<p class="timeline-meta">{{ airport.primary_signal.public_qualification }}</p>{% endif %}
       {% if airport.primary_signal.lifecycle_tooltip %}
       <p class="project-summary-why"><strong>{{ t("why_watching") }}:</strong> {{ airport.primary_signal.lifecycle_tooltip }}</p>
       {% endif %}
-      {% if airport.signals|length > 1 %}<p class="timeline-meta">+{{ airport.signals|length - 1 }} till nedan under "{{ t("projects") }}".</p>{% endif %}
+      {% if airport.signals|length > 1 %}<p class="timeline-meta">{{ t("more_below_under").format(n=airport.signals|length - 1, label=t("projects")) }}</p>{% endif %}
     </div>
   </section>
   {% endif %}
@@ -109,7 +109,7 @@
     <div class="card-body">
       <div style="display:flex; flex-wrap:wrap; gap:8px">{% for runway in airport.runways %}<span class="pill status">{{ runway.designation }}</span>{% endfor %}</div>
     </div>
-    {% else %}<div class="empty-state empty-state-compact">Ingen banuppgift registrerad.</div>{% endif %}
+    {% else %}<div class="empty-state empty-state-compact">{{ t("no_runway_data") }}</div>{% endif %}
   </div>
 
   <div class="card panel-strong">
@@ -126,13 +126,13 @@
        text) still renders below the divider, unchanged, so LIT's/BOS's
        real NASR/reviewed-identity evidence is preserved verbatim, just no
        longer the FIRST thing a reader sees. #}
-    <div class="card-header">Dokumenterad EMAS</div>
+    <div class="card-header">{{ t("documented_emas_heading") }}</div>
     <div class="card-body">
       <p style="margin:0 0 6px">
-        <strong>{{ airport.installed_base_summary.count }}</strong> {{ "installation" if airport.installed_base_summary.count == 1 else "installationer" }}{% if airport.installed_base_summary.type_label %} · {{ airport.installed_base_summary.type_label }}{% endif %}{% if airport.installed_base_summary.ends_label %} · Bana {{ airport.installed_base_summary.ends_label }}{% endif %}
+        <strong>{{ airport.installed_base_summary.count }}</strong> {{ t("installation_singular") if airport.installed_base_summary.count == 1 else t("installation_plural") }}{% if airport.installed_base_summary.type_label %} · {{ airport.installed_base_summary.type_label }}{% endif %}{% if airport.installed_base_summary.ends_label %} · {{ t("runway_prefix") }} {{ airport.installed_base_summary.ends_label }}{% endif %}
       </p>
       {% if airport.installed_base_summary.year_label or airport.installed_base_summary.vendor_label %}
-      <p class="timeline-meta" style="margin:0">{% if airport.installed_base_summary.year_label %}Installerat {{ airport.installed_base_summary.year_label }}{% endif %}{% if airport.installed_base_summary.year_label and airport.installed_base_summary.vendor_label %} · {% endif %}{{ airport.installed_base_summary.vendor_label or "" }}</p>
+      <p class="timeline-meta" style="margin:0">{% if airport.installed_base_summary.year_label %}{{ t("installed_label") }} {{ airport.installed_base_summary.year_label }}{% endif %}{% if airport.installed_base_summary.year_label and airport.installed_base_summary.vendor_label %} · {% endif %}{{ airport.installed_base_summary.vendor_label or "" }}</p>
       {% endif %}
       <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border)">
         {% if airport.current_emas %}
@@ -146,7 +146,7 @@
           {% endfor %}
         </div>
         {% else %}
-        <p class="timeline-meta" style="margin:0; color:var(--text-faint)">Ingen separat senare verifiering registrerad.</p>
+        <p class="timeline-meta" style="margin:0; color:var(--text-faint)">{{ t("no_separate_later_verification") }}</p>
         {% endif %}
       </div>
     </div>
@@ -177,7 +177,7 @@
          the airport-6-specific current_status_unverified case applies -
          every other airport with documented installations now takes the
          positive branch above instead (Mission #8I.1). #}
-      {% if airport.installations %}RWI har ingen separat verifiering av installationens senare förekomst. Den dokumenterade installationen visas nedan under &quot;{{ t("historical_emas_context") }}&quot;.{% else %}Ingen EMAS-installation eller separat verifiering registrerad.{% endif %}
+      {% if airport.installations %}{{ t("no_separate_verification_full").format(label=t("historical_emas_context")) }}{% else %}{{ t("no_emas_or_verification") }}{% endif %}
     </div>{% endif %}{% endif %}
     {% endif %}
   </div>
@@ -205,34 +205,34 @@
     {% for installation in airport.installations %}
     <div id="installation-{{ installation.id }}"{% if not loop.last %} style="padding-bottom:22px; border-bottom:1px solid var(--border)"{% endif %}>
       <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px">
-        <strong>{{ installation.type or "Okänd typ" }}</strong>
-        {% if installation.runway_end %}<span class="pill status">Bana {{ installation.runway_end }}</span>
-        {% elif installation.no_confirmed_runway %}<span class="pill unconfirmed" title="Källan pekar ut flera olika banor för denna installation - ingen enskild bana kan bekräftas, se detaljer nedan.">Ingen bekräftad bankoppling</span>{% endif %}
-        {% if installation.install_year %}<span class="mono" style="color:var(--text-dim)">Installerad {{ installation.install_year }}</span>
+        <strong>{{ installation.type or t("unknown_type") }}</strong>
+        {% if installation.runway_end %}<span class="pill status">{{ t("runway_prefix") }} {{ installation.runway_end }}</span>
+        {% elif installation.no_confirmed_runway %}<span class="pill unconfirmed" title="{{ t('no_confirmed_runway_tooltip') }}">{{ t("no_confirmed_runway_link") }}</span>{% endif %}
+        {% if installation.install_year %}<span class="mono" style="color:var(--text-dim)">{{ t("installed_word") }} {{ installation.install_year }}</span>
         {% else %}<span style="color:var(--text-dim)" title="{{ t('current_physical_state_no_year') }}">{{ t("current_physical_state") }}</span>{% endif %}
         {{ vendor_pill(installation.confirmed_vendor, root) }}
       </div>
 
       {% if installation.source_title %}
       <div style="margin-bottom:14px">
-        <div style="color:var(--text-faint); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em">Källa</div>
+        <div style="color:var(--text-faint); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em">{{ t("source") }}</div>
         <div>{{ installation.source_title }}</div>
         <div style="color:var(--text-dim); font-size:0.85rem">
           {{ installation.source_publisher or "" }}{% if installation.source_publisher and installation.source_type %} · {% endif %}{{ source_badge(installation, root) }}{% if installation.source_published_date %} · {{ installation.source_published_date }}{% endif %}
         </div>
         {% if installation.source_url %}
-        <a href="{{ installation.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>
+        <a href="{{ installation.source_url }}" target="_blank" rel="noopener">{{ t("open_source_link") }}</a>
         {% else %}
-        <span style="color:var(--text-faint)">Ingen offentlig länk (t.ex. internt dokument).</span>
+        <span style="color:var(--text-faint)">{{ t("no_public_link") }}</span>
         {% endif %}
       </div>
       {% else %}
-      <div style="margin-bottom:14px; color:var(--text-dim)">Ingen källa kopplad ännu.</div>
+      <div style="margin-bottom:14px; color:var(--text-dim)">{{ t("no_source_linked") }}</div>
       {% endif %}
 
       {% if installation.notes %}
       <details class="annotation source-detail">
-        <summary>Detaljer från källan</summary>
+        <summary>{{ t("source_details_heading") }}</summary>
         <div class="card-body">
           <p style="white-space:pre-line; margin:0">{{ installation.notes }}</p>
         </div>
@@ -242,7 +242,7 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="empty-state">Inga installationer registrerade.</div>
+  <div class="empty-state">{{ t("no_installations_registered") }}</div>
   {% endif %}
 </div>
 
@@ -301,16 +301,16 @@
          link) - no new value, no aggregation, no group/canonical field.
          Each row is still exactly one Signal, exactly as Mission #7E
          established for the global list. #}
-      <table><thead><tr><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr></thead><tbody>
+      <table><thead><tr><th>Signal</th><th>{{ t("lifecycle_column_label") }}</th><th>{{ t("status") }}</th><th>{{ t("project_type") }}</th><th>{{ t("confidence") }}</th><th>{{ t("year") }}</th><th>{{ t("source") }}</th><th>Score</th></tr></thead><tbody>
       {% for signal in airport.signals %}<tr>
         <td class="title" data-label="Signal"><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a>{% if signal.public_qualification %}<div class="timeline-meta">{{ signal.public_qualification }}</div>{% endif %}</td>
-        <td data-label="Läge">{{ lifecycle_badge(signal) }}</td>
-        <td data-label="Status"><span class="pill status {{ signal.status_role }}">{{ signal.status_label }}</span></td><td data-label="Projekttyp">{{ cat(signal.category_label, signal.category_class) }}</td><td data-label="Confidence">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td><td data-label="År" class="mono">{{ signal.planning_year or "–" }}</td>
-        <td data-label="Källa" class="src">{{ source_badge(signal, root) }}</td>
+        <td data-label="{{ t('lifecycle_column_label') }}">{{ lifecycle_badge(signal) }}</td>
+        <td data-label="{{ t('status') }}"><span class="pill status {{ signal.status_role }}">{{ signal.status_label }}</span></td><td data-label="{{ t('project_type') }}">{{ cat(signal.category_label, signal.category_class) }}</td><td data-label="{{ t('confidence') }}">{{ gauge(signal.confidence_level, signal.confidence_label, root) }}</td><td data-label="{{ t('year') }}" class="mono">{{ signal.planning_year or "–" }}</td>
+        <td data-label="{{ t('source') }}" class="src">{{ source_badge(signal, root) }}</td>
         <td data-label="Score">{% if signal.probability_score is not none %}<a class="score gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% else %}–{% endif %}</td>
       </tr>{% endfor %}</tbody></table>
-      {% if airport.funding_signals %}<details class="secondary-disclosure"><summary>Finansiering och bidrag ({{ airport.funding_signals|length }})</summary><div class="disclosure-body">{% for signal in airport.funding_signals %}<p><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a> {{ lifecycle_badge(signal) }} <span class="timeline-meta">{{ signal.status_label }}</span>{% if signal.probability_score is not none %} · <a class="score gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% endif %}</p>{% endfor %}</div></details>{% endif %}
-      {% else %}<div class="empty-state">Inga offentliga projekt- eller bevakningsuppgifter registrerade.</div>{% endif %}
+      {% if airport.funding_signals %}<details class="secondary-disclosure"><summary>{{ t("funding_and_grants_heading") }} ({{ airport.funding_signals|length }})</summary><div class="disclosure-body">{% for signal in airport.funding_signals %}<p><a href="{{ root }}/signals/{{ signal.id }}.html">{{ signal.title }}</a> {{ lifecycle_badge(signal) }} <span class="timeline-meta">{{ signal.status_label }}</span>{% if signal.probability_score is not none %} · <a class="score gloss-link" href="{{ root }}/ordlista.html#score" title="{{ t('score_tooltip') }}">{{ "%.1f"|format(signal.probability_score) }}</a>{% endif %}</p>{% endfor %}</div></details>{% endif %}
+      {% else %}<div class="empty-state">{{ t("no_public_projects") }}</div>{% endif %}
     </div>
 
     {# ("RWI - Juicy Design Mission #4" mission) "Intelligenshistorik" -
@@ -353,10 +353,10 @@
                 {% if item.kind == "signal" %}{{ lifecycle_badge(item) }}{% endif %}
               </div>
               {% if item.financial_total_usd %}
-              <p class="timeline-meta timeline-caveat">Bidrag: <span class="mono">${{ "{:,.0f}".format(item.financial_total_usd) }}</span> · {{ item.financial_caveat }}</p>
+              <p class="timeline-meta timeline-caveat">{{ t("grant_prefix") }}: <span class="mono">${{ "{:,.0f}".format(item.financial_total_usd) }}</span> · {{ item.financial_caveat }}</p>
               {% endif %}
-              {% if item.source_type %}<p class="timeline-meta timeline-source">{{ source_badge(item, root) }}{% if item.source_published_date %} · {{ item.source_published_date }}{% endif %}{% if item.source_url %} · <a href="{{ item.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>{% endif %}</p>
-              {% elif item.source_url %}<p class="timeline-meta timeline-source"><a href="{{ item.source_url }}" target="_blank" rel="noopener">Öppna källa →</a></p>{% endif %}
+              {% if item.source_type %}<p class="timeline-meta timeline-source">{{ source_badge(item, root) }}{% if item.source_published_date %} · {{ item.source_published_date }}{% endif %}{% if item.source_url %} · <a href="{{ item.source_url }}" target="_blank" rel="noopener">{{ t("open_source_link") }}</a>{% endif %}</p>
+              {% elif item.source_url %}<p class="timeline-meta timeline-source"><a href="{{ item.source_url }}" target="_blank" rel="noopener">{{ t("open_source_link") }}</a></p>{% endif %}
             </div>
           </div>
           {% endfor %}
@@ -384,7 +384,7 @@
               </div>
               <p class="timeline-meta timeline-caveat">{% if item.date_reason == "no_event_date" %}{{ t("date_reason_no_event_date") }}{% else %}{{ t("date_reason_no_date") }}{% endif %}</p>
               {% if item.financial_total_usd %}
-              <p class="timeline-meta timeline-caveat">Bidrag: <span class="mono">${{ "{:,.0f}".format(item.financial_total_usd) }}</span> · {{ item.financial_caveat }}</p>
+              <p class="timeline-meta timeline-caveat">{{ t("grant_prefix") }}: <span class="mono">${{ "{:,.0f}".format(item.financial_total_usd) }}</span> · {{ item.financial_caveat }}</p>
               {% endif %}
               {% if item.source_type %}<p class="timeline-meta timeline-source">{{ source_badge(item, root) }}{% if item.source_published_date %} · {{ item.source_published_date }}{% endif %}</p>{% endif %}
             </div>
@@ -441,7 +441,7 @@
             <div class="evidence-source-title">{{ source.source_title }}</div>
             <div class="evidence-source-meta">
               {{ source.source_publisher or "" }}{% if source.source_publisher and source.source_type %} · {% endif %}{{ source_badge(source, root) }}{% if source.source_published_date %} · {{ source.source_published_date }}{% endif %}
-              {% if source.source_url %} · <a href="{{ source.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>{% endif %}
+              {% if source.source_url %} · <a href="{{ source.source_url }}" target="_blank" rel="noopener">{{ t("open_source_link") }}</a>{% endif %}
             </div>
             <div class="evidence-findings">
               {% for claim in source.claims %}
@@ -473,7 +473,7 @@
             <div class="evidence-provenance-title">{{ source.source_title }}</div>
             <div class="evidence-provenance-meta">
               {{ source.source_publisher or "" }}{% if source.source_publisher and source.source_type %} · {% endif %}{{ source_badge(source, root) }}{% if source.source_published_date %} · {{ source.source_published_date }}{% endif %}
-              {% if source.source_url %} · <a href="{{ source.source_url }}" target="_blank" rel="noopener">Öppna källa →</a>{% endif %}
+              {% if source.source_url %} · <a href="{{ source.source_url }}" target="_blank" rel="noopener">{{ t("open_source_link") }}</a>{% endif %}
             </div>
           </div>
           {% endfor %}
@@ -484,16 +484,16 @@
     {% endif %}
 
     {% if airport.incidents %}<div class="card">
-      <div class="card-header">Incidenter</div>
+      <div class="card-header">{{ t("incidents_heading") }}</div>
       {% if airport.incidents %}
       <table>
-        <thead><tr><th>Datum</th><th>Typ</th><th>EMAS</th></tr></thead>
+        <thead><tr><th>{{ t("col_date") }}</th><th>{{ t("col_type") }}</th><th>EMAS</th></tr></thead>
         <tbody>
           {% for incident in airport.incidents %}
           <tr id="incident-{{ incident.id }}">
-            <td data-label="Datum" class="mono">{{ incident.incident_date }}</td>
-            <td data-label="Typ">{{ incident.incident_type }}</td>
-            <td data-label="EMAS">{{ "Ja" if incident.emas_engaged else "Nej" }}</td>
+            <td data-label="{{ t('col_date') }}" class="mono">{{ incident.incident_date }}</td>
+            <td data-label="{{ t('col_type') }}">{{ incident.incident_type }}</td>
+            <td data-label="EMAS">{{ t("yes_word") if incident.emas_engaged else t("no_word") }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -503,7 +503,7 @@
 
   {% if airport.website_url %}
   <div>
-    <a class="pill status" href="{{ airport.website_url }}" target="_blank" rel="noopener">Flygplatsens webbplats →</a>
+    <a class="pill status" href="{{ airport.website_url }}" target="_blank" rel="noopener">{{ t("airport_website_link") }}</a>
   </div>
   {% endif %}
 </div>

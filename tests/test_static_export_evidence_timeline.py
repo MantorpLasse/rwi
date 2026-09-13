@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.models import Installation, Signal, Source
 from app.static_export import build
 from app.static_export import build_site
+from app.static_export.presentation import text
 from tests.test_static_export_design_v2 import _SOURCE_URL, _engine, _seed_bos_shaped, _seed_sacheon_shaped
 
 
@@ -353,7 +354,7 @@ def test_signal_view_funding_caveat_reuses_the_same_predicate_and_text_as_timeli
         non_grant_view = build_module._signal_view(non_grant_signal, today=date(2026, 8, 30), session=session)
 
         assert grant_signal.source.source_type in build_module._GRANT_SOURCE_TYPES_TIMELINE
-        assert grant_view.funding_caveat == build_module._FUNDING_CAVEAT
+        assert grant_view.funding_caveat == text("funding_caveat_text")
         assert non_grant_signal.source.source_type not in build_module._GRANT_SOURCE_TYPES_TIMELINE
         assert non_grant_view.funding_caveat is None
 

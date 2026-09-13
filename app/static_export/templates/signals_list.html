@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% from "_components.html" import gauge, cat, signal_row, source_badge, airport_label, lifecycle_badge %}
-{% block title %}Signaler · Runway Safe Intelligence{% endblock %}
+{% block title %}{{ t("nav_signals") }} · Runway Safe Intelligence{% endblock %}
 {% block content %}
-<h1>Signaler</h1>
-<p class="subtitle">{{ signals|length }} signaler.</p>
+<h1>{{ t("nav_signals") }}</h1>
+<p class="subtitle">{{ t("signals_count_subtitle").format(count=signals|length) }}</p>
 
 {# SLT1 (docs/architecture/rwi-signal-temporal-relevance-opportunity-
    lifecycle-design.md): real, computed counts per lifecycle state - never
@@ -18,28 +18,28 @@
 </div>
 
 <div class="filters">
-  <input id="q" type="search" placeholder="Sök signal eller flygplats...">
-  <select id="lifecycle-filter" title="Visa signaler efter var i sin livscykel de befinner sig - se rubrikerna ovan.">
-    <option value="current" selected>Aktuellt (möjligheter + under bevakning)</option>
-    <option value="historical">Historik</option>
-    <option value="stale">Behöver research</option>
-    <option value="">Alla</option>
+  <input id="q" type="search" placeholder="{{ t('search_signals_placeholder') }}">
+  <select id="lifecycle-filter" title="{{ t('lifecycle_filter_title') }}">
+    <option value="current" selected>{{ t("filter_current") }}</option>
+    <option value="historical">{{ t("filter_historical") }}</option>
+    <option value="stale">{{ t("filter_stale") }}</option>
+    <option value="">{{ t("filter_all") }}</option>
   </select>
   <select id="status-filter">
-    <option value="">Alla statusar</option>
+    <option value="">{{ t("filter_all_statuses") }}</option>
     {% for item in statuses %}<option value="{{ item.value }}">{{ item.label }}</option>{% endfor %}
   </select>
   <select id="country-filter">
-    <option value="">Alla länder</option>
+    <option value="">{{ t("filter_all_countries") }}</option>
     {% for item in countries %}<option value="{{ item }}">{{ item }}</option>{% endfor %}
   </select>
-  <label class="filter-checkbox"><input type="checkbox" id="watched-only"> Visa bara bevakade</label>
+  <label class="filter-checkbox"><input type="checkbox" id="watched-only"> {{ t("filter_watched_only") }}</label>
 </div>
 
 <div class="card">
   <table id="signals-table">
     <thead>
-      <tr><th>Bevaka <span class="info-hint" title="Bevakning sparas bara i din webbläsare (localStorage) - fungerar inte mellan enheter och försvinner om du rensar webbläsardata.">ⓘ</span></th><th>Flygplats</th><th>Signal</th><th>Läge</th><th>Status</th><th>Projekttyp</th><th>Confidence</th><th>År</th><th>Källa</th><th>Score</th></tr>
+      <tr><th>{{ t("watch_column_label") }} <span class="info-hint" title="{{ t('watch_tooltip') }}">ⓘ</span></th><th>{{ t("col_airport") }}</th><th>Signal</th><th>{{ t("lifecycle_column_label") }}</th><th>{{ t("status") }}</th><th>{{ t("project_type") }}</th><th>{{ t("confidence") }}</th><th>{{ t("year") }}</th><th>{{ t("source") }}</th><th>Score</th></tr>
     </thead>
     <tbody>
       {# ("RWI - Mission #7E" mission) One row per published Signal, always -
@@ -51,11 +51,11 @@
       {% for signal in signals %}
       {{ signal_row(signal, root) }}
       {% else %}
-      <tr><td colspan="10" class="empty-state">Inga signaler registrerade.</td></tr>
+      <tr><td colspan="10" class="empty-state">{{ t("no_signals_registered") }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
-  <div id="no-match" class="empty-state" hidden>Inga signaler matchade sökningen eller filtret.</div>
+  <div id="no-match" class="empty-state" hidden>{{ t("no_signals_matched") }}</div>
 </div>
 
 <script src="{{ root }}/watch.js"></script>
