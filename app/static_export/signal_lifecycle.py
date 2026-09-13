@@ -192,17 +192,22 @@ def derive_signal_lifecycle(signal: "Signal", *, today: date) -> SignalLifecycle
     6. Fallback for everything else (no recognized status, no grant/incident
        shape) - an explicit future/current year alone is enough for
        ACTIVE_OPPORTUNITY; a clearly stale year alone is STALE_UNRESOLVED;
-       otherwise DEVELOPING_WATCH. This deliberately never inspects title or
+       otherwise, a confirmed vendor/order (Signal.confirmed_vendor set) is
+       itself real, structural evidence that opportunity/vendor-selection
+       uncertainty has resolved -> ACTIVE_OPPORTUNITY (RWI HQ "SLT1 Lifecycle
+       Relevance - confirmed_vendor Rule Improvement" mission; closes the
+       documented 3-row divergence on ids 64/66/67 below); otherwise
+       DEVELOPING_WATCH. This still deliberately never inspects title or
        notes text - no per-row/per-airport narrative reading, matching this
        mission's explicit prohibition on hardcoded, text-sniffed special
-       cases. A Signal whose only real evidence is free-text prose (e.g. a
-       vendor-confirmation or investment-announcement headline with no
-       structured status/year/installation link) is classified
-       DEVELOPING_WATCH here, not ACTIVE_OPPORTUNITY - "fail conservatively
-       when evidence is insufficient" (mission hard boundary 15), and see
-       this module's own test suite / the SLT1 mission report for the exact,
-       intentional 3-row divergence this produces from the design document's
-       own human-analyst judgment calls on ids 64/66/67.
+       cases - confirmed_vendor is a real, already-populated structured
+       column, not text-sniffing. A confirmed vendor/order never reaches
+       REALIZED_HISTORICAL here: it is evidence of a live commercial
+       relationship, never of physical completion, acceptance, or
+       installation - that stronger read, when evidence supports it, is the
+       job of the unambiguous installation/completed check in rule 1 above,
+       or of a future, separate, human-governed lifecycle-assessment slice
+       (SLT2), never this rule.
     """
     if signal.installation_id is not None or (signal.status or "").strip().lower() == "completed":
         return SignalLifecycleAssessment(
@@ -313,6 +318,31 @@ def derive_signal_lifecycle(signal: "Signal", *, today: date) -> SignalLifecycle
             SignalLifecycleState.STALE_UNRESOLVED,
             f"only year evidence found is {today.year - best_year}y old ({best_year}), no status or "
             "completion evidence beyond it.",
+        )
+
+    # Mission "SLT1 Lifecycle Relevance - confirmed_vendor Rule Improvement":
+    # a confirmed vendor/order is real, structural evidence that opportunity/
+    # vendor-selection uncertainty has resolved - it should not fall all the
+    # way to the same bare "insufficient structured evidence" default as a
+    # signal with no evidence at all (ids 64/66/67 - see this module's own
+    # test suite). Placed last, after every stronger/more specific rule
+    # above (installation/completed, incident, grant, watch-category,
+    # speculative confidence, watch-track status, active-track
+    # status/construction window, explicit future/stale year) and reached
+    # only when none of them applied - it improves the generic catch-all
+    # only, it never overrides a more specific read (a stale year still wins
+    # over a confirmed vendor, matching this function's own conservative,
+    # never-forced-by-a-single-signal precedent). It intentionally stops at
+    # ACTIVE_OPPORTUNITY: a confirmed vendor/order is evidence of a live
+    # commercial relationship, never evidence of physical completion,
+    # acceptance, or installation - REALIZED_HISTORICAL still requires the
+    # unambiguous installation/completed check above, or a future, separate,
+    # human-governed lifecycle-assessment slice (SLT2, not this one).
+    confirmed_vendor = (signal.confirmed_vendor or "").strip()
+    if confirmed_vendor:
+        return SignalLifecycleAssessment(
+            SignalLifecycleState.ACTIVE_OPPORTUNITY,
+            "confirmed vendor/order; no stronger lifecycle state established.",
         )
 
     return SignalLifecycleAssessment(

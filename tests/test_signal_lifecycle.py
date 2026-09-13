@@ -278,6 +278,130 @@ class TestFallbackNoTextSniffing:
         assert "insufficient structured evidence" in result.reason
 
 
+# --- 5b. RWI HQ "SLT1 Lifecycle Relevance - confirmed_vendor Rule
+# Improvement" mission: a confirmed vendor/order (Signal.confirmed_vendor,
+# a real structured column - never title/notes text) lifts the bare
+# fallback from DEVELOPING_WATCH to ACTIVE_OPPORTUNITY, but only when no
+# stronger/more specific rule above already applied. It must never reach
+# REALIZED_HISTORICAL by itself - that remains reserved for the
+# installation/completed check (rule 1) or a future, separate, human-
+# governed SLT2 assessment. ---
+
+class TestConfirmedVendorRule:
+    def test_confirmed_vendor_no_status_no_year_is_active(self):
+        signal = Signal(
+            title="x", category="replacement", confidence="high", confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.ACTIVE_OPPORTUNITY
+        assert "confirmed vendor" in result.reason
+
+    def test_confirmed_vendor_with_speculative_confidence_stays_developing_watch(self):
+        """Speculative confidence is a stronger, more specific watch signal
+        (rule 4) and must out-rank a confirmed vendor - a confirmed vendor
+        must never override a signal the evidence itself marks uncertain."""
+        signal = Signal(
+            title="x", category="new_installation", confidence="speculative", confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.DEVELOPING_WATCH
+
+    def test_confirmed_vendor_with_replacement_watch_category_stays_developing_watch(self):
+        signal = Signal(
+            title="x", category="replacement_watch", confidence="high", confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.DEVELOPING_WATCH
+
+    def test_confirmed_vendor_with_environmental_review_status_stays_developing_watch(self):
+        signal = Signal(
+            title="x", category="replacement", confidence="planned", status="environmental_review",
+            confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.DEVELOPING_WATCH
+
+    def test_confirmed_vendor_with_completed_status_is_realized_historical(self):
+        signal = Signal(
+            title="x", category="replacement", confidence="high", status="completed",
+            confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.REALIZED_HISTORICAL
+
+    def test_confirmed_vendor_with_installation_id_is_realized_historical(self):
+        signal = Signal(
+            title="x", category="new_installation", confidence="high", installation_id=73,
+            confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.REALIZED_HISTORICAL
+
+    def test_confirmed_vendor_with_future_construction_window_uses_existing_active_rule(self):
+        """The existing construction-window rule (rule 5) already reaches
+        ACTIVE_OPPORTUNITY on its own - confirmed_vendor changes nothing
+        here, proving the new rule never needs to fire when a stronger one
+        already applies."""
+        signal = Signal(
+            title="x", category="replacement", confidence="confirmed", status="under construction",
+            construction_start=date(2026, 8, 31), completion_date=date(2026, 11, 15),
+            confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.ACTIVE_OPPORTUNITY
+        assert "construction window" in result.reason
+
+    def test_no_confirmed_vendor_no_status_no_year_fallback_unchanged(self):
+        """Direct regression guard: without confirmed_vendor, the bare
+        fallback must still read DEVELOPING_WATCH exactly as before this
+        mission's change."""
+        signal = Signal(title="x", category="unknown", confidence="low", confirmed_vendor=None)
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.DEVELOPING_WATCH
+        assert "insufficient structured evidence" in result.reason
+
+    def test_blank_confirmed_vendor_is_treated_as_absent(self):
+        for blank in ("", "   ", "\t\n"):
+            signal = Signal(title="x", category="unknown", confidence="low", confirmed_vendor=blank)
+            result = derive_signal_lifecycle(signal, today=TODAY)
+            assert result.state == SignalLifecycleState.DEVELOPING_WATCH
+
+    def test_confirmed_vendor_does_not_override_stale_incident(self):
+        """Incident-derived staleness (rule 2) is a stronger, more specific
+        read than the bare-fallback confirmed_vendor rule and must win -
+        proves precedence placement, not just outcome."""
+        signal = _incident_signal("GMU", "2006-07-01", confirmed_vendor="Runway Safe")
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.STALE_UNRESOLVED
+
+    def test_confirmed_vendor_does_not_override_stale_grant(self):
+        signal = _grant_signal(2021, confirmed_vendor="Runway Safe")
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.STALE_UNRESOLVED
+
+    def test_msp_signal_67_shaped_benchmark_is_active_opportunity(self):
+        """RWI HQ 'Lifecycle Relevance Logic' design mission's own primary
+        benchmark: confirmed_vendor set, no status/year/installation link -
+        must reach ACTIVE_OPPORTUNITY, and explicitly NOT
+        REALIZED_HISTORICAL (that later analyst-level read belongs to a
+        separate, future, human-governed SLT2 assessment slice)."""
+        signal = Signal(
+            title="MSP EMAS-order (Runway Safe bekräftad leverantör)",
+            category="replacement", confidence="high", confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.ACTIVE_OPPORTUNITY
+        assert result.state != SignalLifecycleState.REALIZED_HISTORICAL
+
+    def test_charlotte_signal_66_shaped_benchmark_is_active_opportunity(self):
+        signal = Signal(
+            title="Charlotte Douglas EMAS-order (Runway Safe bekräftad leverantör)",
+            category="new_installation", confidence="high", confirmed_vendor="Runway Safe",
+        )
+        result = derive_signal_lifecycle(signal, today=TODAY)
+        assert result.state == SignalLifecycleState.ACTIVE_OPPORTUNITY
+
+
 # --- 6. Legacy confidence vocabulary never crashes, never mis-scored ---
 
 class TestLegacyConfidenceVocabulary:
