@@ -30,6 +30,7 @@ from app.models.source_assertion_cross_source_alias_attestation import (
 from app.models.manual_claim_evidence import ManualClaimEvidence
 from app.models.signal_publication_action import SignalPublicationAction
 from app.models.signal_amendment import SignalAmendmentAction, SignalAmendmentFieldChange
+from app.models.signal_lifecycle_assessment import SignalLifecycleAssessment
 
 __all__ = [
     "Airport",
@@ -53,6 +54,7 @@ __all__ = [
     "Signal",
     "SignalAmendmentAction",
     "SignalAmendmentFieldChange",
+    "SignalLifecycleAssessment",
     "SignalDisposition",
     "SignalDispositionMember",
     "SignalPublicationAction",

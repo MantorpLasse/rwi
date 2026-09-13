@@ -675,7 +675,7 @@ def test_signal_view_exposes_source_notes_verbatim(tmp_path):
         session.add(signal)
         session.commit()
 
-        view = build_module._signal_view(signal, today=_date(2026, 8, 30))
+        view = build_module._signal_view(signal, today=_date(2026, 8, 30), session=session)
         assert view.source_notes == "Exact verbatim source text, kr 4.2M, 2027-Q3."
 
 
@@ -703,7 +703,7 @@ def test_signal_view_source_notes_none_stays_none(tmp_path):
         session.add(signal)
         session.commit()
 
-        view = build_module._signal_view(signal, today=_date(2026, 8, 30))
+        view = build_module._signal_view(signal, today=_date(2026, 8, 30), session=session)
         assert view.source_notes is None
 
         output = tmp_path / "site"

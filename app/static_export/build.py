@@ -21,8 +21,9 @@ from app.services.evidence_claim_semantics import Claim
 from app.services.manual_claim_evidence import get_manual_claims_for_source_assertion
 from app.services.manual_identity_evidence import normalize_for_containment_check
 from app.services.runway_identity import AmbiguousRunwayDesignationError, normalize_end
+from app.services.signal_lifecycle_assessment import resolve_effective_signal_lifecycle
 from app.static_export.presentation import lifecycle_view, public_signal_state, status_view, text
-from app.static_export.signal_lifecycle import SignalLifecycleState, derive_signal_lifecycle
+from app.static_export.signal_lifecycle import SignalLifecycleState
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -285,7 +286,7 @@ def _attention_reason_view(
     return None
 
 
-def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
+def _signal_view(signal: Signal, *, today: date, session: Session) -> SimpleNamespace:
     source = signal.source
     # RWI HQ "Signal Detail Funding-Caveat Parity" mission: the SAME
     # funding-source predicate _build_timeline_events() already uses for
@@ -301,15 +302,27 @@ def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
     )
     public_status_label, public_qualification = public_signal_state(signal.id, signal.status)
     # SLT1 (docs/architecture/rwi-signal-temporal-relevance-opportunity-
-    # lifecycle-design.md): a presentation-only, non-persisted read, never a
-    # replacement for status/confidence/probability_score - see
-    # app.static_export.signal_lifecycle's own module docstring.
-    lifecycle = derive_signal_lifecycle(signal, today=today)
-    lifecycle_label, lifecycle_class, lifecycle_tooltip = lifecycle_view(lifecycle.state.value)
+    # lifecycle-design.md): a presentation-only, non-persisted machine
+    # baseline - see app.static_export.signal_lifecycle's own module
+    # docstring. SLT2 (RWI HQ "SLT2 - Governed Signal Lifecycle Assessment"
+    # mission): resolve_effective_signal_lifecycle() layers an optional,
+    # append-only, human-authored override on top of that baseline
+    # ("latest row wins") - badges/sort/grouping/counts below all use the
+    # EFFECTIVE state, so an SLT1-only Signal behaves exactly as before and
+    # a Signal with a governed assessment reflects it. `lifecycle_reason`
+    # deliberately stays the SLT1 MACHINE reason even when a governed
+    # assessment exists - a human reviewer's own free-text reason is never
+    # published, matching this mission's explicit "do not publicly expose
+    # reviewer identity or internal reason text" instruction; only the
+    # resulting STATE (already a small, fixed, already-public vocabulary)
+    # is used publicly.
+    effective_lifecycle = resolve_effective_signal_lifecycle(session, signal, today=today)
+    lifecycle_state = effective_lifecycle.effective_state
+    lifecycle_label, lifecycle_class, lifecycle_tooltip = lifecycle_view(lifecycle_state.value)
     # Mission #7J: deterministic, presentation-only "Varför nu?" - see
     # _attention_reason_view()'s own docstring for the exact approved
     # trigger fields/precedence. None is a valid, expected result.
-    attention_reason = _attention_reason_view(signal, today=today, lifecycle_state=lifecycle.state)
+    attention_reason = _attention_reason_view(signal, today=today, lifecycle_state=lifecycle_state)
     return SimpleNamespace(
         id=signal.id,
         title=signal.title,
@@ -325,12 +338,12 @@ def _signal_view(signal: Signal, *, today: date) -> SimpleNamespace:
         public_qualification=public_qualification,
         is_completed=signal.status == "completed",
         installation_id=signal.installation_id,
-        lifecycle_state=lifecycle.state.value,
-        lifecycle_tier=_LIFECYCLE_SORT_TIER[lifecycle.state],
+        lifecycle_state=lifecycle_state.value,
+        lifecycle_tier=_LIFECYCLE_SORT_TIER[lifecycle_state],
         lifecycle_label=lifecycle_label,
         lifecycle_class=lifecycle_class,
         lifecycle_tooltip=lifecycle_tooltip,
-        lifecycle_reason=lifecycle.reason,
+        lifecycle_reason=effective_lifecycle.machine_reason,
         attention_reason=attention_reason,
         updated_at=signal.updated_at,
         target_year=signal.target_year,
@@ -1061,10 +1074,13 @@ def _lifecycle_counts_view(signal_views: list[SimpleNamespace]) -> list[SimpleNa
 
 # ("RWI - Mission #7C" mission) "Marknadsläge" - the market-centric
 # presentation Missions #7/#7A/#7B recon'd and designed, built entirely
-# from already-governed Signal data + the already-existing SLT1 lifecycle
-# derivation (derive_signal_lifecycle, unchanged) - no new domain concept,
-# no new persisted field, no FH-D4 read (deliberately deferred per Mission
-# #7C's own HQ decision A - this module never imports SignalDisposition).
+# from already-governed Signal data + each signal_view's own already-
+# computed `lifecycle_state` (SLT1's machine baseline, or SLT2's governed
+# override when one exists - see _signal_view()'s own resolve_effective_
+# signal_lifecycle() call; this function has no separate lifecycle opinion
+# of its own) - no new domain concept, no new persisted field, no FH-D4
+# read (deliberately deferred per Mission #7C's own HQ decision A - this
+# module never imports SignalDisposition).
 #
 # Raw published Signal counts/rows only - never a deduplicated "effort"
 # count, never a canonical Signal/title/lifecycle/category chosen for a
@@ -1756,7 +1772,7 @@ def _airport_view(
     public_orm_signals = [s for s in airport.signals if _is_public_signal(s)]
     orm_signals_by_id = {s.id: s for s in public_orm_signals}
     signal_views = sorted(
-        (_signal_view(s, today=today) for s in public_orm_signals),
+        (_signal_view(s, today=today, session=session) for s in public_orm_signals),
         key=_signal_sort_key,
     )
     installation_views = [_installation_view(i) for i in airport.installations]
@@ -1961,7 +1977,7 @@ def _build(output_dir: Path, session: Session, *, today: date) -> None:
     # re-querying, never by attaching evidence onto the shared view object
     # itself (see the render loop's own "DATA.JSON" note for why).
     signal_pairs = sorted(
-        ((s, _signal_view(s, today=today)) for s in public_signals),
+        ((s, _signal_view(s, today=today, session=session)) for s in public_signals),
         key=lambda pair: _signal_sort_key(pair[1]),
     )
     signal_views = [view for _source_signal, view in signal_pairs]

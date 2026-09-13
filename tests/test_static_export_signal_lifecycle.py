@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import Base
 from app.models import Airport, Signal, Source
+from app.services.signal_lifecycle_assessment import record_signal_lifecycle_assessment
 from app.static_export import build_site
 
 TODAY = date(2026, 8, 28)
@@ -233,6 +234,69 @@ def test_build_site_default_today_is_real_current_date(tmp_path):
 
         output = tmp_path / "site"
         build_site(output, session=session)  # no today= override
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    assert data["signals"][0]["lifecycle_state"] == "active_opportunity"
+
+
+# --- SLT2 (RWI HQ "SLT2 - Governed Signal Lifecycle Assessment" mission):
+# effective-lifecycle integration - a governed override, when present,
+# drives badge/sort/count/grouping; an SLT1-only Signal is unaffected. ---
+
+
+def test_signal_with_governed_override_uses_effective_state_in_data_json(tmp_path):
+    engine = _engine()
+    with Session(engine) as session:
+        airport = Airport(name="MSP-shaped Airport", iata_code="MSP", country="USA")
+        signal = Signal(
+            airport=airport, title="MSP EMAS-order (Runway Safe bekräftad leverantör)",
+            category="replacement", confidence="high", confirmed_vendor="Runway Safe",
+        )
+        session.add(signal)
+        session.commit()
+
+        record_signal_lifecycle_assessment(
+            session, signal_id=signal.id, state="realized_historical",
+            reason=(
+                "Confirmed vendor/order and associated 2025 execution window has elapsed; "
+                "treat as realized/historical for intelligence relevance. Physical EMAS "
+                "completion, formal acceptance and final payment remain unconfirmed."
+            ),
+            reviewer="human:rwi-owner",
+        )
+        session.commit()
+        signal_id = signal.id
+
+        output = tmp_path / "site"
+        build_site(output, session=session, today=TODAY)
+
+    data = json.loads((output / "data.json").read_text(encoding="utf-8"))
+    view = data["signals"][0]
+    assert view["id"] == signal_id
+    assert view["lifecycle_state"] == "realized_historical"
+    # The SLT1 machine reason is still what's shown - the human reviewer's
+    # own free-text reason and identity are never published.
+    assert "confirmed vendor" in view["lifecycle_reason"]
+    assert "human:rwi-owner" not in json.dumps(data)
+    assert "execution window has elapsed" not in json.dumps(data)
+
+
+def test_signal_without_any_assessment_behaves_exactly_as_slt1_only(tmp_path):
+    """Regression guard: a Signal with no SLT2 row must render identically
+    to how it did before this mission - effective state equals the SLT1
+    machine state, nothing else changes."""
+    engine = _engine()
+    with Session(engine) as session:
+        airport = Airport(name="Test Airport", iata_code="TST", country="USA")
+        signal = Signal(
+            airport=airport, title="Future EMAS project", category="new_installation",
+            confidence="planned", status="alp", planning_year=2027,
+        )
+        session.add(signal)
+        session.commit()
+
+        output = tmp_path / "site"
+        build_site(output, session=session, today=TODAY)
 
     data = json.loads((output / "data.json").read_text(encoding="utf-8"))
     assert data["signals"][0]["lifecycle_state"] == "active_opportunity"
