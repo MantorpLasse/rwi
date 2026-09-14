@@ -81,9 +81,27 @@
 
 {# One standalone signal table row (signals_list.html's ungrouped rows).
    `root` is passed explicitly (not via context) to keep this macro usable
-   from a plain, non-"with context" import. #}
-{% macro signal_row(signal, root) -%}
+   from a plain, non-"with context" import.
+
+   RWI HQ "Public UX Simplification - Slice A: Default Signals View
+   Relevance" mission: `apply_default_lifecycle_filter` (default False -
+   every existing call site is unaffected unless it opts in) renders the
+   native `hidden` attribute directly on rows whose lifecycle_state is
+   NOT active_opportunity/developing_watch - the exact same "current"
+   set signals_list.html's own JS filter already treats as the default
+   (LIFECYCLE_FILTER_STATES.current). This makes that default a real,
+   no-JS-safe property of the generated HTML itself, using the identical
+   `tr.hidden` mechanism the page's own JS already uses to reveal/hide
+   rows - so JS re-derives the same result on load (no visible flash) and
+   still fully reveals these rows when the visitor changes the lifecycle
+   filter. Deliberately NOT applied unconditionally inside this macro:
+   market.html reuses signal_row() for its own dedicated Active/Watch/
+   Stale sections (including a stale_unresolved-only section, "Behöver
+   research") where every row is expected to be visible in its own
+   section regardless of this global default. #}
+{% macro signal_row(signal, root, apply_default_lifecycle_filter=false) -%}
 <tr
+    {% if apply_default_lifecycle_filter and signal.lifecycle_state not in ("active_opportunity", "developing_watch") %}hidden{% endif %}
     data-search="{{ (signal.title ~ ' ' ~ signal.airport_name ~ ' ' ~ signal.airport_code)|lower }}"
     data-status="{{ signal.status or '' }}"
     data-country="{{ signal.country }}"

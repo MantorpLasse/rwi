@@ -48,8 +48,14 @@
          Signal keeps its own title/lifecycle/status/category/confidence/
          year/source/Score and its own real link to its own detail page -
          never inherited from, or hidden behind, another Signal. #}
+      {# RWI HQ "Public UX Simplification - Slice A" mission: the default
+         public Signals view now genuinely defaults to current-only
+         (active_opportunity/developing_watch) in the generated HTML
+         itself, not just via the lifecycle-filter <select>'s own
+         "selected" attribute (cosmetic without JS) - see signal_row()'s
+         own docstring in _components.html for the exact mechanism. #}
       {% for signal in signals %}
-      {{ signal_row(signal, root) }}
+      {{ signal_row(signal, root, apply_default_lifecycle_filter=true) }}
       {% else %}
       <tr><td colspan="10" class="empty-state">{{ t("no_signals_registered") }}</td></tr>
       {% endfor %}
