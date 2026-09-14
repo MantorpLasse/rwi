@@ -125,6 +125,21 @@ nav.site a:first-child {
   margin-left: 0;
 }
 
+/* RWI HQ "Bilingual Static Site - Polish" mission (+ "Micro-Polish"
+   follow-up): the language switcher reads as its own UI group, not just
+   another nav link - a fixed left margin plus a subtle divider (same
+   --border token the header itself already uses), no pill/background so
+   the existing dark visual language is untouched. margin-left is a fixed
+   px value on .lang-switch's own box, so the gap is identical regardless
+   of the preceding nav item's text width/language (Ordlista vs Glossary) -
+   bumped from 24px to 40px in the Micro-Polish follow-up since 24px still
+   read as crowded in manual review. */
+.lang-switch {
+  margin-left: 40px;
+  padding-left: 20px;
+  border-left: 1px solid var(--border);
+}
+
 nav.site a:hover {
   color: var(--text);
   text-decoration: none;

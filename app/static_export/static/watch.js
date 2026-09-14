@@ -4,6 +4,23 @@
 (function (global) {
   var STORAGE_KEY = "rwi_watched_signals";
 
+  /* RWI HQ "Bilingual Static Site - Polish" mission: the only remaining
+     hardcoded-Swedish UI strings lived here (aria-label text painted at
+     click time, not build time, so build.py's locale-aware presentation
+     layer never touches it). No network/cookie/server state and no second
+     locale-specific copy of this file - the current page's own
+     <html lang="sv|en"> (already set by every static-export template,
+     Slice 2 mission) is read once and used to pick the right label pair. */
+  var LABELS = {
+    sv: { watch: "Bevaka signal", unwatch: "Sluta bevaka signal" },
+    en: { watch: "Watch signal", unwatch: "Stop watching signal" },
+  };
+
+  function currentLabels() {
+    var lang = (document.documentElement.getAttribute("lang") || "sv").slice(0, 2).toLowerCase();
+    return LABELS[lang] || LABELS.sv;
+  }
+
   function getWatched() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
@@ -37,10 +54,11 @@
   }
 
   function paintStar(el, watched) {
+    var labels = currentLabels();
     el.textContent = watched ? "★" : "☆";
     el.classList.toggle("watched", watched);
     el.setAttribute("aria-pressed", watched ? "true" : "false");
-    el.setAttribute("aria-label", watched ? "Sluta bevaka signal" : "Bevaka signal");
+    el.setAttribute("aria-label", watched ? labels.unwatch : labels.watch);
   }
 
   /* Paints and wires every .star-toggle under `root` (default: whole

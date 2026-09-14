@@ -1469,18 +1469,20 @@ def _important_developments_view(
 # everywhere else on the site, e.g. the Overview stage donut). "unknown"
 # has no honest place on a phase sequence and is never forced onto one -
 # see _project_phase_view()'s own None return for that case.
+#
+# Labels are sourced from presentation.py's own STATUS_ROLE_PRESENTATION
+# (status_role_label()) rather than a second, module-local label dict -
+# that table already carries both locales for every one of these roles
+# ("identified" was added to it alongside this fix, since it previously
+# only existed in this module's now-removed Swedish-only dict).
 _PROJECT_PHASE_STAGE_ORDER = ("identified", "planning", "funded", "procurement", "construction", "completed")
-_PROJECT_PHASE_STAGE_LABEL = {
-    "identified": "Identifierad", "planning": "Planering", "funded": "Finansierad",
-    "procurement": "Upphandling", "construction": "Under byggnation", "completed": "Färdigställd",
-}
 _STATUS_ROLE_TO_PHASE_STAGE = {
     "identified": "identified", "planning": "planning", "design": "planning", "review": "planning",
     "funded": "funded", "procurement": "procurement", "construction": "construction", "completed": "completed",
 }
 
 
-def _project_phase_view(status_role: "str | None") -> "tuple[SimpleNamespace, ...] | None":
+def _project_phase_view(status_role: "str | None", locale: str = "sv") -> "tuple[SimpleNamespace, ...] | None":
     """Deterministic 6-step phase-progression strip for the primary Signal's
     real `status_role`. Returns None when the role has no honest place on
     the sequence (status_role == "unknown", e.g. a NULL/unrecognized raw
@@ -1497,7 +1499,7 @@ def _project_phase_view(status_role: "str | None") -> "tuple[SimpleNamespace, ..
     return tuple(
         SimpleNamespace(
             key=key,
-            label=_PROJECT_PHASE_STAGE_LABEL[key],
+            label=status_role_label(key, locale),
             state=("current" if i == current_index else "past" if i < current_index else "future"),
         )
         for i, key in enumerate(_PROJECT_PHASE_STAGE_ORDER)
@@ -1736,7 +1738,7 @@ def _airport_view(
         # status_role - None when there is no primary_signal, or its role
         # has no honest place on the sequence. See _project_phase_view()'s
         # own docstring.
-        project_phase=(_project_phase_view(primary_signals[0].status_role) if primary_signals else None),
+        project_phase=(_project_phase_view(primary_signals[0].status_role, locale) if primary_signals else None),
         # Real-coordinate-only location marker (see _airport_location_view()'s
         # own docstring) - None whenever this Airport has no persisted
         # latitude/longitude (every non-US airport today).

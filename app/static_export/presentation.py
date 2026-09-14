@@ -951,6 +951,7 @@ STATUS_ROLE_PRESENTATION = {
     "construction": {"sv": "Under byggnation", "en": "Under construction"},
     "review": {"sv": "Miljöprövning", "en": "Environmental review"},
     "planning": {"sv": "Planering", "en": "Planning"},
+    "identified": {"sv": "Identifierad", "en": "Identified"},
     "unknown": {"sv": "Ej klassificerad", "en": "Unclassified"},
 }
 
