@@ -1398,6 +1398,77 @@ def _installed_base_global_view(airport_views: "list[SimpleNamespace]") -> "tupl
 _INSTALLED_BASE_AIRPORT_MARKER_RADIUS = 3.4
 
 
+# ("RWI HQ 'Public UX Simplification - Slice B: Global Footprint Incident
+# Mode' mission) Incidents global footprint - a THIRD, INDEPENDENT view,
+# built entirely from governed Incident domain rows already attached to
+# each `airport_view` (`view.incidents` - the exact same incident_views
+# list _airport_view() already exposes for airport_detail.html's own
+# "Incidenter" section; never Signal, never `category ==
+# "replacement_after_incident"`, never any Incident<->Signal identity
+# matching - Incident carries no reliable FK back to any Signal it may
+# have auto-created, see app/models/incident.py's own docstring, so this
+# view never attempts that match). Historical context only - this
+# deliberately never reads Signal.lifecycle_state/category/status.
+#
+# AGGREGATION: one marker per AIRPORT with >=1 Incident row, never one
+# marker per Incident - mirrors `_installed_base_global_view()`'s own
+# established "one marker per Airport" precedent exactly, for the same
+# reason (an Airport with multiple incidents, e.g. 3, must never render 3
+# overlapping physical markers). `incident_count` is the real len() of
+# that Airport's own incidents; the individual Incident entries themselves
+# are also carried on each node for the textual drilldown, unchanged.
+#
+# MARKER SEMANTICS: `x`/`y` reused verbatim from `_airport_location_view()`
+# via each airport_view's own already-computed `view.location` (same real-
+# coordinate-only rule every other map on this site already follows -
+# never a country centroid, never fabricated); `has_marker` is False (and
+# the map marker simply omitted) whenever an incident-bearing Airport has
+# no usable coordinates - the Airport/incidents still appear in the
+# textual country/airport drilldown below regardless, exactly mirroring
+# `_installed_base_global_view()`'s own "map placement is decorative,
+# never a gate on real data" precedent.
+def _incident_map_view(airport_views: "list[SimpleNamespace]") -> "tuple[SimpleNamespace, ...]":
+    by_country: "dict[str, list[SimpleNamespace]]" = {}
+    for view in airport_views:
+        if not view.incidents or not view.country:
+            continue
+        code = view.iata_code or view.icao_code or "–"
+        location = view.location  # None unless this Airport has real, usable coordinates
+        by_country.setdefault(view.country, []).append(
+            SimpleNamespace(
+                id=view.id, code=code, name=view.name,
+                incident_count=len(view.incidents),
+                incidents=tuple(sorted(view.incidents, key=lambda i: i.incident_date)),
+                x=(location.x if location is not None else None),
+                y=(location.y if location is not None else None),
+                has_marker=(location is not None),
+            )
+        )
+
+    if not by_country:
+        return ()
+
+    ordered_countries = sorted(by_country.items(), key=lambda item: (-len(item[1]), item[0]))
+
+    nodes = []
+    for country, entries in ordered_countries:
+        entries_sorted = tuple(sorted(entries, key=lambda e: e.name))
+        nodes.append(
+            SimpleNamespace(
+                country=country, flag=_COUNTRY_FLAG.get(country), airport_count=len(entries_sorted),
+                airports=entries_sorted,
+            )
+        )
+    return tuple(nodes)
+
+
+# Same restrained, fixed-radius, no-encoding marker convention as
+# _INSTALLED_BASE_AIRPORT_MARKER_RADIUS above (Mission #26J Part L) - a
+# marker means only "this Airport has >=1 documented Incident", nothing
+# about count/severity/recency is size-encoded.
+_INCIDENT_AIRPORT_MARKER_RADIUS = 3.4
+
+
 # ("RWI - Juicy Design Mission #2 - V2.3" mission) "Viktiga utvecklingar" -
 # a small, deterministic, EXPLAINABLE selection, never an invented
 # "importance score" and never a claim of AI ranking (no such governed
@@ -2071,6 +2142,12 @@ def _build_locale_tree(
         # invariant this preserves.
         installed_base_global=_installed_base_global_view(airport_views),
         installed_base_airport_marker_radius=_INSTALLED_BASE_AIRPORT_MARKER_RADIUS,
+        # ("RWI HQ 'Public UX Simplification - Slice B' mission) Incidents
+        # global footprint - a third, independent Global Footprint mode.
+        # See _incident_map_view()'s own docstring for the full invariant
+        # this preserves (Incident domain data only, never Signal).
+        incident_map=_incident_map_view(airport_views),
+        incident_airport_marker_radius=_INCIDENT_AIRPORT_MARKER_RADIUS,
         map_viewbox_width=_MAP_VIEWBOX_WIDTH,
         map_viewbox_height=_MAP_VIEWBOX_HEIGHT,
         world_land_path=_WORLD_LAND_PATH,

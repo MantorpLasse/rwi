@@ -62,6 +62,17 @@ LOCALES = {
         "footprint_vendor_unconfirmed": "Leverantör ej bekräftad",
         "footprint_year_unknown": "Installationsår okänt",
         "footprint_no_marker": "ingen kartposition ännu",
+        # ("RWI HQ "Public UX Simplification - Slice B: Global Footprint
+        # Incident Mode" mission) The third Global Footprint mode -
+        # historical context, deliberately never worded as a current
+        # opportunity/project/win. See build.py's own _incident_map_view()
+        # docstring for the full invariant.
+        "footprint_mode_incidents": "Incidenter",
+        "footprint_incidents_explain": "Historiska incidenter vid flygplatser med dokumenterad incidentdata.",
+        "footprint_incidents_empty": "Inga dokumenterade incidenter i denna vy.",
+        "with_documented_incidents": "med dokumenterad incidenthistorik",
+        "incident_singular": "incident",
+        "incident_plural": "incidenter",
         # ("RWI - Juicy Design Mission #2 - V2.4" mission) Shortened from
         # "Viktiga utvecklingar" - the longer heading wrapped onto two
         # lines at desktop width next to the new map card. Same
@@ -425,6 +436,12 @@ LOCALES = {
         "footprint_vendor_unconfirmed": "Vendor not confirmed",
         "footprint_year_unknown": "Installation year unknown",
         "footprint_no_marker": "no map position yet",
+        "footprint_mode_incidents": "Incidents",
+        "footprint_incidents_explain": "Historical incidents at airports with documented incident data.",
+        "footprint_incidents_empty": "No documented incidents in this view.",
+        "with_documented_incidents": "with documented incident history",
+        "incident_singular": "incident",
+        "incident_plural": "incidents",
         "important_developments": "Developments",
         "important_developments_eyebrow": "Projects in the most advanced stage right now - construction, procurement or funding",
         "important_developments_empty": "No signals are currently in construction, procurement or funding.",

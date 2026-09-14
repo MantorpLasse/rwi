@@ -656,11 +656,14 @@ def test_current_intelligence_unaffected_by_details_change(tmp_path):
     html = _build_two_country_site(tmp_path)
     # Mode 2 markup must remain the pre-#24B plain div/legend structure -
     # no <details>/<summary> introduced there. Anchored on the start of the
-    # NEXT top-level card (Utveckling), the same "next sibling" anchoring
-    # style _footprint_installed_section already uses.
+    # next sibling *panel* (RWI HQ "Public UX Simplification - Slice B"
+    # mission added a third footprint-panel-incidents mode right after
+    # this one - which itself legitimately uses <details>/<summary>, so
+    # the boundary must stop there rather than at the next top-level
+    # *card*, or it would wrongly swallow that unrelated panel too).
     m = re.search(
         r'<div class="footprint-panel footprint-panel-current">(.*?)'
-        r'(?=<div class="card panel-strong">)',
+        r'(?=<div class="footprint-panel footprint-panel-incidents">)',
         html, re.S,
     )
     assert m is not None

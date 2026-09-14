@@ -1548,23 +1548,32 @@ nav.site a[href$="index.html"]:first-child { color: var(--text); }
   user-select: none;
 }
 #footprint-mode-installed:checked ~ .footprint-toggle .footprint-toggle-label-installed,
-#footprint-mode-current:checked ~ .footprint-toggle .footprint-toggle-label-current {
+#footprint-mode-current:checked ~ .footprint-toggle .footprint-toggle-label-current,
+#footprint-mode-incidents:checked ~ .footprint-toggle .footprint-toggle-label-incidents {
   background: var(--accent);
   color: #0b0f1a;
   border-color: var(--accent);
 }
 #footprint-mode-installed:focus-visible ~ .footprint-toggle .footprint-toggle-label-installed,
-#footprint-mode-current:focus-visible ~ .footprint-toggle .footprint-toggle-label-current {
+#footprint-mode-current:focus-visible ~ .footprint-toggle .footprint-toggle-label-current,
+#footprint-mode-incidents:focus-visible ~ .footprint-toggle .footprint-toggle-label-incidents {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .footprint-panel { display: none; }
 #footprint-mode-installed:checked ~ .footprint-panel-installed { display: block; }
 #footprint-mode-current:checked ~ .footprint-panel-current { display: block; }
+#footprint-mode-incidents:checked ~ .footprint-panel-incidents { display: block; }
 
 .footprint-explain { margin: 0 0 14px; font-size: .86rem; color: var(--text-dim); }
 .footprint-disclosure { margin: 14px 0 0; font-size: .78rem; color: var(--text-faint); font-style: italic; }
 .map-node-installed { fill: rgba(94,180,142,.55); stroke: rgba(94,180,142,.9); stroke-width: 1.2; }
+/* RWI HQ "Public UX Simplification - Slice B" mission: reuses the exact
+   --historical token the SLT1 lifecycle badge already uses for
+   realized_historical (style.css's own .lifecycle.historical rule) - the
+   Incidents map marker deliberately reads as "historical", the same
+   established color meaning, never a new ad hoc color. */
+.map-node-incident { fill: rgba(185,166,224,.55); stroke: rgba(185,166,224,.9); stroke-width: 1.2; }
 
 .footprint-country-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(139,150,172,.18); }
 

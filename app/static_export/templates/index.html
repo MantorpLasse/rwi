@@ -196,9 +196,14 @@
     <div class="card-body">
       <input type="radio" name="footprint-mode" id="footprint-mode-installed" class="footprint-radio" checked>
       <input type="radio" name="footprint-mode" id="footprint-mode-current" class="footprint-radio">
+      {# ("RWI HQ "Public UX Simplification - Slice B" mission) Third
+         mode, same pure-CSS radio/:checked mechanism as the two existing
+         modes - see style.css's own added rules for this id. #}
+      <input type="radio" name="footprint-mode" id="footprint-mode-incidents" class="footprint-radio">
       <div class="footprint-toggle" role="group" aria-label="{{ t('footprint_heading') }}">
         <label for="footprint-mode-installed" class="footprint-toggle-label footprint-toggle-label-installed">{{ t("footprint_mode_installed") }}</label>
         <label for="footprint-mode-current" class="footprint-toggle-label footprint-toggle-label-current">{{ t("footprint_mode_current") }}</label>
+        <label for="footprint-mode-incidents" class="footprint-toggle-label footprint-toggle-label-incidents">{{ t("footprint_mode_incidents") }}</label>
       </div>
 
       {# --- MODE 1: Installerad bas - governed Installation data only.
@@ -303,6 +308,62 @@
         </div>
         {% else %}
         <div class="empty-state">{{ t("no_activity_data") }}</div>
+        {% endif %}
+      </div>
+
+      {# --- MODE 3: Incidenter - "RWI HQ 'Public UX Simplification -
+         Slice B' mission. Built entirely from governed Incident domain
+         rows (see build.py's own _incident_map_view() docstring) - never
+         Signal, never category == "replacement_after_incident". One
+         marker per Airport with >=1 Incident (never one per Incident -
+         same "one marker per Airport" aggregation rule
+         installed_base_global already established), located only from
+         real Airport coordinates (a.x/a.y) - an incident-bearing Airport
+         with no usable coordinates renders no marker but still appears
+         in the textual drilldown below via the exact same has_marker/
+         footprint-no-marker pattern Mode 1 already uses. Historical
+         context only - the explain text and every label here deliberately
+         avoid implying a current opportunity/project/win. --- #}
+      <div class="footprint-panel footprint-panel-incidents">
+        <p class="footprint-explain">{{ t("footprint_incidents_explain") }}</p>
+        {% if incident_map %}
+        <svg class="global-map" viewBox="0 0 {{ map_viewbox_width }} {{ map_viewbox_height }}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ t('footprint_mode_incidents') }}">
+          <path d="{{ world_land_path }}" class="map-land" fill-rule="evenodd"/>
+          {% for node in incident_map %}
+          {% for a in node.airports %}
+          {% if a.x is not none %}
+          <circle cx="{{ a.x }}" cy="{{ a.y }}" r="{{ incident_airport_marker_radius }}" class="map-node map-node-incident">
+            <title>{{ airport_label(a.code, a.name) }} {{ a.name }} ({{ node.country }}) — {{ a.incident_count }} {{ t("incident_singular") if a.incident_count == 1 else t("incident_plural") }}</title>
+          </circle>
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+        </svg>
+        <div class="footprint-country-list">
+          {% for node in incident_map %}
+          <details class="footprint-country">
+            <summary class="footprint-country-header">
+              <span class="map-legend-flag">{{ node.flag or "" }}</span>
+              <span class="map-legend-country">{{ node.country }}</span>
+              <span class="footprint-country-count">{{ node.airport_count }} {{ t("airport_singular") if node.airport_count == 1 else t("airport_plural") }} {{ t("with_documented_incidents") }}</span>
+            </summary>
+            <ul class="footprint-airport-list">
+              {% for a in node.airports %}
+              <li>
+                <a href="{{ root }}/airports/{{ a.id }}.html">{{ airport_label(a.code, a.name) }} {{ a.name }}</a>
+                <span class="footprint-tag">{{ a.incident_count }} {{ t("incident_singular") if a.incident_count == 1 else t("incident_plural") }}</span>
+                {% if not a.has_marker %}<span class="footprint-no-marker">({{ t("footprint_no_marker") }})</span>{% endif %}
+                {% for incident in a.incidents %}
+                <div class="timeline-meta"><a href="{{ root }}/airports/{{ a.id }}.html#incident-{{ incident.id }}">{{ incident.incident_date }} · {{ incident.incident_type }} · EMAS: {{ t("yes_word") if incident.emas_engaged else t("no_word") }}</a></div>
+                {% endfor %}
+              </li>
+              {% endfor %}
+            </ul>
+          </details>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">{{ t("footprint_incidents_empty") }}</div>
         {% endif %}
       </div>
     </div>
